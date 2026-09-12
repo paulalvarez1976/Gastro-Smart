@@ -1,0 +1,139 @@
+{
+  "entities": {
+    "Restaurant": {
+      "title": "Restaurant",
+      "description": "Restaurantes y sedes del negocio",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "direccion": { "type": "string" },
+        "telefono": { "type": "string" },
+        "numeroMesas": { "type": "number" },
+        "activo": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["nombre", "activo"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Plantilla de empleados con PIN táctil y tarifa",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "puesto": { "type": "string", "enum": ["admin", "caja", "mesero", "cocina", "ayudante_cocina", "limpieza"] },
+        "pin": { "type": "string" },
+        "tarifaHora": { "type": "number" },
+        "restaurantId": { "type": "string" },
+        "activo": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["nombre", "puesto", "pin", "tarifaHora", "activo"]
+    },
+    "Table": {
+      "title": "Table",
+      "description": "Mesas del local físico numeradas del 1 al N",
+      "type": "object",
+      "properties": {
+        "restaurantId": { "type": "string" },
+        "numero": { "type": "number" },
+        "estado": { "type": "string", "enum": ["libre", "ocupada"] },
+        "currentOrderId": { "type": "string" },
+        "currentOrderTotal": { "type": "number" }
+      },
+      "required": ["restaurantId", "numero", "estado"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Comandas y pedidos de salón o delivery",
+      "type": "object",
+      "properties": {
+        "restaurantId": { "type": "string" },
+        "tipo": { "type": "string", "enum": ["local", "delivery"] },
+        "mesaId": { "type": "string" },
+        "mesaNumero": { "type": "number" },
+        "clienteNombre": { "type": "string" },
+        "clienteTelefono": { "type": "string" },
+        "empresaDelivery": { "type": "string" },
+        "estado": { "type": "string", "enum": ["pendiente", "aceptado", "en_preparacion", "listo", "entregado", "rechazado", "cobrado"] },
+        "items": { "type": "array" },
+        "total": { "type": "number" },
+        "metodoPago": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["restaurantId", "tipo", "estado", "items", "total", "createdAt"]
+    },
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "Platos y productos de la carta",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "descripcion": { "type": "string" },
+        "precio": { "type": "number" },
+        "categoria": { "type": "string" },
+        "disponible": { "type": "boolean" },
+        "restaurantId": { "type": "string" }
+      },
+      "required": ["nombre", "precio", "disponible"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "Fichajes y turnos de trabajo con liquidación",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "horaInicio": { "type": "string" },
+        "horaFin": { "type": "string" },
+        "estado": { "type": "string", "enum": ["abierto", "cerrado"] },
+        "sueldoPagado": { "type": "boolean" },
+        "sueldoTotal": { "type": "number" }
+      },
+      "required": ["employeeId", "restaurantId", "horaInicio", "estado"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Gastos operativos y sueldos liquidados",
+      "type": "object",
+      "properties": {
+        "restaurantId": { "type": "string" },
+        "monto": { "type": "number" },
+        "categoria": { "type": "string" },
+        "descripcion": { "type": "string" },
+        "fecha": { "type": "string" }
+      },
+      "required": ["restaurantId", "monto", "descripcion", "fecha"]
+    }
+  },
+  "firestore": {
+    "/restaurants/{restaurantId}": {
+      "schema": "Restaurant",
+      "description": "Locales de Gastro Smart"
+    },
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Personal con roles y PIN"
+    },
+    "/tables/{tableId}": {
+      "schema": "Table",
+      "description": "Mesas del restaurante"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Pedidos y comandas"
+    },
+    "/menu/{menuId}": {
+      "schema": "MenuItem",
+      "description": "Carta y platos"
+    },
+    "/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "Jornadas laborales"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Gastos y nóminas"
+    }
+  }
+}
