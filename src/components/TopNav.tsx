@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Order } from '../types';
+import { Order, SecurityAlert } from '../types';
 import { 
   LogOut, 
   Store, 
@@ -13,32 +13,49 @@ import {
   ChevronDown,
   DollarSign,
   TrendingUp,
-  FileText
+  FileText,
+  Building2,
+  ShieldAlert,
+  ShieldCheck,
+  Shield,
+  Plus,
+  UtensilsCrossed
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
 
 interface TopNavProps {
   orders?: Order[];
   onOrderClick?: (order: Order) => void;
+  onOpenNewRestaurantModal?: () => void;
 }
 
-export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => {
+export const TopNav: React.FC<TopNavProps> = ({ 
+  orders = [], 
+  onOrderClick,
+  onOpenNewRestaurantModal 
+}) => {
   const { 
+    currentUserAccount,
+    currentBusiness,
     currentEmployee, 
     currentShift, 
     currentRestaurant, 
     allRestaurants, 
+    securityAlerts,
     selectRestaurant, 
     endShiftAndLogout, 
-    logout 
+    logoutEmployee,
+    logoutAdmin,
+    markAlertRead
   } = useAuth();
 
   const [shiftDuration, setShiftDuration] = useState<string>('00:00:00');
   const [showEndShiftModal, setShowEndShiftModal] = useState(false);
   const [reporteLabores, setReporteLabores] = useState('');
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showAlertsModal, setShowAlertsModal] = useState(false);
 
-  // Contador de tiempo de turno
+  // Contador de tiempo de turno para personal operativo
   useEffect(() => {
     if (!currentShift) return;
 
@@ -65,10 +82,11 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
   const readyOrdersForServer = orders.filter(
     o => o.restaurantId === currentRestaurant?.id && 
          (o.estado === 'listo' || o.estado === 'rechazado') &&
-         (currentEmployee?.puesto === 'admin' || o.meseroId === currentEmployee?.id)
+         (!currentEmployee || currentEmployee.puesto === 'admin' || o.meseroId === currentEmployee.id)
   );
 
-  // Calcular horas trabajadas con decimales para el resumen de fin de turno
+  const unreadAlerts = securityAlerts.filter(a => !a.leido);
+
   const calculateShiftHours = () => {
     if (!currentShift) return 0;
     const start = new Date(currentShift.horaInicio).getTime();
@@ -83,9 +101,8 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
     setShowEndShiftModal(false);
   };
 
-  if (!currentEmployee) return null;
-
   const roleColors: Record<string, string> = {
+    owner: 'bg-orange-100 text-orange-900 border-orange-300 font-extrabold',
     admin: 'bg-purple-100 text-purple-800 border-purple-200',
     caja: 'bg-blue-100 text-blue-800 border-blue-200',
     mesero: 'bg-amber-100 text-amber-800 border-amber-200',
@@ -94,60 +111,153 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
     limpieza: 'bg-teal-100 text-teal-800 border-teal-200',
   };
 
+  const userDisplayName = currentUserAccount?.nombre || currentEmployee?.nombre || 'Usuario';
+  const userRole = currentUserAccount?.rol || currentEmployee?.puesto || 'operativo';
+
   return (
     <>
-      <header className="bg-white border-b border-neutral-200 sticky top-0 z-40 px-4 sm:px-6 py-2.5 flex items-center justify-between shadow-xs">
+      <header className="bg-white border-b border-neutral-200 sticky top-0 z-40 px-3 sm:px-6 py-2.5 flex items-center justify-between shadow-xs">
         
-        {/* Left: Brand & Restaurant Selector */}
-        <div className="flex items-center gap-3 sm:gap-6">
+        {/* Left: Brand / Business Name & Restaurant Selector */}
+        <div className="flex items-center gap-2.5 sm:gap-5">
           <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center font-black shadow-sm">
-              GS
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center font-black shadow-sm shrink-0">
+              <UtensilsCrossed className="w-5 h-5" />
             </div>
-            <div className="hidden sm:block">
-              <span className="font-extrabold text-neutral-900 tracking-tight text-base">Gastro</span>
-              <span className="font-extrabold text-orange-600 tracking-tight text-base">Smart</span>
+            <div className="hidden md:block">
+              <div className="font-black text-neutral-900 tracking-tight text-sm flex items-center gap-1.5 leading-tight">
+                <span>{currentBusiness?.nombre || 'Gastro Smart'}</span>
+                {currentUserAccount && (
+                  <span className="text-[10px] font-extrabold bg-orange-100 text-orange-700 px-1.5 py-0.2 rounded">
+                    {currentUserAccount.rol === 'owner' ? 'DUEÑO' : 'ADMIN'}
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] text-neutral-400 font-medium">
+                {currentBusiness?.rif_o_ruc ? `ID: ${currentBusiness.rif_o_ruc}` : 'Plataforma Gastronómica'}
+              </div>
             </div>
           </div>
 
           {/* Restaurant Selector (Multisede) */}
-          <div className="flex items-center gap-1.5 bg-neutral-50 px-3 py-1.5 rounded-xl border border-neutral-200">
-            <Store className="w-4 h-4 text-orange-500 shrink-0" />
-            <select
-              value={currentRestaurant?.id || ''}
-              onChange={(e) => {
-                if (e.target.value === '__NEW__') {
-                  window.dispatchEvent(new CustomEvent('open-new-restaurant-modal'));
-                } else {
-                  selectRestaurant(e.target.value);
-                }
-              }}
-              className="bg-transparent text-xs sm:text-sm font-semibold text-neutral-800 outline-none cursor-pointer pr-1"
-              disabled={currentEmployee.puesto !== 'admin' && allRestaurants.length <= 1}
-            >
-              {allRestaurants.map((rest) => (
-                <option key={rest.id} value={rest.id}>
-                  {rest.nombre}
-                </option>
-              ))}
-              {currentEmployee.puesto === 'admin' && (
-                <option value="__NEW__" className="text-orange-600 font-bold">
-                  + Crear otro restaurante...
-                </option>
-              )}
-            </select>
-          </div>
+          {allRestaurants.length > 0 && (
+            <div className="flex items-center gap-1.5 bg-neutral-50 px-2.5 py-1.5 rounded-xl border border-neutral-200">
+              <Store className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+              <select
+                value={currentRestaurant?.id || ''}
+                onChange={(e) => {
+                  if (e.target.value === '__NEW__') {
+                    if (onOpenNewRestaurantModal) {
+                      onOpenNewRestaurantModal();
+                    } else {
+                      window.dispatchEvent(new CustomEvent('open-new-restaurant-modal'));
+                    }
+                  } else {
+                    selectRestaurant(e.target.value);
+                  }
+                }}
+                className="bg-transparent text-xs sm:text-sm font-bold text-neutral-800 outline-none cursor-pointer pr-1"
+                disabled={!currentUserAccount && currentEmployee?.puesto !== 'admin' && allRestaurants.length <= 1}
+              >
+                {allRestaurants.map((rest) => (
+                  <option key={rest.id} value={rest.id}>
+                    {rest.nombre}
+                  </option>
+                ))}
+                {(currentUserAccount || currentEmployee?.puesto === 'admin') && (
+                  <option value="__NEW__" className="text-orange-600 font-bold">
+                    + Crear otra sucursal...
+                  </option>
+                )}
+              </select>
+            </div>
+          )}
         </div>
 
-        {/* Right: Shift Timer, Employee info, Notifications & Action Buttons */}
-        <div className="flex items-center gap-2 sm:gap-4">
+        {/* Right: Security Alerts, Shift Timer, Notifications & Logout */}
+        <div className="flex items-center gap-2 sm:gap-3">
           
-          {/* Shift Active Indicator */}
+          {/* Security alerts indicator for Admin/Owner */}
+          {currentUserAccount && (
+            <div className="relative">
+              <button
+                onClick={() => setShowAlertsModal(!showAlertsModal)}
+                className={`relative p-2 rounded-xl transition border ${
+                  unreadAlerts.length > 0
+                    ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                    : 'text-neutral-500 hover:text-neutral-800 hover:bg-neutral-50 border-neutral-200'
+                }`}
+                title="Alertas de Seguridad y Auditoría"
+              >
+                <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5" />
+                {unreadAlerts.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
+                    {unreadAlerts.length}
+                  </span>
+                )}
+              </button>
+
+              {showAlertsModal && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-neutral-200 p-4 z-50 animate-in fade-in">
+                  <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                    <div className="flex items-center gap-1.5 text-xs font-black text-neutral-900 uppercase">
+                      <Shield className="w-4 h-4 text-orange-500" />
+                      Alertas de Seguridad ({securityAlerts.length})
+                    </div>
+                    <button onClick={() => setShowAlertsModal(false)} className="text-neutral-400 hover:text-neutral-600">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="mt-2 space-y-2 max-h-72 overflow-y-auto text-xs">
+                    {securityAlerts.length === 0 ? (
+                      <div className="text-neutral-400 text-center py-6">
+                        No hay incidentes de seguridad registrados.
+                      </div>
+                    ) : (
+                      securityAlerts.map(alert => (
+                        <div 
+                          key={alert.id}
+                          className={`p-3 rounded-xl border ${
+                            alert.tipo === 'fuerza_bruta_pin' 
+                              ? 'bg-red-50/80 border-red-200 text-red-950' 
+                              : 'bg-amber-50 border-amber-200 text-amber-950'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-extrabold text-[11px] uppercase tracking-wider text-red-700">
+                              {alert.tipo === 'fuerza_bruta_pin' ? '⚠️ Fuerza Bruta PIN' : 'Alerta'}
+                            </span>
+                            <span className="text-[10px] text-neutral-500">
+                              {new Date(alert.fecha).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-[11px] leading-relaxed">
+                            {alert.mensaje}
+                          </p>
+                          {!alert.leido && (
+                            <button
+                              onClick={() => markAlertRead(alert.id)}
+                              className="mt-2 text-[10px] font-bold text-red-700 hover:underline"
+                            >
+                              Marcar como atendida
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Shift Active Indicator (for staff) */}
           {currentShift && (
-            <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-amber-50 border border-amber-200/80 rounded-xl text-xs font-semibold text-amber-900">
+            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200/80 rounded-xl text-xs font-semibold text-amber-900">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
               <Clock className="w-3.5 h-3.5 text-amber-600" />
-              <span>Turno: {shiftDuration}</span>
+              <span>{shiftDuration}</span>
             </div>
           )}
 
@@ -158,9 +268,9 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
               className="relative p-2 rounded-xl text-neutral-600 hover:text-orange-600 hover:bg-orange-50 transition border border-neutral-200"
               title="Notificaciones de pedidos"
             >
-              <Bell className="w-5 h-5" />
+              <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
               {readyOrdersForServer.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-orange-600 text-white text-[11px] font-bold rounded-full flex items-center justify-center animate-bounce">
+                <span className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-orange-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-bounce">
                   {readyOrdersForServer.length}
                 </span>
               )}
@@ -219,33 +329,44 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
             )}
           </div>
 
-          {/* Employee badge */}
+          {/* User badge */}
           <div className="flex items-center gap-2 pl-2 border-l border-neutral-200">
             <div className="text-right hidden sm:block">
-              <div className="text-xs font-bold text-neutral-900 leading-tight">
-                {currentEmployee.nombre}
+              <div className="text-xs font-black text-neutral-900 leading-tight">
+                {userDisplayName}
               </div>
-              <span className={`text-[10px] uppercase font-bold px-1.5 py-0.2 rounded border ${roleColors[currentEmployee.puesto] || 'bg-neutral-100'}`}>
-                {currentEmployee.puesto}
+              <span className={`text-[10px] uppercase font-extrabold px-1.5 py-0.2 rounded border ${roleColors[userRole] || 'bg-neutral-100'}`}>
+                {userRole === 'owner' ? 'DUEÑO (OWNER)' : userRole}
               </span>
             </div>
 
-            {/* End Shift Button */}
-            <button
-              onClick={() => setShowEndShiftModal(true)}
-              className="px-3 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
-              title="Cerrar turno y ver balance"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">Cerrar Turno</span>
-            </button>
+            {/* Logout or End Shift Button */}
+            {currentUserAccount ? (
+              <button
+                onClick={logoutAdmin}
+                className="px-2.5 sm:px-3 py-2 rounded-xl bg-neutral-100 hover:bg-red-50 text-neutral-700 hover:text-red-700 border border-neutral-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                title="Cerrar sesión de Administrador"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Cerrar Sesión</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowEndShiftModal(true)}
+                className="px-2.5 sm:px-3 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                title="Cerrar turno y ver balance"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Cerrar Turno</span>
+              </button>
+            )}
           </div>
 
         </div>
 
       </header>
 
-      {/* Modal: Confirmación de Cierre de Turno y Resumen */}
+      {/* Modal: Confirmación de Cierre de Turno y Resumen (Operativo) */}
       {showEndShiftModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-neutral-100 space-y-4">
@@ -264,7 +385,7 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
                 onClick={() => setShowEndShiftModal(false)}
                 className="text-neutral-400 hover:text-neutral-600 p-1"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
@@ -304,7 +425,7 @@ export const TopNav: React.FC<TopNavProps> = ({ orders = [], onOrderClick }) => 
               <textarea
                 value={reporteLabores}
                 onChange={(e) => setReporteLabores(e.target.value)}
-                placeholder="Ejemplo: Turno completado sin novedades, reposición de vajilla realizada..."
+                placeholder="Ejemplo: Turno completado sin novedades, reposición realizada..."
                 rows={3}
                 className="w-full text-xs p-3 rounded-xl border border-neutral-300 focus:ring-2 focus:ring-orange-500 focus:outline-none resize-none"
               />

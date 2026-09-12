@@ -10,11 +10,11 @@ import {
   Grid3X3, 
   CheckCircle2, 
   ArrowRight, 
-  Sparkles,
-  Users,
-  MenuSquare,
-  Building2,
-  X
+  Sparkles, 
+  Users, 
+  MenuSquare, 
+  Building2, 
+  X 
 } from 'lucide-react';
 
 interface RestaurantOnboardingProps {
@@ -28,7 +28,7 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   isSecondaryModal = false,
   onCloseModal
 }) => {
-  const { selectRestaurant } = useAuth();
+  const { selectRestaurant, currentUserAccount, currentBusiness } = useAuth();
 
   const [nombre, setNombre] = useState('');
   const [direccion, setDireccion] = useState('');
@@ -37,6 +37,8 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [createdRestaurantId, setCreatedRestaurantId] = useState<string | null>(null);
+
+  const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || 'biz_default';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,7 +61,7 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
         direccion: direccion.trim(),
         telefono: telefono.trim(),
         numeroMesas: Number(numeroMesas)
-      });
+      }, activeBizId);
       selectRestaurant(newRestId);
       setCreatedRestaurantId(newRestId);
     } catch (err: any) {
@@ -168,12 +170,12 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
             <Store className="w-8 h-8" />
           </div>
           <h1 className="text-2xl sm:text-3xl font-black text-neutral-900">
-            {isSecondaryModal ? 'Crear Nuevo Restaurante' : 'Bienvenido a Gastro Smart'}
+            {isSecondaryModal ? 'Crear Nueva Sucursal' : 'Bienvenido a Gastro Smart'}
           </h1>
           <p className="text-neutral-600 text-xs sm:text-sm mt-1">
             {isSecondaryModal 
               ? 'Agrega otra sucursal independiente con su propio menú, mesas y empleados.' 
-              : 'Comienza configurando tu primer restaurante para activar el sistema.'}
+              : 'Configura tu primera sucursal para activar el sistema.'}
           </p>
         </div>
 
@@ -188,7 +190,7 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
           <div>
             <label className="block text-xs font-bold text-neutral-700 mb-1 flex items-center gap-1.5">
               <Store className="w-3.5 h-3.5 text-orange-500" />
-              Nombre del Restaurante: *
+              Nombre del Restaurante / Sucursal: *
             </label>
             <input
               type="text"
@@ -264,7 +266,7 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
             ) : (
               <>
                 <Building2 className="w-4 h-4" />
-                <span>{isSecondaryModal ? 'Crear Restaurante' : 'Guardar y Comenzar'}</span>
+                <span>{isSecondaryModal ? 'Crear Sucursal' : 'Guardar y Comenzar'}</span>
               </>
             )}
           </button>

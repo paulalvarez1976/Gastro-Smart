@@ -177,15 +177,17 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
     setIsSavingClient(true);
     setNewClientError('');
     try {
-      const created = await createClient({
+      const clientData: Client = {
+        id: '',
         nombre: newClientName.trim(),
         telefono: newClientPhone.trim(),
         direccion: newClientAddress.trim()
-      });
+      };
+      const createdId = await createClient(clientData);
       sounds.playCashRegister();
-      setSelectedClient(created);
-      if (created.direccion) {
-        setDeliveryAddress(created.direccion);
+      setSelectedClient({ ...clientData, id: createdId });
+      if (clientData.direccion) {
+        setDeliveryAddress(clientData.direccion);
       }
       setShowNewClientModal(false);
       setNewClientName('');

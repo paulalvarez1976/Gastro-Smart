@@ -153,6 +153,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders }) => {
     sounds.playCashRegister();
 
     const closePayload: Omit<CashRegisterClose, 'id' | 'creadoEn'> = {
+      businessId: currentRestaurant.businessId || 'biz_default',
       restaurantId: currentRestaurant.id,
       cajeroId: currentEmployee.id,
       cajeroNombre: currentEmployee.nombre,

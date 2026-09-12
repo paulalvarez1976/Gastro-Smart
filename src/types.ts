@@ -1,7 +1,39 @@
-export type Role = 'admin' | 'caja' | 'mesero' | 'cocina' | 'ayudante_cocina' | 'limpieza';
+export type Role = 'owner' | 'admin' | 'caja' | 'mesero' | 'cocina' | 'ayudante_cocina' | 'limpieza';
+export type UserRole = 'owner' | 'admin';
+
+export const GASTRO_SMART_APP_ID = 'gastro_smart' as const;
+
+export interface Business {
+  id: string;
+  nombre: string;
+  rif_o_ruc: string;
+  plan: 'basico' | 'pro';
+  activo: boolean;
+  creadoEn: string;
+  ownerUid: string;
+  appId?: 'gastro_smart';
+  logoUrl?: string | null;
+  email?: string;
+  telefono?: string;
+  direccion?: string;
+}
+
+export interface UserAccount {
+  uid: string;
+  email: string;
+  nombre: string;
+  rol: UserRole;
+  businessId: string;
+  restaurantId?: string | null;
+  appId: 'gastro_smart';
+  creadoEn: string;
+  ultimoAcceso?: string;
+  avatarUrl?: string | null;
+}
 
 export interface Restaurant {
   id: string;
+  businessId?: string;
   nombre: string;
   direccion: string;
   telefono: string;
@@ -12,6 +44,7 @@ export interface Restaurant {
 
 export interface Employee {
   id: string;
+  businessId?: string;
   restaurantId: string;
   nombre: string;
   puesto: Role;
@@ -23,6 +56,7 @@ export interface Employee {
 
 export interface Shift {
   id: string;
+  businessId?: string;
   employeeId: string;
   employeeName?: string;
   employeePuesto?: Role;
@@ -44,6 +78,7 @@ export interface Shift {
 
 export interface MenuItem {
   id: string;
+  businessId?: string;
   restaurantId: string; // o 'all' si comparte
   nombre: string;
   descripcion: string;
@@ -56,6 +91,7 @@ export interface MenuItem {
 
 export interface Client {
   id: string;
+  businessId?: string;
   nombre: string;
   telefono?: string;
   email?: string;
@@ -65,6 +101,7 @@ export interface Client {
 
 export interface Table {
   id: string;
+  businessId?: string;
   restaurantId: string;
   numero: number;
   estado: 'libre' | 'ocupada';
@@ -102,6 +139,7 @@ export interface OrderTimelineEvent {
 
 export interface Order {
   id: string;
+  businessId?: string;
   restaurantId: string;
   meseroId: string;
   meseroNombre?: string;
@@ -129,11 +167,12 @@ export interface Order {
   listoEn?: string;
   entregadoEn?: string;
   cobradoEn?: string;
-  timeline: OrderTimelineEvent[];
+  timeline?: OrderTimelineEvent[];
 }
 
 export interface CashRegisterClose {
   id: string;
+  businessId?: string;
   restaurantId: string;
   cajeroId: string;
   cajeroNombre: string;
@@ -155,6 +194,7 @@ export interface CashRegisterClose {
 
 export interface Expense {
   id: string;
+  businessId?: string;
   restaurantId: string;
   tipo: 'sueldo' | 'insumos' | 'servicios' | 'mantenimiento' | 'otro';
   monto: number;
@@ -167,4 +207,26 @@ export interface Expense {
   tarifaHora?: number;
   fecha: string;
   creadoEn: string;
+}
+
+export interface LoginAttempt {
+  id?: string;
+  businessId?: string;
+  restaurantId?: string;
+  pinIntentado: string;
+  fecha: string;
+  resultado: 'fallido' | 'exitoso';
+  motivo?: string;
+  origen?: string;
+}
+
+export interface SecurityAlert {
+  id: string;
+  businessId: string;
+  restaurantId?: string;
+  restaurantNombre?: string;
+  tipo: 'fuerza_bruta_pin' | 'cambio_seguridad' | 'intruso';
+  mensaje: string;
+  fecha: string;
+  leido: boolean;
 }

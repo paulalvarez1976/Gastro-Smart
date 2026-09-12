@@ -210,7 +210,7 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
           metodoPago: null,
           estado: 'pendiente_cocina',
           creadoEn: new Date().toISOString(),
-        }, currentEmployee.nombre);
+        });
 
         const targetDesc = isLocal 
           ? `Mesa #${setupData.selectedTable?.numero}` 

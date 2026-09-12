@@ -70,7 +70,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   shifts,
   orders
 }) => {
-  const { resetEmployeePin, updateEmployeeHourlyRate, currentRestaurant, selectRestaurant } = useAuth();
+  const { 
+    resetEmployeePin, 
+    updateEmployeeHourlyRate, 
+    currentRestaurant, 
+    selectRestaurant, 
+    currentUserAccount, 
+    currentBusiness 
+  } = useAuth();
+  
+  const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || 'biz_default';
   
   // Navigation tabs
   const [activeTab, setActiveTab] = useState<'metricas' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('metricas');
@@ -147,7 +156,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (editingRest) {
       await updateRestaurant(editingRest.id, restForm);
     } else {
-      await createRestaurant(restForm);
+      await createRestaurant(restForm, activeBizId);
     }
     setShowRestModal(false);
     setEditingRest(null);
@@ -247,7 +256,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           selectRestaurant(remaining[0].id);
         }
       } else if (dangerModal.type === 'delete_account') {
-        await deleteAllAccountData();
+        await deleteAllAccountData(activeBizId);
         alert('Toda la cuenta ha sido eliminada. Redirigiendo...');
         window.location.reload();
       }
@@ -270,7 +279,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (editingEmp) {
       await updateEmployee(editingEmp.id, { ...empForm, restaurantId: targetRestId });
     } else {
-      await createEmployee({ ...empForm, restaurantId: targetRestId });
+      await createEmployee({ ...empForm, restaurantId: targetRestId, businessId: activeBizId });
     }
     setShowEmpModal(false);
     setEditingEmp(null);
@@ -375,6 +384,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       const dishPayload = {
+        businessId: activeBizId,
         nombre: menuForm.nombre.trim(),
         descripcion: menuForm.descripcion.trim(),
         precio: Number(menuForm.precio) || 0,

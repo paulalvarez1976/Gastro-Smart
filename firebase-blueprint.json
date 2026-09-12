@@ -1,115 +1,214 @@
 {
   "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Cuentas de usuario administrador y dueños con aislamiento por appId",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "nombre": { "type": "string" },
+        "rol": { "type": "string", "enum": ["owner", "admin"] },
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] },
+        "creadoEn": { "type": "string" },
+        "ultimoAcceso": { "type": "string" }
+      },
+      "required": ["uid", "email", "nombre", "rol", "businessId", "appId"]
+    },
+    "Business": {
+      "title": "Business",
+      "description": "Entidad del negocio / cadena gastronómica",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "rif_o_ruc": { "type": "string" },
+        "plan": { "type": "string", "enum": ["basico", "pro"] },
+        "activo": { "type": "boolean" },
+        "ownerUid": { "type": "string" },
+        "email": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] },
+        "creadoEn": { "type": "string" }
+      },
+      "required": ["nombre", "plan", "activo", "ownerUid", "appId"]
+    },
     "Restaurant": {
       "title": "Restaurant",
       "description": "Restaurantes y sedes del negocio",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
         "nombre": { "type": "string" },
         "direccion": { "type": "string" },
         "telefono": { "type": "string" },
         "numeroMesas": { "type": "number" },
         "activo": { "type": "boolean" },
-        "createdAt": { "type": "string" }
+        "appId": { "type": "string", "enum": ["gastro_smart"] },
+        "creadoEn": { "type": "string" }
       },
-      "required": ["nombre", "activo"]
+      "required": ["businessId", "nombre", "activo"]
     },
     "Employee": {
       "title": "Employee",
       "description": "Plantilla de empleados con PIN táctil y tarifa",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
         "nombre": { "type": "string" },
-        "puesto": { "type": "string", "enum": ["admin", "caja", "mesero", "cocina", "ayudante_cocina", "limpieza"] },
+        "puesto": { "type": "string", "enum": ["owner", "admin", "caja", "mesero", "cocina", "ayudante_cocina", "limpieza"] },
         "pin": { "type": "string" },
         "tarifaHora": { "type": "number" },
-        "restaurantId": { "type": "string" },
         "activo": { "type": "boolean" },
-        "createdAt": { "type": "string" }
+        "appId": { "type": "string", "enum": ["gastro_smart"] },
+        "creadoEn": { "type": "string" }
       },
-      "required": ["nombre", "puesto", "pin", "tarifaHora", "activo"]
+      "required": ["businessId", "restaurantId", "nombre", "puesto", "pin", "tarifaHora", "activo"]
     },
     "Table": {
       "title": "Table",
-      "description": "Mesas del local físico numeradas del 1 al N",
+      "description": "Mesas del local físico",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
         "restaurantId": { "type": "string" },
         "numero": { "type": "number" },
         "estado": { "type": "string", "enum": ["libre", "ocupada"] },
-        "currentOrderId": { "type": "string" },
-        "currentOrderTotal": { "type": "number" }
+        "capacidad": { "type": "number" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
-      "required": ["restaurantId", "numero", "estado"]
+      "required": ["businessId", "restaurantId", "numero", "estado"]
     },
     "Order": {
       "title": "Order",
       "description": "Comandas y pedidos de salón o delivery",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
         "restaurantId": { "type": "string" },
-        "tipo": { "type": "string", "enum": ["local", "delivery"] },
-        "mesaId": { "type": "string" },
-        "mesaNumero": { "type": "number" },
-        "clienteNombre": { "type": "string" },
-        "clienteTelefono": { "type": "string" },
-        "empresaDelivery": { "type": "string" },
-        "estado": { "type": "string", "enum": ["pendiente", "aceptado", "en_preparacion", "listo", "entregado", "rechazado", "cobrado"] },
+        "meseroId": { "type": "string" },
+        "tipo": { "type": "string", "enum": ["local", "delivery", "para_llevar"] },
+        "estado": { "type": "string", "enum": ["pendiente_cocina", "aceptado", "en_preparacion", "listo", "entregado", "cobrado", "rechazado"] },
         "items": { "type": "array" },
         "total": { "type": "number" },
-        "metodoPago": { "type": "string" },
-        "createdAt": { "type": "string" }
+        "appId": { "type": "string", "enum": ["gastro_smart"] },
+        "creadoEn": { "type": "string" }
       },
-      "required": ["restaurantId", "tipo", "estado", "items", "total", "createdAt"]
+      "required": ["businessId", "restaurantId", "meseroId", "tipo", "estado", "items", "total", "creadoEn"]
     },
     "MenuItem": {
       "title": "MenuItem",
       "description": "Platos y productos de la carta",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
         "nombre": { "type": "string" },
         "descripcion": { "type": "string" },
         "precio": { "type": "number" },
         "categoria": { "type": "string" },
         "disponible": { "type": "boolean" },
-        "restaurantId": { "type": "string" }
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
-      "required": ["nombre", "precio", "disponible"]
+      "required": ["businessId", "restaurantId", "nombre", "precio", "disponible"]
+    },
+    "Client": {
+      "title": "Client",
+      "description": "Directorio de clientes",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "nombre": { "type": "string" },
+        "telefono": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "nombre"]
     },
     "Shift": {
       "title": "Shift",
-      "description": "Fichajes y turnos de trabajo con liquidación",
+      "description": "Fichajes y turnos de trabajo",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
         "employeeId": { "type": "string" },
-        "employeeName": { "type": "string" },
         "restaurantId": { "type": "string" },
         "horaInicio": { "type": "string" },
-        "horaFin": { "type": "string" },
         "estado": { "type": "string", "enum": ["abierto", "cerrado"] },
-        "sueldoPagado": { "type": "boolean" },
-        "sueldoTotal": { "type": "number" }
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
-      "required": ["employeeId", "restaurantId", "horaInicio", "estado"]
+      "required": ["businessId", "employeeId", "restaurantId", "horaInicio", "estado"]
+    },
+    "CashRegisterClose": {
+      "title": "CashRegisterClose",
+      "description": "Cierres de caja y arqueos",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "cajeroId": { "type": "string" },
+        "cajeroNombre": { "type": "string" },
+        "fecha": { "type": "string" },
+        "totalReal": { "type": "number" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "restaurantId", "cajeroId", "cajeroNombre", "fecha", "totalReal"]
     },
     "Expense": {
       "title": "Expense",
-      "description": "Gastos operativos y sueldos liquidados",
+      "description": "Gastos operativos y liquidaciones",
       "type": "object",
       "properties": {
+        "businessId": { "type": "string" },
         "restaurantId": { "type": "string" },
+        "tipo": { "type": "string" },
         "monto": { "type": "number" },
-        "categoria": { "type": "string" },
         "descripcion": { "type": "string" },
-        "fecha": { "type": "string" }
+        "fecha": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
-      "required": ["restaurantId", "monto", "descripcion", "fecha"]
+      "required": ["businessId", "restaurantId", "monto", "descripcion", "fecha"]
+    },
+    "LoginAttempt": {
+      "title": "LoginAttempt",
+      "description": "Registro de auditoría de intentos de acceso",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "pinIntentado": { "type": "string" },
+        "fecha": { "type": "string" },
+        "resultado": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "fecha", "resultado"]
+    },
+    "SecurityAlert": {
+      "title": "SecurityAlert",
+      "description": "Alertas de seguridad y bloqueos",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "tipo": { "type": "string" },
+        "mensaje": { "type": "string" },
+        "fecha": { "type": "string" },
+        "leido": { "type": "boolean" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "tipo", "mensaje", "fecha", "leido"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": "UserAccount",
+      "description": "Cuentas de usuario de Gastro Smart (filtradas por appId)"
+    },
+    "/businesses/{businessId}": {
+      "schema": "Business",
+      "description": "Empresas y cadenas de restaurantes"
+    },
     "/restaurants/{restaurantId}": {
       "schema": "Restaurant",
-      "description": "Locales de Gastro Smart"
+      "description": "Locales y sucursales de Gastro Smart"
     },
     "/employees/{employeeId}": {
       "schema": "Employee",
@@ -123,17 +222,33 @@
       "schema": "Order",
       "description": "Pedidos y comandas"
     },
-    "/menu/{menuId}": {
+    "/menuItems/{menuItemId}": {
       "schema": "MenuItem",
       "description": "Carta y platos"
     },
+    "/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Directorio de clientes"
+    },
     "/shifts/{shiftId}": {
       "schema": "Shift",
-      "description": "Jornadas laborales"
+      "description": "Jornadas laborales y fichajes"
+    },
+    "/cashRegisterCloses/{closeId}": {
+      "schema": "CashRegisterClose",
+      "description": "Arqueos y cierres de caja"
     },
     "/expenses/{expenseId}": {
       "schema": "Expense",
       "description": "Gastos y nóminas"
+    },
+    "/loginAttempts/{attemptId}": {
+      "schema": "LoginAttempt",
+      "description": "Auditoría de PIN"
+    },
+    "/securityAlerts/{alertId}": {
+      "schema": "SecurityAlert",
+      "description": "Alertas de seguridad"
     }
   }
 }

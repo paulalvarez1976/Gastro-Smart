@@ -1,57 +1,167 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Employee, Restaurant, Shift } from '../types';
+import { 
+  onAuthStateChanged, 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword,
+  signOut,
+  sendPasswordResetEmail,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { auth } from '../firebase';
+import { 
+  Employee, 
+  Restaurant, 
+  Shift, 
+  Business, 
+  UserAccount, 
+  SecurityAlert 
+} from '../types';
 import { 
   subscribeToRestaurants, 
   subscribeToEmployees, 
   subscribeToActiveShift, 
+  subscribeToBusiness,
   openShift, 
   closeShift, 
-  updateEmployee 
+  updateEmployee,
+  checkAndHealAdmin,
+  getUserAccount,
+  createUserAccount,
+  updateUserAccount,
+  createBusiness,
+  registerLoginAttempt,
+  createSecurityAlert,
+  subscribeToSecurityAlerts,
+  markSecurityAlertAsRead
 } from '../services/dataService';
 import { seedInitialDataIfEmpty } from '../utils/seed';
 
 interface AuthContextType {
+  // Estado de usuario y negocio
+  firebaseUser: FirebaseUser | null;
+  currentUserAccount: UserAccount | null;
+  currentBusiness: Business | null;
   currentEmployee: Employee | null;
   currentShift: Shift | null;
   currentRestaurant: Restaurant | null;
   allRestaurants: Restaurant[];
   allEmployees: Employee[];
+  securityAlerts: SecurityAlert[];
+  
+  // Estados de carga y avisos
+  isLoadingAuth: boolean;
+  selfHealingToast: string | null;
+  dismissSelfHealingToast: () => void;
+
+  // Anti-fuerza bruta PIN
   isLocked: boolean;
   lockRemainingSeconds: number;
-  loginWithPin: (pin: string) => Promise<{ success: boolean; message: string; employee?: Employee }>;
-  logout: () => void;
+  lockSeverity: 'cooldown_30s' | 'blocked_15m' | null;
+
+  // Autenticación de Admin / Owner
+  loginAdminWithEmail: (email: string, pass: string) => Promise<{ success: boolean; message: string; notRegisteredInApp?: boolean }>;
+  registerOwnerAndBusiness: (data: { businessName: string; rif_o_ruc: string; ownerName: string; email: string; pass: string }) => Promise<{ success: boolean; message: string; isExistingLogin?: boolean }>;
+  logoutAdmin: () => Promise<void>;
+  resetAdminPassword: (email: string) => Promise<{ success: boolean; message: string }>;
+  changeAdminPassword: (currentPass: string, newPass: string) => Promise<{ success: boolean; message: string }>;
+
+  // Autenticación operativa (PIN)
+  loginWithPin: (pin: string, branchId?: string) => Promise<{ success: boolean; message: string; employee?: Employee }>;
+  logoutEmployee: () => void;
   endShiftAndLogout: (reporteLabores?: string) => Promise<void>;
+  
+  // Utilidades de sucursales y empleados
   selectRestaurant: (restaurantId: string) => void;
   resetEmployeePin: (employeeId: string, newPin: string) => Promise<void>;
   updateEmployeeHourlyRate: (employeeId: string, rate: number) => Promise<void>;
+  markAlertRead: (alertId: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [allRestaurants, setAllRestaurants] = useState<Restaurant[]>([]);
-  const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [currentUserAccount, setCurrentUserAccount] = useState<UserAccount | null>(null);
+  const [currentBusiness, setCurrentBusiness] = useState<Business | null>(null);
   const [currentEmployee, setCurrentEmployee] = useState<Employee | null>(null);
   const [currentShift, setCurrentShift] = useState<Shift | null>(null);
+  const [allRestaurants, setAllRestaurants] = useState<Restaurant[]>([]);
+  const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
+  const [securityAlerts, setSecurityAlerts] = useState<SecurityAlert[]>([]);
   const [selectedRestaurantId, setSelectedRestaurantId] = useState<string | null>(null);
 
-  // Intentos fallidos y bloqueo de 30 segundos
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [selfHealingToast, setSelfHealingToast] = useState<string | null>(null);
+
+  // Anti-fuerza bruta PIN de empleados
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockUntil, setLockUntil] = useState<number | null>(null);
   const [lockRemainingSeconds, setLockRemainingSeconds] = useState(0);
+  const [lockSeverity, setLockSeverity] = useState<'cooldown_30s' | 'blocked_15m' | null>(null);
 
-  // Inicializar seeder y suscripciones principales
+  // 1. Inicializar seeder y escuchar Auth de Firebase
   useEffect(() => {
     seedInitialDataIfEmpty();
 
-    const unsubRestaurants = subscribeToRestaurants((data) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      setFirebaseUser(user);
+      if (user) {
+        try {
+          const userAccount = await getUserAccount(user.uid);
+          if (userAccount) {
+            await updateUserAccount(user.uid, { ultimoAcceso: new Date().toISOString() });
+            setCurrentUserAccount(userAccount);
+          } else {
+            // Usuario en Auth pero sin registro en Gastro Smart (pertenece a otra app en proyecto compartido)
+            setCurrentUserAccount(null);
+          }
+        } catch (err) {
+          console.error('Error fetching user account on auth state change:', err);
+          setCurrentUserAccount(null);
+        }
+      } else {
+        setCurrentUserAccount(null);
+      }
+      setIsLoadingAuth(false);
+    });
+
+    return () => unsubscribeAuth();
+  }, []);
+
+  // 2. Suscribirse al negocio del usuario logueado o default
+  const activeBusinessId = currentUserAccount?.businessId || currentEmployee?.businessId || (allRestaurants[0]?.businessId) || 'biz_default';
+
+  useEffect(() => {
+    if (!activeBusinessId) return;
+    const unsubBiz = subscribeToBusiness(activeBusinessId, (biz) => {
+      setCurrentBusiness(biz);
+    });
+    const unsubAlerts = subscribeToSecurityAlerts(activeBusinessId, (alerts) => {
+      setSecurityAlerts(alerts);
+    });
+    return () => {
+      unsubBiz();
+      unsubAlerts();
+    };
+  }, [activeBusinessId]);
+
+  // 3. Suscribirse a restaurantes y empleados del tenant activo
+  useEffect(() => {
+    const unsubRestaurants = subscribeToRestaurants(activeBusinessId, (data) => {
       setAllRestaurants(data);
-      if (data.length > 0 && !selectedRestaurantId) {
-        setSelectedRestaurantId(data[0].id);
+      if (data.length > 0) {
+        if (!selectedRestaurantId || !data.some(r => r.id === selectedRestaurantId)) {
+          setSelectedRestaurantId(data[0].id);
+        }
+      } else {
+        setSelectedRestaurantId(null);
       }
     });
 
-    const unsubEmployees = subscribeToEmployees(null, (data) => {
+    const unsubEmployees = subscribeToEmployees(activeBusinessId, null, (data) => {
       setAllEmployees(data);
     });
 
@@ -59,9 +169,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubRestaurants();
       unsubEmployees();
     };
-  }, []);
+  }, [activeBusinessId]);
 
-  // Suscribirse a turno activo del empleado logueado
+  // 4. Suscribirse al turno activo del empleado operativo
   useEffect(() => {
     if (!currentEmployee) {
       setCurrentShift(null);
@@ -76,11 +186,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const diffHours = (now - startTime) / (1000 * 60 * 60);
 
         if (diffHours >= 14 && shift.estado === 'abierto') {
-          console.warn('Turno excedió 14 horas. Cerrando automáticamente con alerta.');
+          console.warn('Turno excedió 14 horas. Cerrando automáticamente por seguridad.');
           await closeShift(shift.id, 'Cierre automático preventivo por exceder 14 horas continuas');
           setCurrentShift(null);
           setCurrentEmployee(null);
-          alert('Tu turno anterior excedió las 14 horas y fue cerrado automáticamente por seguridad. Se notificó al Administrador.');
+          alert('Tu turno anterior excedió las 14 horas y fue cerrado automáticamente por seguridad.');
           return;
         }
 
@@ -93,7 +203,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubShift();
   }, [currentEmployee]);
 
-  // Manejo de temporizador de bloqueo por 3 PINs incorrectos
+  // 5. Manejo del contador de bloqueo por PIN incorrecto
   useEffect(() => {
     if (!lockUntil) return;
 
@@ -102,6 +212,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLockRemainingSeconds(remaining);
       if (remaining <= 0) {
         setLockUntil(null);
+        setLockSeverity(null);
         setFailedAttempts(0);
       }
     }, 500);
@@ -109,7 +220,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(interval);
   }, [lockUntil]);
 
-  // Cierre de sesión por inactividad a los 15 minutos (900,000 ms)
+  // 6. Cierre de sesión por inactividad de empleados operativos (15 min)
   useEffect(() => {
     if (!currentEmployee) return;
 
@@ -117,7 +228,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const resetInactivityTimer = () => {
       clearTimeout(inactivityTimeout);
-      // 15 minutos = 15 * 60 * 1000 ms
+      // 15 minutos
       inactivityTimeout = setTimeout(() => {
         alert('Sesión cerrada por inactividad (15 minutos sin interacción). Introduce tu PIN para reanudar.');
         setCurrentEmployee(null);
@@ -134,36 +245,262 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [currentEmployee]);
 
-  const loginWithPin = async (pin: string): Promise<{ success: boolean; message: string; employee?: Employee }> => {
+  // ======================= MÉTODOS AUTH ADMIN / OWNER =======================
+
+  const loginAdminWithEmail = async (email: string, pass: string): Promise<{ success: boolean; message: string; notRegisteredInApp?: boolean }> => {
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+      const userAccount = await getUserAccount(userCredential.user.uid);
+
+      if (!userAccount) {
+        // El usuario está en Firebase Auth (pertenece a otra app), pero no tiene documento con appId "gastro_smart"
+        await signOut(auth);
+        setCurrentUserAccount(null);
+        setFirebaseUser(null);
+        return { 
+          success: false, 
+          message: 'Este correo no está registrado en Gastro Smart',
+          notRegisteredInApp: true 
+        };
+      }
+
+      await updateUserAccount(userAccount.uid, { ultimoAcceso: new Date().toISOString() });
+      setCurrentUserAccount(userAccount);
+      return { success: true, message: `Bienvenido, ${userAccount.nombre}.` };
+    } catch (err: any) {
+      console.error('Error logging in admin:', err);
+      let msg = 'Credenciales incorrectas. Verifica tu email y contraseña.';
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        msg = 'Email o contraseña inválidos.';
+      } else if (err.code === 'auth/too-many-requests') {
+        msg = 'Demasiados intentos fallidos. Acceso temporalmente bloqueado por Firebase.';
+      }
+      return { success: false, message: msg };
+    }
+  };
+
+  const registerOwnerAndBusiness = async (data: {
+    businessName: string;
+    rif_o_ruc: string;
+    ownerName: string;
+    email: string;
+    pass: string;
+  }): Promise<{ success: boolean; message: string; isExistingLogin?: boolean }> => {
+    const trimmedEmail = data.email.trim();
+    try {
+      // 1. Intento crear el usuario con createUserWithEmailAndPassword
+      const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, data.pass);
+      const uid = userCredential.user.uid;
+
+      // 2. Crear negocio en Firestore
+      const businessId = 'biz_' + Date.now().toString(36);
+      await createBusiness({
+        nombre: data.businessName.trim(),
+        rif_o_ruc: data.rif_o_ruc.trim() || 'N/A',
+        plan: 'pro',
+        activo: true,
+        creadoEn: new Date().toISOString(),
+        ownerUid: uid,
+        email: trimmedEmail,
+        logoUrl: null
+      }, businessId);
+
+      // 3. Crear registro de usuario en colección users con appId: "gastro_smart" y rol 'owner'
+      const newUserAccount: UserAccount = {
+        uid,
+        email: trimmedEmail,
+        nombre: data.ownerName.trim(),
+        rol: 'owner',
+        businessId,
+        restaurantId: null,
+        appId: 'gastro_smart',
+        creadoEn: new Date().toISOString(),
+        ultimoAcceso: new Date().toISOString()
+      };
+      await createUserAccount(newUserAccount);
+      setCurrentUserAccount(newUserAccount);
+
+      return { success: true, message: '¡Cuenta de negocio y dueño creadas exitosamente!' };
+    } catch (err: any) {
+      console.error('Registration attempt caught error:', err);
+
+      // Si Firebase responde auth/email-already-in-use: NO mostrar error al usuario. Intentar login
+      if (err.code === 'auth/email-already-in-use') {
+        try {
+          const loginCred = await signInWithEmailAndPassword(auth, trimmedEmail, data.pass);
+          const uid = loginCred.user.uid;
+
+          // Verificar en Firestore si este uid ya tiene documento con appId "gastro_smart"
+          const existingAccount = await getUserAccount(uid);
+
+          if (!existingAccount) {
+            // Usuario nuevo de Gastro Smart con correo existente en el proyecto compartido
+            // Flujo transparente: crear negocio y usuario en users (rol owner, appId gastro_smart)
+            const businessId = 'biz_' + Date.now().toString(36);
+            await createBusiness({
+              nombre: data.businessName.trim(),
+              rif_o_ruc: data.rif_o_ruc.trim() || 'N/A',
+              plan: 'pro',
+              activo: true,
+              creadoEn: new Date().toISOString(),
+              ownerUid: uid,
+              email: trimmedEmail,
+              logoUrl: null
+            }, businessId);
+
+            const newUserAccount: UserAccount = {
+              uid,
+              email: trimmedEmail,
+              nombre: data.ownerName.trim() || loginCred.user.displayName || 'Dueño',
+              rol: 'owner',
+              businessId,
+              restaurantId: null,
+              appId: 'gastro_smart',
+              creadoEn: new Date().toISOString(),
+              ultimoAcceso: new Date().toISOString()
+            };
+            await createUserAccount(newUserAccount);
+            setCurrentUserAccount(newUserAccount);
+
+            return { success: true, message: '¡Bienvenido a Gastro Smart!' };
+          } else {
+            // SÍ existe con rol owner / admin en Gastro Smart
+            await updateUserAccount(uid, { ultimoAcceso: new Date().toISOString() });
+            setCurrentUserAccount(existingAccount);
+            return { 
+              success: true, 
+              isExistingLogin: true,
+              message: 'Ya tienes una cuenta en Gastro Smart, iniciando sesión...' 
+            };
+          }
+        } catch (loginErr: any) {
+          // Si el login falla (la contraseña pertenece a la otra app o es incorrecta):
+          return {
+            success: false,
+            message: 'Este correo ya está registrado en otro sistema. Usa otro correo o inicia sesión con tu contraseña de Gastro Smart.'
+          };
+        }
+      }
+
+      let msg = err.message || 'Error al registrar la cuenta.';
+      if (err.code === 'auth/weak-password') {
+        msg = 'La contraseña debe tener al menos 6 caracteres.';
+      } else if (err.code === 'auth/invalid-email') {
+        msg = 'El formato del correo electrónico no es válido.';
+      }
+      return { success: false, message: msg };
+    }
+  };
+
+  const logoutAdmin = async () => {
+    await signOut(auth);
+    setCurrentUserAccount(null);
+    setFirebaseUser(null);
+  };
+
+  const resetAdminPassword = async (email: string): Promise<{ success: boolean; message: string }> => {
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      return { success: true, message: `Hemos enviado un enlace de recuperación a ${email}. Revisa tu bandeja.` };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'No se pudo enviar el correo de recuperación.' };
+    }
+  };
+
+  const changeAdminPassword = async (currentPass: string, newPass: string): Promise<{ success: boolean; message: string }> => {
+    if (!auth.currentUser || !auth.currentUser.email) {
+      return { success: false, message: 'No hay sesión de usuario activa.' };
+    }
+    try {
+      const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPass);
+      await reauthenticateWithCredential(auth.currentUser, credential);
+      await updatePassword(auth.currentUser, newPass);
+      return { success: true, message: '¡Contraseña actualizada con éxito!' };
+    } catch (err: any) {
+      return { success: false, message: 'Contraseña actual incorrecta o error de seguridad: ' + err.message };
+    }
+  };
+
+  // ======================= MÉTODOS AUTH OPERATIVA (PIN) =======================
+
+  const loginWithPin = async (pin: string, branchId?: string): Promise<{ success: boolean; message: string; employee?: Employee }> => {
+    // 1. Comprobar bloqueo activo
     if (lockUntil && Date.now() < lockUntil) {
+      const mins = Math.ceil(lockRemainingSeconds / 60);
+      const timeStr = lockSeverity === 'blocked_15m' ? `${mins} minuto(s)` : `${lockRemainingSeconds} segundo(s)`;
       return { 
         success: false, 
-        message: `Teclado bloqueado por intentos fallidos. Espera ${lockRemainingSeconds} segundos.` 
+        message: `Teclado bloqueado por intentos fallidos. Espera ${timeStr}.` 
       };
     }
 
-    const employee = allEmployees.find(e => e.pin === pin && e.activo);
+    // 2. Filtrar empleados disponibles según la sucursal / negocio
+    const searchPool = branchId
+      ? allEmployees.filter(e => e.restaurantId === branchId && e.activo)
+      : allEmployees.filter(e => e.activo);
+
+    const employee = searchPool.find(e => e.pin === pin);
+
+    // Auditoría en Firestore
+    await registerLoginAttempt({
+      businessId: activeBusinessId,
+      restaurantId: branchId || 'general',
+      pinIntentado: '****',
+      fecha: new Date().toISOString(),
+      resultado: employee ? 'exitoso' : 'fallido',
+      motivo: employee ? `Acceso concedido a ${employee.nombre} (${employee.puesto})` : 'PIN no coincide'
+    });
+
     if (!employee) {
       const newAttempts = failedAttempts + 1;
       setFailedAttempts(newAttempts);
+
+      if (newAttempts >= 5) {
+        // Bloqueo estricto de 15 minutos (900s) + Notificación de seguridad
+        const lockTime = Date.now() + 15 * 60 * 1000;
+        setLockUntil(lockTime);
+        setLockRemainingSeconds(900);
+        setLockSeverity('blocked_15m');
+
+        const restName = allRestaurants.find(r => r.id === branchId)?.nombre || 'Sucursal';
+        await createSecurityAlert({
+          businessId: activeBusinessId,
+          restaurantId: branchId,
+          restaurantNombre: restName,
+          tipo: 'fuerza_bruta_pin',
+          mensaje: `Se detectaron 5 intentos fallidos consecutivos de PIN en ${restName}. El teclado fue bloqueado por 15 minutos.`,
+          fecha: new Date().toISOString(),
+          leido: false
+        });
+
+        return { 
+          success: false, 
+          message: '5 intentos fallidos detectados. Teclado bloqueado por 15 minutos y alerta de seguridad emitida al administrador.' 
+        };
+      }
+
       if (newAttempts >= 3) {
+        // Cooldown de 30 segundos
         const lockTime = Date.now() + 30000;
         setLockUntil(lockTime);
         setLockRemainingSeconds(30);
+        setLockSeverity('cooldown_30s');
         return { 
           success: false, 
-          message: 'PIN incorrecto 3 veces. Teclado bloqueado por 30 segundos.' 
+          message: 'PIN incorrecto 3 veces. Teclado en enfriamiento por 30 segundos.' 
         };
       }
+
       return { 
         success: false, 
-        message: `PIN incorrecto. Te quedan ${3 - newAttempts} intento(s).` 
+        message: `PIN incorrecto. Te quedan ${3 - newAttempts} intento(s) antes del bloqueo.` 
       };
     }
 
-    // Resetear fallos
+    // Éxito
     setFailedAttempts(0);
     setLockUntil(null);
+    setLockSeverity(null);
     setCurrentEmployee(employee);
 
     const restaurant = allRestaurants.find(r => r.id === employee.restaurantId) || allRestaurants[0];
@@ -171,16 +508,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setSelectedRestaurantId(restaurant.id);
     }
 
-    // Abrir turno si no existe uno
-    // Nota: El listener subscribeToActiveShift se activará, pero si no hay, creamos uno de inmediato
+    // Abrir turno automáticamente si el empleado no tiene uno abierto
+    if (restaurant) {
+      try {
+        await openShift(employee, restaurant.nombre, activeBusinessId);
+      } catch (err) {
+        console.warn('Auto open shift error:', err);
+      }
+    }
+
     return {
       success: true,
-      message: `Bienvenido, ${employee.nombre}.`,
+      message: `¡Bienvenido, ${employee.nombre}!`,
       employee
     };
   };
 
-  const logout = () => {
+  const logoutEmployee = () => {
     setCurrentEmployee(null);
   };
 
@@ -204,26 +548,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await updateEmployee(employeeId, { tarifaHora: rate });
   };
 
-  const currentRestaurant = currentEmployee?.puesto === 'admin'
+  const markAlertRead = async (alertId: string) => {
+    await markSecurityAlertAsRead(alertId);
+  };
+
+  const dismissSelfHealingToast = () => {
+    setSelfHealingToast(null);
+  };
+
+  // Restaurante activo calculado
+  const currentRestaurant = currentUserAccount
     ? (allRestaurants.find(r => r.id === selectedRestaurantId) || allRestaurants[0] || null)
     : (allRestaurants.find(r => r.id === currentEmployee?.restaurantId) || allRestaurants.find(r => r.id === selectedRestaurantId) || allRestaurants[0] || null);
 
   return (
     <AuthContext.Provider
       value={{
+        firebaseUser,
+        currentUserAccount,
+        currentBusiness,
         currentEmployee,
         currentShift,
         currentRestaurant,
         allRestaurants,
         allEmployees,
+        securityAlerts,
+        isLoadingAuth,
+        selfHealingToast,
+        dismissSelfHealingToast,
         isLocked: !!(lockUntil && Date.now() < lockUntil),
         lockRemainingSeconds,
+        lockSeverity,
+        loginAdminWithEmail,
+        registerOwnerAndBusiness,
+        logoutAdmin,
+        resetAdminPassword,
+        changeAdminPassword,
         loginWithPin,
-        logout,
+        logoutEmployee,
         endShiftAndLogout,
         selectRestaurant,
         resetEmployeePin,
-        updateEmployeeHourlyRate
+        updateEmployeeHourlyRate,
+        markAlertRead
       }}
     >
       {children}

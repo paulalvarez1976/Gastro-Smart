@@ -101,8 +101,10 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
       rejectModalOrder.id,
       'rechazado',
       currentEmployee?.nombre || 'Chef de Cocina',
-      { timeline: rejectModalOrder.timeline || [] },
-      rejectReason.trim()
+      { 
+        timeline: rejectModalOrder.timeline || [],
+        motivoRechazo: rejectReason.trim()
+      }
     );
 
     setRejectModalOrder(null);
