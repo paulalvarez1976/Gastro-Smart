@@ -1,9 +1,14 @@
-import { collection, getDocs, writeBatch, doc } from 'firebase/firestore';
+import { collection, getDocs, writeBatch, doc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
-export async function seedInitialDataIfEmpty() {
+let isSeedingInProgress = false;
+
+export async function seedInitialDataIfEmpty(retryCount = 0): Promise<void> {
+  if (isSeedingInProgress && retryCount === 0) return;
+  isSeedingInProgress = true;
+
   try {
-    const bizSnap = await getDocs(collection(db, 'businesses'));
+    const bizSnap = await getDocs(query(collection(db, 'businesses'), where('appId', '==', 'gastro_smart')));
     let defaultBizId = 'biz_default';
 
     if (bizSnap.empty) {
@@ -227,7 +232,16 @@ export async function seedInitialDataIfEmpty() {
       await batch.commit();
       console.log('Initial seed completed successfully with multi-tenant structure.');
     }
-  } catch (err) {
-    console.error('Error seeding initial data:', err);
+  } catch (err: any) {
+    console.warn('Initial data check/seed notification:', err?.message || err);
+    if (retryCount < 3) {
+      setTimeout(() => {
+        isSeedingInProgress = false;
+        seedInitialDataIfEmpty(retryCount + 1);
+      }, 2500 * (retryCount + 1));
+      return;
+    }
+  } finally {
+    isSeedingInProgress = false;
   }
 }

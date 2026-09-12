@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { sounds } from '../utils/sound';
 import { 
@@ -26,6 +26,7 @@ import {
 export const AuthScreen: React.FC = () => {
   const { 
     loginAdminWithEmail, 
+    loginAdminWithGoogle,
     registerOwnerAndBusiness, 
     resetAdminPassword,
     loginWithPin, 
@@ -33,6 +34,9 @@ export const AuthScreen: React.FC = () => {
     lockRemainingSeconds, 
     lockSeverity,
     allRestaurants,
+    allBusinesses,
+    selectedRestaurantId,
+    selectRestaurant,
     currentBusiness,
     selfHealingToast,
     dismissSelfHealingToast
@@ -49,6 +53,7 @@ export const AuthScreen: React.FC = () => {
   const [adminPassword, setAdminPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [adminLoading, setAdminLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [adminFeedback, setAdminFeedback] = useState<{ type: 'success' | 'error'; text: string; notRegisteredInApp?: boolean } | null>(null);
 
   // Form states - Register Business & Owner
@@ -58,7 +63,7 @@ export const AuthScreen: React.FC = () => {
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regLoading, setRegLoading] = useState(false);
-  const [regFeedback, setRegFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [regFeedback, setRegFeedback] = useState<{ type: 'success' | 'error'; text: string; isEmailInUse?: boolean } | null>(null);
 
   // Form states - Forgot Password
   const [forgotEmail, setForgotEmail] = useState('');
@@ -66,12 +71,62 @@ export const AuthScreen: React.FC = () => {
   const [forgotFeedback, setForgotFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form states - Employee PIN
-  const [selectedBranchId, setSelectedBranchId] = useState<string>('');
+  const [selectedBranchId, setSelectedBranchId] = useState<string>(() => {
+    return selectedRestaurantId || (allRestaurants[0]?.id) || '';
+  });
   const [pin, setPin] = useState<string>('');
   const [pinErrorMsg, setPinErrorMsg] = useState<string>('');
   const [pinLoading, setPinLoading] = useState(false);
 
+  // Sincronizar sucursal seleccionada con la lista de restaurantes disponibles
+  useEffect(() => {
+    if (selectedRestaurantId && allRestaurants.some(r => r.id === selectedRestaurantId)) {
+      setSelectedBranchId(selectedRestaurantId);
+    } else if (allRestaurants.length > 0 && (!selectedBranchId || !allRestaurants.some(r => r.id === selectedBranchId))) {
+      setSelectedBranchId(allRestaurants[0].id);
+    }
+  }, [allRestaurants, selectedRestaurantId]);
+
+  // Reproducir sonido cuando aparece toast de autorrecuperación o notificación
+  useEffect(() => {
+    if (selfHealingToast) {
+      sounds.playNotification();
+    }
+  }, [selfHealingToast]);
+
+  const activeRest = allRestaurants.find(r => r.id === (selectedBranchId || selectedRestaurantId)) || allRestaurants[0] || null;
+  const activeBiz = activeRest ? allBusinesses.find(b => b.id === activeRest.businessId) : null;
+
   // ================= ADMIN HANDLERS =================
+  const handleGoogleAuth = async () => {
+    setGoogleLoading(true);
+    setAdminFeedback(null);
+    setRegFeedback(null);
+    try {
+      sounds.playKeypadClick();
+      const res = await loginAdminWithGoogle();
+      if (res.success) {
+        sounds.playCashRegister();
+      } else {
+        sounds.playAlertWarning();
+        if (adminView === 'register') {
+          setRegFeedback({ type: 'error', text: res.message });
+        } else {
+          setAdminFeedback({ type: 'error', text: res.message });
+        }
+      }
+    } catch (err: any) {
+      const msg = err.message || 'Error al autenticar con Google';
+      if (adminView === 'register') {
+        setRegFeedback({ type: 'error', text: msg });
+      } else {
+        setAdminFeedback({ type: 'error', text: msg });
+      }
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
+
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adminEmail.trim() || !adminPassword) {
@@ -127,7 +182,11 @@ export const AuthScreen: React.FC = () => {
         sounds.playCashRegister();
       } else {
         sounds.playAlertWarning();
-        setRegFeedback({ type: 'error', text: res.message });
+        setRegFeedback({ 
+          type: 'error', 
+          text: res.message,
+          isEmailInUse: res.isEmailInUse
+        });
       }
     } catch (err: any) {
       setRegFeedback({ type: 'error', text: err.message || 'Error en el registro' });
@@ -386,6 +445,21 @@ export const AuthScreen: React.FC = () => {
 
               {/* Enlace para registrar nuevo negocio */}
               <div className="mt-5 pt-4 border-t border-neutral-100 text-center space-y-3">
+                <button
+                  type="button"
+                  disabled={googleLoading}
+                  onClick={handleGoogleAuth}
+                  className="w-full h-11 rounded-xl bg-white hover:bg-neutral-50 border border-neutral-200 text-neutral-800 font-bold text-xs transition flex items-center justify-center gap-2.5 shadow-sm"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                  </svg>
+                  <span>{googleLoading ? 'Conectando con Google...' : 'Continuar con Google'}</span>
+                </button>
+
                 <p className="text-xs text-neutral-600">
                   ¿Eres nuevo en Gastro Smart?
                 </p>
@@ -432,15 +506,66 @@ export const AuthScreen: React.FC = () => {
               </div>
 
               {regFeedback && (
-                <div className={`p-3.5 mb-4 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+                <div className={`p-3.5 mb-4 rounded-xl text-xs font-semibold space-y-2.5 ${
                   regFeedback.type === 'success' 
                     ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
                     : 'bg-red-50 text-red-800 border border-red-200'
                 }`}>
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{regFeedback.text}</span>
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{regFeedback.text}</span>
+                  </div>
+                  {regFeedback.isEmailInUse && (
+                    <div className="flex flex-col gap-1.5 pt-1.5 border-t border-red-200/60">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAdminEmail(regEmail);
+                          setAdminPassword(regPassword);
+                          setAdminView('login');
+                          setAdminFeedback(null);
+                        }}
+                        className="w-full py-1.5 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs text-center transition"
+                      >
+                        🔑 Iniciar Sesión con {regEmail}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForgotEmail(regEmail);
+                          setAdminView('forgot');
+                          setForgotFeedback(null);
+                        }}
+                        className="w-full py-1.5 px-3 rounded-lg bg-white hover:bg-neutral-100 text-neutral-700 font-bold text-xs border border-neutral-300 text-center transition"
+                      >
+                        ❓ Recuperar mi contraseña
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
+
+              <div className="mb-4">
+                <button
+                  type="button"
+                  disabled={googleLoading}
+                  onClick={handleGoogleAuth}
+                  className="w-full h-11 rounded-xl bg-white hover:bg-neutral-50 border border-neutral-200 text-neutral-800 font-bold text-xs transition flex items-center justify-center gap-2.5 shadow-sm"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                  </svg>
+                  <span>{googleLoading ? 'Creando con Google...' : 'Registrar con Google en 1 clic'}</span>
+                </button>
+                <div className="relative flex py-3 items-center">
+                  <div className="flex-grow border-t border-neutral-200"></div>
+                  <span className="flex-shrink mx-2 text-[11px] font-semibold text-neutral-400 uppercase">o con correo</span>
+                  <div className="flex-grow border-t border-neutral-200"></div>
+                </div>
+              </div>
 
               <form onSubmit={handleRegisterBusiness} className="space-y-3.5">
                 <div>
@@ -605,21 +730,90 @@ export const AuthScreen: React.FC = () => {
       {authMode === 'employee' && (
         <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-orange-100/80 p-6 sm:p-8 flex flex-col items-center backdrop-blur-sm animate-in fade-in zoom-in-95 duration-150">
           
-          {/* Selector de Sucursal si existen varias */}
-          {allRestaurants.length > 1 && (
-            <div className="w-full mb-4">
-              <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                <Store className="w-3.5 h-3.5 text-orange-500" /> Sucursal de Servicio:
-              </label>
-              <select
-                value={selectedBranchId || allRestaurants[0]?.id}
-                onChange={(e) => setSelectedBranchId(e.target.value)}
-                className="w-full h-10 px-3 rounded-xl border border-neutral-300 bg-neutral-50 text-xs font-bold text-neutral-800 outline-none focus:border-orange-500"
+          {/* Selector y Visualizador de Restaurante / Sucursal */}
+          {allRestaurants.length === 0 ? (
+            <div className="w-full mb-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-center">
+              <Store className="w-6 h-6 text-amber-600 mx-auto mb-1.5" />
+              <p className="text-xs font-bold text-neutral-800">No hay restaurantes registrados aún</p>
+              <p className="text-[11px] text-neutral-500 mt-1">
+                El dueño o administrador debe iniciar sesión para crear el primer restaurante y dar de alta a los empleados.
+              </p>
+              <button
+                type="button"
+                onClick={() => setAuthMode('admin')}
+                className="mt-3 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition"
               >
-                {allRestaurants.map(r => (
-                  <option key={r.id} value={r.id}>{r.nombre}</option>
-                ))}
-              </select>
+                Acceder como Administrador
+              </button>
+            </div>
+          ) : (
+            <div className="w-full mb-4 bg-orange-50/70 border border-orange-200/80 rounded-2xl p-3 shadow-xs">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[11px] font-extrabold text-orange-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <Store className="w-4 h-4 text-orange-600" />
+                  <span>Restaurante / Sucursal de Ingreso</span>
+                </label>
+                {allRestaurants.length > 1 && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 bg-orange-200/80 text-orange-800 rounded-full">
+                    {allRestaurants.length} sucursales
+                  </span>
+                )}
+              </div>
+
+              {allRestaurants.length > 1 ? (
+                <select
+                  value={activeRest?.id || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setSelectedBranchId(val);
+                    selectRestaurant(val);
+                    setPinErrorMsg('');
+                  }}
+                  className="w-full h-11 px-3 rounded-xl border border-orange-300 bg-white text-xs font-black text-neutral-800 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 shadow-xs cursor-pointer"
+                >
+                  {allRestaurants.map(r => {
+                    const biz = allBusinesses.find(b => b.id === r.businessId);
+                    const bizLabel = biz ? ` [${biz.nombre}]` : '';
+                    return (
+                      <option key={r.id} value={r.id}>
+                        🏢 {r.nombre}{bizLabel} {r.direccion ? `• ${r.direccion}` : `• ${r.numeroMesas || 10} mesas`}
+                      </option>
+                    );
+                  })}
+                </select>
+              ) : (
+                <div className="flex items-center justify-between px-3 py-2 bg-white rounded-xl border border-orange-200 shadow-2xs">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shrink-0">
+                      🏢
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-black text-neutral-800 truncate">
+                        {activeRest?.nombre || 'Restaurante Principal'}
+                      </div>
+                      <div className="text-[10px] text-neutral-500 font-semibold truncate">
+                        {activeBiz?.nombre || 'Gastro Smart'} {activeRest?.direccion ? `• ${activeRest.direccion}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full shrink-0">
+                    Activo
+                  </span>
+                </div>
+              )}
+
+              {/* Contexto visible para el empleado */}
+              {activeRest && (
+                <div className="mt-2 pt-2 border-t border-orange-200/60 flex items-center justify-between text-[11px] text-neutral-600 font-medium">
+                  <span className="flex items-center gap-1 text-orange-900 font-semibold truncate">
+                    <span>📍 Ingresando a:</span>
+                    <strong className="text-neutral-900 font-extrabold">{activeRest.nombre}</strong>
+                  </span>
+                  <span className="text-neutral-500 text-[10px] shrink-0 font-bold">
+                    {activeRest.numeroMesas || 10} Mesas
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

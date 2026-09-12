@@ -54,6 +54,19 @@ export function subscribeToBusiness(businessId: string, callback: (data: Busines
   });
 }
 
+export function subscribeToAllBusinesses(callback: (data: Business[]) => void) {
+  const q = query(collection(db, 'businesses'), where('appId', '==', 'gastro_smart'));
+  return onSnapshot(q, (snapshot) => {
+    const list: Business[] = snapshot.docs.map(d => ({
+      id: d.id,
+      ...d.data()
+    } as Business));
+    callback(list);
+  }, (err) => {
+    console.warn('Subscription warning (all businesses):', err);
+  });
+}
+
 export async function getBusiness(businessId: string): Promise<Business | null> {
   const docSnap = await getDoc(doc(db, 'businesses', businessId));
   if (docSnap.exists()) {
@@ -130,6 +143,7 @@ export async function registerLoginAttempt(attempt: LoginAttempt): Promise<void>
   try {
     await addDoc(collection(db, 'loginAttempts'), {
       ...attempt,
+      appId: 'gastro_smart',
       fecha: attempt.fecha || new Date().toISOString()
     });
   } catch (err) {
@@ -141,6 +155,7 @@ export async function createSecurityAlert(alertData: Omit<SecurityAlert, 'id'>):
   try {
     await addDoc(collection(db, 'securityAlerts'), {
       ...alertData,
+      appId: 'gastro_smart',
       fecha: alertData.fecha || new Date().toISOString(),
       leido: false
     });
@@ -156,6 +171,7 @@ export function subscribeToSecurityAlerts(businessId: string | null, callback: (
   }
   const q = query(
     collection(db, 'securityAlerts'),
+    where('appId', '==', 'gastro_smart'),
     where('businessId', '==', businessId),
     limit(30)
   );
@@ -197,8 +213,8 @@ export function subscribeToRestaurants(
 
   const colRef = collection(db, 'restaurants');
   const q = businessId 
-    ? query(colRef, where('businessId', '==', businessId))
-    : query(colRef);
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
 
   return onSnapshot(q, (snapshot) => {
     const list: Restaurant[] = snapshot.docs.map(d => ({
@@ -215,6 +231,7 @@ export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?
   return addDoc(collection(db, 'restaurants'), {
     ...data,
     businessId: businessId || data.businessId || 'biz_default',
+    appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 }
@@ -231,6 +248,7 @@ export async function createRestaurantWithTables(
     telefono: data.telefono.trim(),
     numeroMesas: data.numeroMesas,
     activo: true,
+    appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 
@@ -245,7 +263,8 @@ export async function createRestaurantWithTables(
       restaurantId,
       numero: i,
       estado: 'libre',
-      capacidad: i <= 4 ? 2 : (i <= 8 ? 4 : 6)
+      capacidad: i <= 4 ? 2 : (i <= 8 ? 4 : 6),
+      appId: 'gastro_smart'
     });
   }
   await batch.commit();
@@ -266,7 +285,7 @@ export async function updateRestaurantTableCount(
     return { success: false, error: 'El número mínimo de mesas es 1.' };
   }
 
-  const tablesSnap = await getDocs(query(collection(db, 'tables'), where('restaurantId', '==', restaurantId)));
+  const tablesSnap = await getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)));
   const currentTables = tablesSnap.docs.map(d => ({
     id: d.id,
     ...(d.data() as Omit<Table, 'id'>)
@@ -294,7 +313,8 @@ export async function updateRestaurantTableCount(
           restaurantId,
           numero: nextNumber,
           estado: 'libre',
-          capacidad: 4
+          capacidad: 4,
+          appId: 'gastro_smart'
         });
         existingNumbers.add(nextNumber);
         tablesCreated++;
@@ -306,7 +326,7 @@ export async function updateRestaurantTableCount(
     await updateDoc(doc(db, 'restaurants', restaurantId), { numeroMesas: newTableCount });
     return { success: true };
   } else {
-    const activeOrdersSnap = await getDocs(query(collection(db, 'orders'), where('restaurantId', '==', restaurantId)));
+    const activeOrdersSnap = await getDocs(query(collection(db, 'orders'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)));
     const openOrders = activeOrdersSnap.docs
       .map(d => d.data() as Order)
       .filter(o => o.estado !== 'cobrado' && o.estado !== 'rechazado');
@@ -334,7 +354,7 @@ export async function updateRestaurantTableCount(
 }
 
 export async function renumberTables(restaurantId: string): Promise<void> {
-  const tablesSnap = await getDocs(query(collection(db, 'tables'), where('restaurantId', '==', restaurantId)));
+  const tablesSnap = await getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)));
   const sorted = tablesSnap.docs
     .map(d => ({ id: d.id, ...(d.data() as Omit<Table, 'id'>) }))
     .sort((a, b) => a.numero - b.numero);
@@ -374,8 +394,8 @@ export function subscribeToEmployees(
 
   const colRef = collection(db, 'employees');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId))
-    : query(colRef);
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
 
   return onSnapshot(q, (snapshot) => {
     let list: Employee[] = snapshot.docs.map(d => ({
@@ -394,6 +414,7 @@ export function subscribeToEmployees(
 export async function createEmployee(data: Omit<Employee, 'id'>) {
   return addDoc(collection(db, 'employees'), {
     ...data,
+    appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 }
@@ -411,6 +432,7 @@ export async function deleteEmployee(id: string) {
 export function subscribeToActiveShift(employeeId: string, callback: (shift: Shift | null) => void) {
   const q = query(
     collection(db, 'shifts'),
+    where('appId', '==', 'gastro_smart'),
     where('employeeId', '==', employeeId),
     where('estado', '==', 'abierto'),
     limit(1)
@@ -449,8 +471,8 @@ export function subscribeToShifts(
 
   const colRef = collection(db, 'shifts');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId), limit(80))
-    : query(colRef, limit(80));
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId), limit(80))
+    : query(colRef, where('appId', '==', 'gastro_smart'), limit(80));
 
   return onSnapshot(q, (snapshot) => {
     let list: Shift[] = snapshot.docs.map(d => ({
@@ -470,6 +492,7 @@ export function subscribeToShifts(
 export async function openShift(employee: Employee, restaurantNombre: string, businessId?: string): Promise<string> {
   const activeSnap = await getDocs(query(
     collection(db, 'shifts'),
+    where('appId', '==', 'gastro_smart'),
     where('employeeId', '==', employee.id),
     where('estado', '==', 'abierto'),
     limit(1)
@@ -492,7 +515,8 @@ export async function openShift(employee: Employee, restaurantNombre: string, bu
     estado: 'abierto',
     pedidosTomados: 0,
     ventasGeneradas: 0,
-    pagado: false
+    pagado: false,
+    appId: 'gastro_smart'
   });
   return shiftDoc.id;
 }
@@ -533,6 +557,7 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
     horasTrabajadas: Math.round(hoursWorked * 10) / 10,
     tarifaHora: employee.tarifaHora,
     fecha: new Date().toISOString().split('T')[0],
+    appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 
@@ -569,8 +594,8 @@ export function subscribeToMenuItems(
 
   const colRef = collection(db, 'menuItems');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId))
-    : query(colRef);
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
 
   return onSnapshot(q, (snapshot) => {
     let list: MenuItem[] = snapshot.docs.map(d => ({
@@ -591,11 +616,17 @@ export function generateMenuItemId(): string {
 }
 
 export async function createMenuItem(data: Omit<MenuItem, 'id'>) {
-  return addDoc(collection(db, 'menuItems'), data);
+  return addDoc(collection(db, 'menuItems'), {
+    ...data,
+    appId: 'gastro_smart'
+  });
 }
 
 export async function setMenuItem(id: string, data: Omit<MenuItem, 'id'>) {
-  return setDoc(doc(db, 'menuItems', id), data);
+  return setDoc(doc(db, 'menuItems', id), {
+    ...data,
+    appId: 'gastro_smart'
+  }, { merge: true });
 }
 
 export async function updateMenuItem(id: string, data: Partial<MenuItem>) {
@@ -624,6 +655,7 @@ export function subscribeToTables(
 
   const q = query(
     collection(db, 'tables'),
+    where('appId', '==', 'gastro_smart'),
     where('restaurantId', '==', restaurantId)
   );
   return onSnapshot(q, (snapshot) => {
@@ -666,8 +698,8 @@ export function subscribeToOrders(
 
   const colRef = collection(db, 'orders');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId), limit(80))
-    : query(colRef, limit(80));
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId), limit(80))
+    : query(colRef, where('appId', '==', 'gastro_smart'), limit(80));
 
   return onSnapshot(q, (snapshot) => {
     let list: Order[] = snapshot.docs.map(d => ({
@@ -697,6 +729,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
   const sanitizedData: any = {
     ...data,
     businessId: data.businessId || 'biz_default',
+    appId: 'gastro_smart',
     empresaDelivery: data.tipo === 'delivery' ? (data.empresaDelivery || 'Propio') : null,
     mesaId: data.tipo === 'local' ? (data.mesaId || null) : null,
     mesaNumero: data.tipo === 'local' ? (data.mesaNumero || null) : null,
@@ -725,6 +758,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
   try {
     const shiftSnap = await getDocs(query(
       collection(db, 'shifts'),
+      where('appId', '==', 'gastro_smart'),
       where('employeeId', '==', data.meseroId),
       where('estado', '==', 'abierto'),
       limit(1)
@@ -840,6 +874,7 @@ export async function updateOrderStatus(
     try {
       const shiftSnap = await getDocs(query(
         collection(db, 'shifts'),
+        where('appId', '==', 'gastro_smart'),
         where('employeeId', '==', orderData.meseroId),
         where('estado', '==', 'abierto'),
         limit(1)
@@ -877,8 +912,8 @@ export function subscribeToClients(
 
   const colRef = collection(db, 'clients');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId))
-    : query(colRef);
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
 
   return onSnapshot(q, (snapshot) => {
     const list = snapshot.docs.map(d => ({
@@ -893,7 +928,7 @@ export function subscribeToClients(
 
 export async function createOrUpdateClient(data: Omit<Client, 'id'>): Promise<string> {
   if (data.telefono) {
-    const snap = await getDocs(query(collection(db, 'clients'), where('telefono', '==', data.telefono)));
+    const snap = await getDocs(query(collection(db, 'clients'), where('appId', '==', 'gastro_smart'), where('telefono', '==', data.telefono)));
     if (!snap.empty) {
       const clientDoc = snap.docs[0];
       await updateDoc(clientDoc.ref, data);
@@ -903,6 +938,7 @@ export async function createOrUpdateClient(data: Omit<Client, 'id'>): Promise<st
   const ref = await addDoc(collection(db, 'clients'), {
     ...data,
     businessId: data.businessId || 'biz_default',
+    appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
   return ref.id;
@@ -934,8 +970,8 @@ export function subscribeToCashCloses(
 
   const colRef = collection(db, 'cashRegisterCloses');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId), limit(50))
-    : query(colRef, limit(50));
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId), limit(50))
+    : query(colRef, where('appId', '==', 'gastro_smart'), limit(50));
 
   return onSnapshot(q, (snapshot) => {
     let list = snapshot.docs.map(d => ({
@@ -956,6 +992,7 @@ export async function createCashRegisterClose(data: Omit<CashRegisterClose, 'id'
   return addDoc(collection(db, 'cashRegisterCloses'), {
     ...data,
     businessId: (data as any).businessId || 'biz_default',
+    appId: 'gastro_smart',
     creadoEn: (data as any).creadoEn || new Date().toISOString()
   });
 }
@@ -984,8 +1021,8 @@ export function subscribeToExpenses(
 
   const colRef = collection(db, 'expenses');
   const q = businessId
-    ? query(colRef, where('businessId', '==', businessId), limit(100))
-    : query(colRef, limit(100));
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId), limit(100))
+    : query(colRef, where('appId', '==', 'gastro_smart'), limit(100));
 
   return onSnapshot(q, (snapshot) => {
     let list = snapshot.docs.map(d => ({
@@ -1006,6 +1043,7 @@ export async function createExpense(data: Omit<Expense, 'id'>) {
   return addDoc(collection(db, 'expenses'), {
     ...data,
     businessId: data.businessId || 'biz_default',
+    appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 }
@@ -1028,11 +1066,11 @@ export interface FullRestaurantStatsSummary extends OperationalStatsSummary {
 
 export async function getRestaurantOperationalCounts(restaurantId: string): Promise<OperationalStatsSummary> {
   const [ordersSnap, clientsSnap, expensesSnap, shiftsSnap, cashSnap] = await Promise.all([
-    getDocs(query(collection(db, 'orders'), where('restaurantId', '==', restaurantId))),
-    getDocs(collection(db, 'clients')),
-    getDocs(query(collection(db, 'expenses'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'shifts'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'cashRegisterCloses'), where('restaurantId', '==', restaurantId)))
+    getDocs(query(collection(db, 'orders'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'clients'), where('appId', '==', 'gastro_smart'))),
+    getDocs(query(collection(db, 'expenses'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'shifts'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'cashRegisterCloses'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)))
   ]);
 
   return {
@@ -1047,9 +1085,9 @@ export async function getRestaurantOperationalCounts(restaurantId: string): Prom
 export async function getRestaurantFullCounts(restaurantId: string): Promise<FullRestaurantStatsSummary> {
   const [opCounts, tablesSnap, employeesSnap, menuSnap] = await Promise.all([
     getRestaurantOperationalCounts(restaurantId),
-    getDocs(query(collection(db, 'tables'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'employees'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'menuItems'), where('restaurantId', '==', restaurantId)))
+    getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'employees'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'menuItems'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)))
   ]);
 
   return {
@@ -1062,11 +1100,11 @@ export async function getRestaurantFullCounts(restaurantId: string): Promise<Ful
 
 export async function resetOperationalData(restaurantId: string): Promise<void> {
   const [ordersSnap, expensesSnap, shiftsSnap, cashSnap, tablesSnap] = await Promise.all([
-    getDocs(query(collection(db, 'orders'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'expenses'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'shifts'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'cashRegisterCloses'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'tables'), where('restaurantId', '==', restaurantId)))
+    getDocs(query(collection(db, 'orders'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'expenses'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'shifts'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'cashRegisterCloses'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)))
   ]);
 
   const batch = writeBatch(db);
@@ -1095,13 +1133,13 @@ export async function deleteRestaurantCascade(restaurantId: string): Promise<voi
     employeesSnap,
     menuSnap
   ] = await Promise.all([
-    getDocs(query(collection(db, 'orders'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'expenses'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'shifts'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'cashRegisterCloses'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'tables'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'employees'), where('restaurantId', '==', restaurantId))),
-    getDocs(query(collection(db, 'menuItems'), where('restaurantId', '==', restaurantId)))
+    getDocs(query(collection(db, 'orders'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'expenses'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'shifts'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'cashRegisterCloses'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'employees'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId))),
+    getDocs(query(collection(db, 'menuItems'), where('appId', '==', 'gastro_smart'), where('restaurantId', '==', restaurantId)))
   ]);
 
   const batch = writeBatch(db);
@@ -1141,7 +1179,7 @@ export async function deleteBusinessCascade(businessId: string): Promise<void> {
   ];
 
   for (const colName of collections) {
-    const snap = await getDocs(query(collection(db, colName), where('businessId', '==', businessId)));
+    const snap = await getDocs(query(collection(db, colName), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId)));
     const batch = writeBatch(db);
     snap.docs.forEach(d => batch.delete(d.ref));
     await batch.commit();
@@ -1156,7 +1194,7 @@ export const deleteAllAccountData = deleteBusinessCascade;
 // ======================= SEED SAMPLE DISHES & DEMO =======================
 
 export async function seedSampleDishesForBusiness(businessId: string, restaurantId: string) {
-  const sampleItems: Omit<MenuItem, 'id'>[] = [
+  const sampleItems: (Omit<MenuItem, 'id'> & { appId: string })[] = [
     {
       businessId,
       restaurantId,
@@ -1165,6 +1203,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
       precio: 14.50,
       categoria: 'Hamburguesas',
       disponible: true,
+      appId: 'gastro_smart',
       imagenUrl: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=500&auto=format&fit=crop&q=60'
     },
     {
@@ -1175,6 +1214,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
       precio: 16.00,
       categoria: 'Pizzas',
       disponible: true,
+      appId: 'gastro_smart',
       imagenUrl: 'https://images.unsplash.com/photo-1604382355076-af4b0eb60143?w=500&auto=format&fit=crop&q=60'
     },
     {
@@ -1185,6 +1225,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
       precio: 18.50,
       categoria: 'Platos Fuertes',
       disponible: true,
+      appId: 'gastro_smart',
       imagenUrl: 'https://images.unsplash.com/photo-1544025162-d76694265947?w=500&auto=format&fit=crop&q=60'
     },
     {
@@ -1195,6 +1236,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
       precio: 7.50,
       categoria: 'Entradas',
       disponible: true,
+      appId: 'gastro_smart',
       imagenUrl: 'https://images.unsplash.com/photo-1576107232684-1279f3908594?w=500&auto=format&fit=crop&q=60'
     },
     {
@@ -1205,6 +1247,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
       precio: 4.50,
       categoria: 'Bebidas',
       disponible: true,
+      appId: 'gastro_smart',
       imagenUrl: 'https://images.unsplash.com/photo-1513558161293-cdaf765ed2fd?w=500&auto=format&fit=crop&q=60'
     },
     {
@@ -1215,6 +1258,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
       precio: 6.50,
       categoria: 'Postres',
       disponible: true,
+      appId: 'gastro_smart',
       imagenUrl: 'https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?w=500&auto=format&fit=crop&q=60'
     }
   ];
@@ -1225,4 +1269,107 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
     batch.set(itemRef, item);
   }
   await batch.commit();
+}
+
+/**
+ * Bootstrap completo para un negocio recién registrado:
+ * 1. Crea la sucursal / sede principal con mesas
+ * 2. Registra la plantilla inicial de empleados operativos con PINs y restaurante asignado
+ * 3. Siembra la carta inicial de platos y bebidas
+ */
+export async function bootstrapNewBusinessDefaults(businessId: string, businessName: string): Promise<{ restaurantId: string }> {
+  // 1. Crear sucursal principal
+  const restRef = await addDoc(collection(db, 'restaurants'), {
+    businessId,
+    nombre: `${businessName.trim()} - Sede Principal`,
+    direccion: 'Av. Principal #100',
+    telefono: '+1 (555) 000-0000',
+    numeroMesas: 12,
+    activo: true,
+    appId: 'gastro_smart',
+    creadoEn: new Date().toISOString()
+  });
+
+  const restaurantId = restRef.id;
+
+  // 2. Generar 12 mesas en estado libre
+  const tableBatch = writeBatch(db);
+  for (let i = 1; i <= 12; i++) {
+    const tableRef = doc(collection(db, 'tables'));
+    tableBatch.set(tableRef, {
+      businessId,
+      restaurantId,
+      numero: i,
+      capacidad: i % 3 === 0 ? 6 : 4,
+      estado: 'libre',
+      ubicacion: i <= 6 ? 'Salón Principal' : 'Terraza',
+      appId: 'gastro_smart',
+      creadoEn: new Date().toISOString()
+    });
+  }
+  await tableBatch.commit();
+
+  // 3. Crear plantilla inicial de empleados vinculados a este restaurante y negocio
+  const defaultEmployees = [
+    {
+      businessId,
+      restaurantId,
+      nombre: 'Mesero Turno',
+      puesto: 'mesero' as const,
+      pin: '1234',
+      tarifaHora: 12.0,
+      activo: true,
+      appId: 'gastro_smart',
+      creadoEn: new Date().toISOString()
+    },
+    {
+      businessId,
+      restaurantId,
+      nombre: 'Cajero General',
+      puesto: 'caja' as const,
+      pin: '1111',
+      tarifaHora: 14.0,
+      activo: true,
+      appId: 'gastro_smart',
+      creadoEn: new Date().toISOString()
+    },
+    {
+      businessId,
+      restaurantId,
+      nombre: 'Chef de Cocina',
+      puesto: 'cocina' as const,
+      pin: '2222',
+      tarifaHora: 16.0,
+      activo: true,
+      appId: 'gastro_smart',
+      creadoEn: new Date().toISOString()
+    },
+    {
+      businessId,
+      restaurantId,
+      nombre: 'Encargado de Turno',
+      puesto: 'admin' as const,
+      pin: '4321',
+      tarifaHora: 18.0,
+      activo: true,
+      appId: 'gastro_smart',
+      creadoEn: new Date().toISOString()
+    }
+  ];
+
+  const empBatch = writeBatch(db);
+  for (const emp of defaultEmployees) {
+    const empRef = doc(collection(db, 'employees'));
+    empBatch.set(empRef, emp);
+  }
+  await empBatch.commit();
+
+  // 4. Sembrar menú de platos inicial
+  try {
+    await seedSampleDishesForBusiness(businessId, restaurantId);
+  } catch (err) {
+    console.warn('Error seeding sample dishes for new business:', err);
+  }
+
+  return { restaurantId };
 }

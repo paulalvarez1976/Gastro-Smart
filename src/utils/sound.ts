@@ -1,7 +1,51 @@
 class SoundEffects {
   private ctx: AudioContext | null = null;
+  private muted: boolean = false;
+  private unlocked: boolean = false;
+
+  constructor() {
+    if (typeof window !== 'undefined') {
+      const storedMute = localStorage.getItem('gastro_sound_muted');
+      if (storedMute !== null) {
+        this.muted = storedMute === 'true';
+      }
+
+      // Auto-unlock audio on user's first click/touch
+      const unlockAudio = () => {
+        this.init();
+        if (this.ctx && this.ctx.state === 'suspended') {
+          this.ctx.resume().catch(() => {});
+        }
+        this.unlocked = true;
+        window.removeEventListener('click', unlockAudio);
+        window.removeEventListener('touchstart', unlockAudio);
+        window.removeEventListener('keydown', unlockAudio);
+      };
+
+      window.addEventListener('click', unlockAudio, { once: true, passive: true });
+      window.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
+      window.addEventListener('keydown', unlockAudio, { once: true, passive: true });
+    }
+  }
+
+  public isMuted(): boolean {
+    return this.muted;
+  }
+
+  public setMuted(muted: boolean) {
+    this.muted = muted;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gastro_sound_muted', muted ? 'true' : 'false');
+    }
+  }
+
+  public toggleMute(): boolean {
+    this.setMuted(!this.muted);
+    return this.muted;
+  }
 
   private init() {
+    if (this.muted) return;
     if (!this.ctx && typeof window !== 'undefined') {
       const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       if (AudioContextClass) {
@@ -9,12 +53,13 @@ class SoundEffects {
       }
     }
     if (this.ctx && this.ctx.state === 'suspended') {
-      this.ctx.resume();
+      this.ctx.resume().catch(() => {});
     }
   }
 
   // Sonido de campana para nuevo pedido en cocina
   playNewOrderKitchen() {
+    if (this.muted) return;
     try {
       this.init();
       if (!this.ctx) return;
@@ -31,7 +76,7 @@ class SoundEffects {
         osc.type = 'sine';
         osc.frequency.setValueAtTime(item.freq, item.start);
 
-        gain.gain.setValueAtTime(0.3, item.start);
+        gain.gain.setValueAtTime(0.35, item.start);
         gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
 
         osc.connect(gain);
@@ -47,19 +92,83 @@ class SoundEffects {
 
   // Alerta sonora cuando el pedido está listo (para mesero)
   playOrderReady() {
+    if (this.muted) return;
     try {
       this.init();
       if (!this.ctx) return;
       const now = this.ctx.currentTime;
 
-      // Sonido alegre de tres tonos ascendentes
+      // Sonido alegre de cuatro tonos ascendentes tipo campana de hotel
       [523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
         const osc = this.ctx!.createOscillator();
         const gain = this.ctx!.createGain();
-        const start = now + idx * 0.12;
-        const dur = 0.3;
+        const start = now + idx * 0.11;
+        const dur = 0.35;
 
         osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, start);
+
+        gain.gain.setValueAtTime(0.3, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+
+        osc.connect(gain);
+        gain.connect(this.ctx!.destination);
+
+        osc.start(start);
+        osc.stop(start + dur);
+      });
+    } catch (e) {
+      console.warn('Audio play error:', e);
+    }
+  }
+
+  // Sonido de notificación general (toasts, avisos en vivo, avisos de sistema)
+  playNotification() {
+    if (this.muted) return;
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+
+      // Tono suave cristalino doble (F6 -> A6)
+      [
+        { freq: 1396.91, start: now, dur: 0.25, gain: 0.25 },
+        { freq: 1760.00, start: now + 0.09, dur: 0.45, gain: 0.3 }
+      ].forEach(item => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(item.freq, item.start);
+
+        gain.gain.setValueAtTime(item.gain, item.start);
+        gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
+
+        osc.connect(gain);
+        gain.connect(this.ctx!.destination);
+
+        osc.start(item.start);
+        osc.stop(item.start + item.dur);
+      });
+    } catch (e) {
+      console.warn('Audio play error:', e);
+    }
+  }
+
+  // Sonido de alerta de demora (>15 min) o pedido rechazado
+  playAlertWarning() {
+    if (this.muted) return;
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+
+      [440, 370, 311].forEach((freq, idx) => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        const start = now + idx * 0.16;
+        const dur = 0.35;
+
+        osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(freq, start);
 
         gain.gain.setValueAtTime(0.25, start);
@@ -76,30 +185,34 @@ class SoundEffects {
     }
   }
 
-  // Sonido de alerta de demora (>15 min) o pedido rechazado
-  playAlertWarning() {
+  // Sonido de Alerta de Seguridad (Fuerza bruta PIN / acceso no autorizado)
+  playSecurityAlert() {
+    if (this.muted) return;
     try {
       this.init();
       if (!this.ctx) return;
       const now = this.ctx.currentTime;
 
-      [440, 370, 311].forEach((freq, idx) => {
+      // Sirena de dos pulsos agudos
+      [
+        { freq: 880, start: now, dur: 0.15 },
+        { freq: 659, start: now + 0.15, dur: 0.15 },
+        { freq: 880, start: now + 0.30, dur: 0.15 },
+        { freq: 659, start: now + 0.45, dur: 0.25 }
+      ].forEach(item => {
         const osc = this.ctx!.createOscillator();
         const gain = this.ctx!.createGain();
-        const start = now + idx * 0.18;
-        const dur = 0.35;
-
         osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(freq, start);
+        osc.frequency.setValueAtTime(item.freq, item.start);
 
-        gain.gain.setValueAtTime(0.2, start);
-        gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+        gain.gain.setValueAtTime(0.28, item.start);
+        gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
 
         osc.connect(gain);
         gain.connect(this.ctx!.destination);
 
-        osc.start(start);
-        osc.stop(start + dur);
+        osc.start(item.start);
+        osc.stop(item.start + item.dur);
       });
     } catch (e) {
       console.warn('Audio play error:', e);
@@ -108,6 +221,7 @@ class SoundEffects {
 
   // Sonido de éxito al cobrar o completar acción
   playCashRegister() {
+    if (this.muted) return;
     try {
       this.init();
       if (!this.ctx) return;
@@ -141,6 +255,7 @@ class SoundEffects {
 
   // Sonido de click sutil en teclado PIN
   playKeypadClick() {
+    if (this.muted) return;
     try {
       this.init();
       if (!this.ctx) return;
@@ -150,7 +265,7 @@ class SoundEffects {
       osc.type = 'sine';
       osc.frequency.setValueAtTime(400, now);
       osc.frequency.exponentialRampToValueAtTime(200, now + 0.04);
-      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.setValueAtTime(0.06, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
       osc.connect(gain);
       gain.connect(this.ctx.destination);

@@ -2,73 +2,112 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isGastroSmartDoc() {
+    function isGastroSmartRead() {
+      return resource == null || resource.data.appId == 'gastro_smart';
+    }
+
+    function isGastroSmartCreate() {
+      return request.resource.data.appId == 'gastro_smart';
+    }
+
+    function isGastroSmartUpdate() {
       return (resource == null || resource.data.appId == 'gastro_smart') &&
-             (request.resource == null || request.resource.data.appId == 'gastro_smart');
+             request.resource.data.appId == 'gastro_smart';
     }
 
-    // Reglas para la colección users de Gastro Smart
+    function isGastroSmartDelete() {
+      return resource == null || resource.data.appId == 'gastro_smart';
+    }
+
     match /users/{userId} {
-      allow get: if resource == null || resource.data.appId == 'gastro_smart';
-      allow list: if resource.data.appId == 'gastro_smart';
-      allow create: if request.resource.data.appId == 'gastro_smart';
-      allow update: if (resource == null || resource.data.appId == 'gastro_smart') && 
-                       request.resource.data.appId == 'gastro_smart';
-      allow delete: if resource.data.appId == 'gastro_smart';
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
-    // Reglas para las colecciones operativas y multi-tenant de Gastro Smart
     match /businesses/{businessId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /restaurants/{restaurantId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /employees/{employeeId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /tables/{tableId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /orders/{orderId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /menuItems/{menuItemId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /clients/{clientId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /shifts/{shiftId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /cashRegisterCloses/{closeId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /expenses/{expenseId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /loginAttempts/{attemptId} {
-      allow read, write: if isGastroSmartDoc();
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
 
     match /securityAlerts/{alertId} {
-      allow read, write: if isGastroSmartDoc();
-    }
-
-    // Bloqueo estricto por defecto para documentos ajenos
-    match /{document=**} {
-      allow read, write: if false;
+      allow read: if isGastroSmartRead();
+      allow create: if isGastroSmartCreate();
+      allow update: if isGastroSmartUpdate();
+      allow delete: if isGastroSmartDelete();
     }
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Order, SecurityAlert } from '../types';
 import { 
@@ -19,7 +19,11 @@ import {
   ShieldCheck,
   Shield,
   Plus,
-  UtensilsCrossed
+  UtensilsCrossed,
+  Volume2,
+  VolumeX,
+  Flame,
+  ArrowRight
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
 
@@ -27,6 +31,14 @@ interface TopNavProps {
   orders?: Order[];
   onOrderClick?: (order: Order) => void;
   onOpenNewRestaurantModal?: () => void;
+}
+
+interface NotificationToast {
+  id: string;
+  title: string;
+  desc: string;
+  type: 'ready' | 'rejected' | 'security' | 'kitchen' | 'cash' | 'general';
+  order?: Order;
 }
 
 export const TopNav: React.FC<TopNavProps> = ({ 
@@ -54,6 +66,28 @@ export const TopNav: React.FC<TopNavProps> = ({
   const [reporteLabores, setReporteLabores] = useState('');
   const [showNotifications, setShowNotifications] = useState(false);
   const [showAlertsModal, setShowAlertsModal] = useState(false);
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => sounds.isMuted());
+  const [activeToast, setActiveToast] = useState<NotificationToast | null>(null);
+
+  // Refs para rastrear cambios en tiempo real y evitar sonidos en la carga inicial
+  const isInitialMount = useRef(true);
+  const prevReadyOrdersMapRef = useRef<Map<string, string>>(new Map());
+  const prevSecurityAlertsCountRef = useRef<number>(0);
+
+  // Toggle de Sonido
+  const handleToggleSound = () => {
+    const newMuted = sounds.toggleMute();
+    setIsAudioMuted(newMuted);
+    if (!newMuted) {
+      sounds.playNotification();
+      setActiveToast({
+        id: 'sound-on-' + Date.now(),
+        title: '🔔 Notificaciones sonoras activadas',
+        desc: 'Escucharás un aviso sonoro para cada pedido listo, nueva orden o alerta.',
+        type: 'general'
+      });
+    }
+  };
 
   // Contador de tiempo de turno para personal operativo
   useEffect(() => {
@@ -78,7 +112,7 @@ export const TopNav: React.FC<TopNavProps> = ({
     return () => clearInterval(interval);
   }, [currentShift]);
 
-  // Alertas para mesero: pedidos que acaban de pasar a "listo" o fueron rechazados
+  // Alertas para mesero y personal: pedidos que acaban de pasar a "listo" o fueron rechazados
   const readyOrdersForServer = orders.filter(
     o => o.restaurantId === currentRestaurant?.id && 
          (o.estado === 'listo' || o.estado === 'rechazado') &&
@@ -86,6 +120,117 @@ export const TopNav: React.FC<TopNavProps> = ({
   );
 
   const unreadAlerts = securityAlerts.filter(a => !a.leido);
+
+  // ================= NOTIFICACIONES SONORAS EN TIEMPO REAL =================
+  // 1. Detección de cambios de estado en pedidos (Listo / Rechazado)
+  useEffect(() => {
+    const currentMap = new Map<string, string>();
+    orders.forEach(o => {
+      if (o.restaurantId === currentRestaurant?.id) {
+        currentMap.set(o.id, o.estado);
+      }
+    });
+
+    if (isInitialMount.current) {
+      prevReadyOrdersMapRef.current = currentMap;
+      prevSecurityAlertsCountRef.current = unreadAlerts.length;
+      isInitialMount.current = false;
+      return;
+    }
+
+    // Verificar si algún pedido cambió a 'listo' o 'rechazado'
+    orders.forEach(ord => {
+      if (ord.restaurantId !== currentRestaurant?.id) return;
+      const prevStatus = prevReadyOrdersMapRef.current.get(ord.id);
+      
+      // Pedido recién puesto en "listo"
+      if (ord.estado === 'listo' && prevStatus !== 'listo') {
+        sounds.playOrderReady();
+        const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
+        setActiveToast({
+          id: 'ord-ready-' + ord.id,
+          title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
+          desc: `La cocina completó el pedido con ${ord.items.length} plato(s). Listo para retirar y entregar.`,
+          type: 'ready',
+          order: ord
+        });
+      }
+
+      // Pedido recién rechazado por cocina
+      if (ord.estado === 'rechazado' && prevStatus !== 'rechazado') {
+        sounds.playAlertWarning();
+        const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery`;
+        setActiveToast({
+          id: 'ord-rej-' + ord.id,
+          title: `⚠️ Pedido rechazado para ${targetDesc}`,
+          desc: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina no pudo preparar este pedido.',
+          type: 'rejected',
+          order: ord
+        });
+      }
+    });
+
+    prevReadyOrdersMapRef.current = currentMap;
+  }, [orders, currentRestaurant?.id]);
+
+  // 2. Detección de Alertas de Seguridad en tiempo real (PIN brute-force, etc.)
+  useEffect(() => {
+    if (isInitialMount.current) return;
+
+    if (unreadAlerts.length > prevSecurityAlertsCountRef.current) {
+      const latestAlert = unreadAlerts[0];
+      sounds.playSecurityAlert();
+      setActiveToast({
+        id: 'sec-alert-' + (latestAlert?.id || Date.now()),
+        title: '🛡️ ¡Alerta de Seguridad Registrada!',
+        desc: latestAlert?.mensaje || 'Se detectó un incidente de seguridad en el sistema.',
+        type: 'security'
+      });
+    }
+
+    prevSecurityAlertsCountRef.current = unreadAlerts.length;
+  }, [unreadAlerts]);
+
+  // 3. Listener global para disparar notificaciones sonoras desde cualquier vista
+  useEffect(() => {
+    const handleGlobalNotify = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        title: string;
+        desc: string;
+        type?: 'ready' | 'rejected' | 'security' | 'kitchen' | 'cash' | 'general';
+        sound?: 'notification' | 'cash' | 'warning' | 'security' | 'ready' | 'kitchen';
+      }>;
+
+      const detail = customEvent.detail;
+      if (!detail) return;
+
+      if (detail.sound === 'cash') sounds.playCashRegister();
+      else if (detail.sound === 'warning') sounds.playAlertWarning();
+      else if (detail.sound === 'security') sounds.playSecurityAlert();
+      else if (detail.sound === 'ready') sounds.playOrderReady();
+      else if (detail.sound === 'kitchen') sounds.playNewOrderKitchen();
+      else sounds.playNotification();
+
+      setActiveToast({
+        id: 'global-toast-' + Date.now(),
+        title: detail.title,
+        desc: detail.desc,
+        type: detail.type || 'general'
+      });
+    };
+
+    window.addEventListener('gastro-notify', handleGlobalNotify);
+    return () => window.removeEventListener('gastro-notify', handleGlobalNotify);
+  }, []);
+
+  // Auto-dismiss del toast flotante después de 6 segundos
+  useEffect(() => {
+    if (!activeToast) return;
+    const timer = setTimeout(() => {
+      setActiveToast(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [activeToast]);
 
   const calculateShiftHours = () => {
     if (!currentShift) return 0;
@@ -174,9 +319,27 @@ export const TopNav: React.FC<TopNavProps> = ({
           )}
         </div>
 
-        {/* Right: Security Alerts, Shift Timer, Notifications & Logout */}
+        {/* Right: Audio Control, Security Alerts, Shift Timer, Notifications & Logout */}
         <div className="flex items-center gap-2 sm:gap-3">
           
+          {/* Sound Mute / Unmute / Test Button */}
+          <button
+            type="button"
+            onClick={handleToggleSound}
+            className={`p-2 rounded-xl transition border flex items-center justify-center ${
+              isAudioMuted 
+                ? 'bg-neutral-100 text-neutral-400 border-neutral-200 hover:text-neutral-700 hover:bg-neutral-200' 
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+            }`}
+            title={isAudioMuted ? 'Sonidos silenciados (Clic para activar notificaciones sonoras)' : 'Sonidos activos (Clic para silenciar)'}
+          >
+            {isAudioMuted ? (
+              <VolumeX className="w-4 h-4 sm:w-5 sm:h-5" />
+            ) : (
+              <Volume2 className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 animate-pulse" />
+            )}
+          </button>
+
           {/* Security alerts indicator for Admin/Owner */}
           {currentUserAccount && (
             <div className="relative">
@@ -279,9 +442,19 @@ export const TopNav: React.FC<TopNavProps> = ({
             {showNotifications && (
               <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-neutral-200 p-3 z-50">
                 <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
-                  <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-                    Avisos en vivo
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
+                      Avisos en vivo
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => sounds.playNotification()}
+                      className="text-[10px] font-bold text-orange-600 hover:underline flex items-center gap-0.5"
+                      title="Probar sonido de notificación"
+                    >
+                      (🔊 Probar)
+                    </button>
+                  </div>
                   <button onClick={() => setShowNotifications(false)} className="text-neutral-400 hover:text-neutral-600">
                     <X className="w-4 h-4" />
                   </button>
@@ -365,6 +538,53 @@ export const TopNav: React.FC<TopNavProps> = ({
         </div>
 
       </header>
+
+      {/* Floating Notification Toast en tiempo real */}
+      {activeToast && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-sm w-full animate-in slide-in-from-bottom-5 fade-in duration-200">
+          <div className={`p-4 rounded-2xl shadow-2xl border flex items-start justify-between gap-3 backdrop-blur-md ${
+            activeToast.type === 'ready' 
+              ? 'bg-emerald-900/95 text-white border-emerald-400/40 shadow-emerald-950/30'
+              : activeToast.type === 'security' || activeToast.type === 'rejected'
+              ? 'bg-red-950/95 text-white border-red-500/40 shadow-red-950/30'
+              : 'bg-neutral-900/95 text-white border-neutral-700/50 shadow-black/40'
+          }`}>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-base">
+                  {activeToast.type === 'ready' ? '🔔' : activeToast.type === 'security' ? '🛡️' : activeToast.type === 'rejected' ? '⚠️' : '✨'}
+                </span>
+                <h4 className="font-extrabold text-xs tracking-tight truncate">
+                  {activeToast.title}
+                </h4>
+              </div>
+              <p className="text-[11px] text-neutral-200 mt-1 line-clamp-2 leading-relaxed font-medium">
+                {activeToast.desc}
+              </p>
+              {activeToast.order && onOrderClick && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOrderClick(activeToast.order!);
+                    setActiveToast(null);
+                  }}
+                  className="mt-2.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition shadow-xs"
+                >
+                  <span>Ver detalle del pedido</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveToast(null)}
+              className="text-neutral-400 hover:text-white p-1 rounded-lg transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Confirmación de Cierre de Turno y Resumen (Operativo) */}
       {showEndShiftModal && (
@@ -456,3 +676,4 @@ export const TopNav: React.FC<TopNavProps> = ({
     </>
   );
 };
+
