@@ -130,12 +130,33 @@ export const TopNav: React.FC<TopNavProps> = ({
   const unreadAlerts = securityAlerts.filter(a => !a.leido);
 
   // ================= NOTIFICACIONES SONORAS EN TIEMPO REAL =================
-  // 1. Detección de cambios de estado en pedidos (Listo / Rechazado)
+  // 1. Detección y sincronización de alarmas sonoras con el estado real de los pedidos
   useEffect(() => {
     const currentMap = new Map<string, string>();
     orders.forEach(o => {
       if (o.restaurantId === currentRestaurant?.id) {
         currentMap.set(o.id, o.estado);
+
+        const readyAlarmId = 'ord-ready-' + o.id;
+        const rejectAlarmId = 'ord-rej-' + o.id;
+
+        // Reproducir sonido si el pedido está listo y pendiente de retiro, de lo contrario detener inmediatamente
+        if (o.estado === 'listo') {
+          if (!sounds.hasActiveAlarm(readyAlarmId)) {
+            sounds.startRepeatingAlarm(readyAlarmId, 'ready', 3800);
+          }
+        } else {
+          sounds.stopRepeatingAlarm(readyAlarmId);
+        }
+
+        // Reproducir sonido si está rechazado, de lo contrario detener
+        if (o.estado === 'rechazado') {
+          if (!sounds.hasActiveAlarm(rejectAlarmId)) {
+            sounds.startRepeatingAlarm(rejectAlarmId, 'warning', 3800);
+          }
+        } else {
+          sounds.stopRepeatingAlarm(rejectAlarmId);
+        }
       }
     });
 
@@ -146,7 +167,7 @@ export const TopNav: React.FC<TopNavProps> = ({
       return;
     }
 
-    // Verificar si algún pedido cambió a 'listo' o 'rechazado'
+    // Verificar si algún pedido cambió a 'listo' o 'rechazado' para mostrar toast visual
     orders.forEach(ord => {
       if (ord.restaurantId !== currentRestaurant?.id) return;
       const prevStatus = prevReadyOrdersMapRef.current.get(ord.id);
@@ -154,7 +175,6 @@ export const TopNav: React.FC<TopNavProps> = ({
       // Pedido recién puesto en "listo" (mesero debe retirarlo)
       if (ord.estado === 'listo' && prevStatus !== 'listo') {
         const toastId = 'ord-ready-' + ord.id;
-        sounds.startRepeatingAlarm(toastId, 'ready', 3800);
         const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
         setActiveToast({
           id: toastId,
@@ -168,7 +188,6 @@ export const TopNav: React.FC<TopNavProps> = ({
       // Pedido recién rechazado por cocina
       if (ord.estado === 'rechazado' && prevStatus !== 'rechazado') {
         const toastId = 'ord-rej-' + ord.id;
-        sounds.startRepeatingAlarm(toastId, 'warning', 3800);
         const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery`;
         setActiveToast({
           id: toastId,
@@ -181,6 +200,11 @@ export const TopNav: React.FC<TopNavProps> = ({
     });
 
     prevReadyOrdersMapRef.current = currentMap;
+
+    return () => {
+      // Limpiar alarmas al desmontar o cambiar de restaurante/negocio
+      sounds.stopAllAlarms();
+    };
   }, [orders, currentRestaurant?.id]);
 
   // 2. Detección de Alertas de Seguridad en tiempo real (PIN brute-force, etc.)

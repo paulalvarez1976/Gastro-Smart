@@ -14,10 +14,9 @@ export const storage = getStorage(app);
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firebase configuration notice:', error.message);
-    }
+  } catch (error: any) {
+    // Graceful handling of offline / sandbox connection tests
+    console.debug('Firebase connection status (offline/sandbox mode):', error?.message || 'ok');
   }
 }
 testConnection();
