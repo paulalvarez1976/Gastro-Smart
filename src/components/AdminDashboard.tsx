@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { MenuItem, Restaurant, Employee, Shift, Order } from '../types';
+import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType } from '../types';
 import { 
   createRestaurant, 
   updateRestaurant, 
@@ -124,7 +124,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     nombre: '',
     puesto: 'mesero' as any,
     pin: '',
+    modalidadPago: 'por_horas' as EmployeeSalaryType,
     tarifaHora: 12.0,
+    tarifaDiaria: 50.0,
+    sueldoMensual: 1200.0,
     restaurantId: '',
     activo: true,
   });
@@ -293,15 +296,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Handlers para Empleados
   const handleSaveEmployee = async () => {
     if (!empForm.nombre.trim() || empForm.pin.length !== 4) {
-      alert('El PIN debe tener exactamente 4 dígitos.');
+      alert('Por favor ingrese el nombre y un PIN de exactamente 4 dígitos.');
       return;
     }
+    const mod = empForm.modalidadPago || 'por_horas';
+    if (mod === 'por_horas' && (!empForm.tarifaHora || empForm.tarifaHora <= 0)) {
+      alert('La tarifa por hora debe ser un número mayor que cero.');
+      return;
+    }
+    if (mod === 'por_dia' && (!empForm.tarifaDiaria || empForm.tarifaDiaria <= 0)) {
+      alert('La tarifa por día debe ser un número mayor que cero.');
+      return;
+    }
+    if (mod === 'mes' && (!empForm.sueldoMensual || empForm.sueldoMensual <= 0)) {
+      alert('El sueldo mensual debe ser un número mayor que cero.');
+      return;
+    }
+
     const targetRestId = empForm.restaurantId || restaurants[0]?.id;
+    const payload = {
+      ...empForm,
+      restaurantId: targetRestId
+    };
 
     if (editingEmp) {
-      await updateEmployee(editingEmp.id, { ...empForm, restaurantId: targetRestId });
+      await updateEmployee(editingEmp.id, payload);
     } else {
-      await createEmployee({ ...empForm, restaurantId: targetRestId, businessId: activeBizId });
+      await createEmployee({ ...payload, businessId: activeBizId });
     }
     setShowEmpModal(false);
     setEditingEmp(null);
@@ -843,7 +864,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     nombre: '',
                     puesto: 'mesero',
                     pin: '',
+                    modalidadPago: 'por_horas',
                     tarifaHora: 12.0,
+                    tarifaDiaria: 50.0,
+                    sueldoMensual: 1200.0,
                     restaurantId: restaurants[0]?.id || '',
                     activo: true,
                   });
@@ -893,7 +917,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         •••• ({emp.pin})
                       </td>
                       <td className="p-3 text-right font-mono font-bold">
-                        ${(emp.tarifaHora || 0).toFixed(2)} / h
+                        {emp.modalidadPago === 'por_dia' ? `$${(emp.tarifaDiaria || 0).toFixed(2)} / día` :
+                         emp.modalidadPago === 'mes' ? `$${(emp.sueldoMensual || 0).toFixed(2)} / mes` :
+                         `$${(emp.tarifaHora || 0).toFixed(2)} / h`}
                       </td>
                       <td className="p-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -917,7 +943,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               nombre: emp.nombre,
                               puesto: emp.puesto,
                               pin: emp.pin,
-                              tarifaHora: emp.tarifaHora,
+                              modalidadPago: emp.modalidadPago || emp.tipoSueldo || 'por_horas',
+                              tarifaHora: emp.tarifaHora || 12.0,
+                              tarifaDiaria: emp.tarifaDiaria || 50.0,
+                              sueldoMensual: emp.sueldoMensual || 1200.0,
                               restaurantId: emp.restaurantId,
                               activo: emp.activo
                             });
@@ -1522,14 +1551,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-neutral-700 mb-1">Tarifa por Hora ($):</label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    value={empForm.tarifaHora}
-                    onChange={(e) => setEmpForm({ ...empForm, tarifaHora: parseFloat(e.target.value) || 0 })}
-                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
-                  />
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">Modalidad de Pago:</label>
+                  <select
+                    value={empForm.modalidadPago}
+                    onChange={(e) => setEmpForm({ ...empForm, modalidadPago: e.target.value as any })}
+                    className="w-full h-10 px-2 rounded-xl border border-neutral-300 text-xs font-bold"
+                  >
+                    <option value="por_horas">Pago por Hora</option>
+                    <option value="por_dia">Pago por Día</option>
+                    <option value="mes">Sueldo Mensual</option>
+                  </select>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-neutral-700 mb-1">Sede / Local:</label>
@@ -1543,6 +1574,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                {empForm.modalidadPago === 'por_horas' && (
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-700 mb-1">Tarifa por Hora ($):</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0.1"
+                      value={empForm.tarifaHora}
+                      onChange={(e) => setEmpForm({ ...empForm, tarifaHora: parseFloat(e.target.value) || 0 })}
+                      className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
+                    />
+                  </div>
+                )}
+                {empForm.modalidadPago === 'por_dia' && (
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-700 mb-1">Tarifa por Día ($):</label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={empForm.tarifaDiaria}
+                      onChange={(e) => setEmpForm({ ...empForm, tarifaDiaria: parseFloat(e.target.value) || 0 })}
+                      className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
+                    />
+                  </div>
+                )}
+                {empForm.modalidadPago === 'mes' && (
+                  <div>
+                    <label className="block text-xs font-bold text-neutral-700 mb-1">Sueldo Mensual ($):</label>
+                    <input
+                      type="number"
+                      step="10"
+                      min="1"
+                      value={empForm.sueldoMensual}
+                      onChange={(e) => setEmpForm({ ...empForm, sueldoMensual: parseFloat(e.target.value) || 0 })}
+                      className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
+                    />
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex gap-2 pt-2">

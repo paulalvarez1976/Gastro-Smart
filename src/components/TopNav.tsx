@@ -65,6 +65,8 @@ export const TopNav: React.FC<TopNavProps> = ({
   const [shiftDuration, setShiftDuration] = useState<string>('00:00:00');
   const [showEndShiftModal, setShowEndShiftModal] = useState(false);
   const [reporteLabores, setReporteLabores] = useState('');
+  const [efectivoContado, setEfectivoContado] = useState<number>(0);
+  const [fondoInicial, setFondoInicial] = useState<number>(100);
   const [liveSessionMetrics, setLiveSessionMetrics] = useState<{
     pedidosTomados: number;
     ventasGeneradas: number;
@@ -284,7 +286,12 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   const handleConfirmEndShift = async () => {
     sounds.playCashRegister();
-    await endShiftAndLogout(reporteLabores, liveSessionMetrics || undefined);
+    const metrics = {
+      ...(liveSessionMetrics || { pedidosTomados: 0, ventasGeneradas: 0, pedidosCobrados: 0, montoCobrado: 0, horasTrabajadas: 0 }),
+      efectivoContado: Number(efectivoContado) || 0,
+      fondoInicial: Number(fondoInicial) || 100,
+    };
+    await endShiftAndLogout(reporteLabores, metrics);
     setShowEndShiftModal(false);
   };
 
@@ -706,6 +713,40 @@ export const TopNav: React.FC<TopNavProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Si es caja, mostrar controles de arqueo de efectivo y fondo inicial */}
+            {currentEmployee?.puesto === 'caja' && (
+              <div className="grid grid-cols-2 gap-3 bg-blue-50/50 p-3 rounded-2xl border border-blue-200">
+                <div>
+                  <label className="block text-[11px] font-bold text-neutral-700 mb-1">Fondo Inicial ($):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={fondoInicial}
+                    onChange={(e) => setFondoInicial(Math.max(0, parseFloat(e.target.value) || 0))}
+                    className="w-full h-9 px-3 rounded-xl bg-white border border-blue-300 text-xs font-bold text-neutral-900"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-neutral-700 mb-1">Efectivo Contado ($):</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={efectivoContado}
+                    onChange={(e) => setEfectivoContado(Math.max(0, parseFloat(e.target.value) || 0))}
+                    className="w-full h-9 px-3 rounded-xl bg-white border border-blue-300 text-xs font-bold text-neutral-900"
+                  />
+                </div>
+                <div className="col-span-2 flex items-center justify-between pt-1 text-xs font-bold text-neutral-700 border-t border-blue-200">
+                  <span>Diferencia de Caja:</span>
+                  <span className={`font-mono ${(efectivoContado - (fondoInicial + (liveSessionMetrics?.montoCobrado || 0))) < 0 ? 'text-red-600' : (efectivoContado - (fondoInicial + (liveSessionMetrics?.montoCobrado || 0))) > 0 ? 'text-emerald-600' : 'text-neutral-900'}`}>
+                    ${(efectivoContado - (fondoInicial + (liveSessionMetrics?.montoCobrado || 0))).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Reporte opcional de labores */}
             <div>

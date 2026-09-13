@@ -43,7 +43,7 @@ export interface Restaurant {
   creadoEn?: string;
 }
 
-export type EmployeeSalaryType = 'por_horas' | 'fijo';
+export type EmployeeSalaryType = 'por_horas' | 'por_dia' | 'mes' | 'fijo';
 
 export interface Employee {
   id: string;
@@ -52,9 +52,11 @@ export interface Employee {
   nombre: string;
   puesto: Role;
   pin: string; // 4 dígitos
-  tarifaHora: number;
-  tipoSueldo?: EmployeeSalaryType;
+  tarifaHora?: number;
+  tarifaDiaria?: number;
   sueldoMensual?: number;
+  modalidadPago?: EmployeeSalaryType;
+  tipoSueldo?: EmployeeSalaryType; // legacy alias
   mesesPagados?: string[]; // ej. ['2026-09', '2026-08']
   activo: boolean;
   creadoEn?: string;

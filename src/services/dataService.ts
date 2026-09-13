@@ -615,6 +615,8 @@ export async function closeShift(
     ventasGeneradas?: number;
     pedidosCobrados?: number;
     montoCobrado?: number;
+    efectivoContado?: number;
+    fondoInicial?: number;
   }
 ): Promise<{
   pedidosTomados: number;
@@ -631,6 +633,10 @@ export async function closeShift(
   }
 
   const data = snap.data() as Shift;
+  if (data.estado === 'cerrado') {
+    throw new Error('Este turno ya se encuentra cerrado.');
+  }
+
   const horaFin = new Date().toISOString();
   const start = new Date(data.horaInicio).getTime();
   const end = new Date(horaFin).getTime();
@@ -641,6 +647,10 @@ export async function closeShift(
   const ventasGeneradas = sessionMetrics?.ventasGeneradas ?? data.ventasGeneradas ?? 0;
   const pedidosCobrados = sessionMetrics?.pedidosCobrados ?? data.pedidosCobrados ?? 0;
   const montoCobrado = sessionMetrics?.montoCobrado ?? data.montoCobrado ?? 0;
+  const efectivoContado = sessionMetrics?.efectivoContado ?? 0;
+  const fondoInicial = sessionMetrics?.fondoInicial ?? 100;
+  const esperadoEnCaja = fondoInicial + montoCobrado;
+  const diferenciaCaja = efectivoContado > 0 ? Math.round((efectivoContado - esperadoEnCaja) * 100) / 100 : 0;
 
   const resumenSesion = {
     horasTrabajadas: hoursWorked,
@@ -648,6 +658,9 @@ export async function closeShift(
     ventasGeneradas,
     pedidosCobrados,
     montoCobrado,
+    efectivoContado,
+    fondoInicial,
+    diferenciaCaja,
     horaInicio: data.horaInicio,
     horaFin
   };
@@ -660,6 +673,9 @@ export async function closeShift(
     ventasGeneradas,
     pedidosCobrados,
     montoCobrado,
+    efectivoContado,
+    fondoInicial,
+    diferenciaCaja,
     reporteLabores: reporteLabores?.trim() || null,
     resumenSesion
   });
@@ -698,15 +714,54 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
     throw new Error('Este turno ya ha sido liquidado y pagado previamente.');
   }
 
-  // Cálculo preciso de horas trabajadas y horas extra
-  const durationHours = shiftData.horaFin 
-    ? Math.max(0.1, (new Date(shiftData.horaFin).getTime() - new Date(shiftData.horaInicio).getTime()) / (1000 * 60 * 60))
-    : Math.max(0.1, (shiftData.minutosTrabajados || 0) / 60);
+  const modalidad = employee.modalidadPago || employee.tipoSueldo || 'por_horas';
+  if (modalidad === 'mes' || modalidad === 'fijo') {
+    throw new Error('Este empleado tiene modalidad de Sueldo Mensual. Utilice el módulo de pago mensual en la pestaña Asistencia & Planilla.');
+  }
 
-  const rate = (employee.tarifaHora && employee.tarifaHora > 0) ? employee.tarifaHora : 12;
-  const regularHours = Math.min(8, durationHours);
-  const overtimeHours = Math.max(0, durationHours - 8);
-  const totalPay = Math.round(((regularHours * rate) + (overtimeHours * rate * 1.5)) * 100) / 100;
+  let totalPay = 0;
+  let descriptionDesc = '';
+  let durationHours = 0;
+  let overtimeHours = 0;
+  let rateUsed = 0;
+
+  if (modalidad === 'por_dia') {
+    // Validar que no se pague dos veces el mismo día para el mismo empleado
+    const shiftDate = shiftData.fecha || (shiftData.horaInicio || '').split('T')[0];
+    const qShifts = query(
+      collection(db, 'shifts'),
+      where('appId', '==', 'gastro_smart'),
+      where('employeeId', '==', employee.id),
+      where('fecha', '==', shiftDate)
+    );
+    const existingShiftsSnap = await getDocs(qShifts);
+    const alreadyPaidToday = existingShiftsSnap.docs.some(d => {
+      const s = d.data() as Shift;
+      return s.id !== shift.id && (s.pagado === true || s.sueldoPagado === true);
+    });
+
+    if (alreadyPaidToday) {
+      throw new Error(`El empleado ${employee.nombre} ya tiene un turno liquidado y pagado para la fecha ${shiftDate}. Evitando pago diario duplicado.`);
+    }
+
+    const dailyRate = (employee.tarifaDiaria && employee.tarifaDiaria > 0) ? employee.tarifaDiaria : 50;
+    totalPay = Math.round(dailyRate * 100) / 100;
+    rateUsed = dailyRate;
+    descriptionDesc = `Pago de sueldo diario - ${employee.nombre} (Jornada ${shiftDate} a $${dailyRate}/día)`;
+    durationHours = shiftData.minutosTrabajados ? shiftData.minutosTrabajados / 60 : 8;
+  } else {
+    // Por horas (por_horas)
+    durationHours = shiftData.horaFin 
+      ? Math.max(0.1, (new Date(shiftData.horaFin).getTime() - new Date(shiftData.horaInicio).getTime()) / (1000 * 60 * 60))
+      : Math.max(0.1, (shiftData.minutosTrabajados || 0) / 60);
+
+    const rate = (employee.tarifaHora && employee.tarifaHora > 0) ? employee.tarifaHora : 12;
+    rateUsed = rate;
+    const regularHours = Math.min(8, durationHours);
+    overtimeHours = Math.max(0, durationHours - 8);
+    totalPay = Math.round(((regularHours * rate) + (overtimeHours * rate * 1.5)) * 100) / 100;
+    descriptionDesc = `Pago de sueldo turno - ${employee.nombre} (${regularHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${rate}/h)`;
+  }
 
   if (isNaN(totalPay) || totalPay <= 0) {
     throw new Error('El monto de sueldo calculado es inválido o igual a cero.');
@@ -724,13 +779,14 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
     restaurantId: shiftData.restaurantId,
     tipo: 'sueldo',
     monto: totalPay,
-    descripcion: `Pago de sueldo turno - ${employee.nombre} (${regularHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${rate}/h)`,
+    descripcion: descriptionDesc,
     employeeId: employee.id,
     employeeName: employee.nombre,
     shiftId: shift.id,
+    modalidadPago: modalidad,
     horasTrabajadas: Math.round(durationHours * 10) / 10,
     horasExtra: Math.round(overtimeHours * 10) / 10,
-    tarifaHora: rate,
+    tarifaHora: rateUsed,
     fecha: today,
     appId: 'gastro_smart',
     creadoEn: now
@@ -740,8 +796,8 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
     pagado: true,
     montoPagadoSueldo: totalPay,
     fechaPago: now,
-    sueldoPagado: true, // compatibilidad legacy
-    sueldoTotal: totalPay // compatibilidad legacy
+    sueldoPagado: true,
+    sueldoTotal: totalPay
   });
 
   await batch.commit();

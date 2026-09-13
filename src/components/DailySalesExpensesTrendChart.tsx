@@ -53,7 +53,7 @@ interface DailySalesExpensesTrendChartProps {
   defaultRestaurantId?: string;
 }
 
-type TimePreset = '7d' | '14d' | '30d' | 'mes_actual' | 'mes_anterior' | 'custom';
+type TimePreset = '48h' | '7d' | '14d' | '30d' | 'mes_actual' | 'mes_anterior' | 'custom';
 
 export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChartProps> = ({
   orders,
@@ -110,42 +110,122 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
     let start = new Date(now);
     let end = new Date(now);
 
-    if (timePreset === '7d') {
+    if (timePreset === '48h') {
+      end = new Date(now);
+      start = new Date(end.getTime() - 48 * 3600 * 1000);
+    } else if (timePreset === '7d') {
       start.setDate(now.getDate() - 6);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
     } else if (timePreset === '14d') {
       start.setDate(now.getDate() - 13);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
     } else if (timePreset === '30d') {
       start.setDate(now.getDate() - 29);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
     } else if (timePreset === 'mes_actual') {
-      start = new Date(now.getFullYear(), now.getMonth(), 1);
-      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     } else if (timePreset === 'mes_anterior') {
-      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      end = new Date(now.getFullYear(), now.getMonth(), 0);
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
     } else if (timePreset === 'custom') {
       if (customStartDate) {
         const [y, m, d] = customStartDate.split('-').map(Number);
-        start = new Date(y, m - 1, d);
+        start = new Date(y, m - 1, d, 0, 0, 0, 0);
       }
       if (customEndDate) {
         const [y, m, d] = customEndDate.split('-').map(Number);
-        end = new Date(y, m - 1, d);
+        end = new Date(y, m - 1, d, 23, 59, 59, 999);
       }
     }
 
-    // Asegurar horas a 00:00:00 y 23:59:59
-    start.setHours(0, 0, 0, 0);
-    end.setHours(23, 59, 59, 999);
-
     const pad = (n: number) => String(n).padStart(2, '0');
-    const startStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
-    const endStr = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`;
+    const startStr = timePreset === '48h'
+      ? `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())} ${pad(start.getHours())}:${pad(start.getMinutes())}`
+      : `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;
+    const endStr = timePreset === '48h'
+      ? `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())} ${pad(end.getHours())}:${pad(end.getMinutes())}`
+      : `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`;
 
     return { start, end, startStr, endStr };
   }, [timePreset, customStartDate, customEndDate]);
 
-  // Generar serie temporal completa día por día en el rango
+  // Generar serie temporal completa (por hora para 48h, por día para los demás)
   const trendData = useMemo<DailyTrendItem[]>(() => {
+    const monthNamesShort = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const dayNamesShort = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const dayNamesFull = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const monthNamesFull = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+    if (timePreset === '48h') {
+      const slots: DailyTrendItem[] = [];
+      const baseTime = new Date(dateRange.start);
+      baseTime.setMinutes(0, 0, 0);
+
+      for (let i = 0; i < 48; i++) {
+        const slotStart = new Date(baseTime.getTime() + i * 3600 * 1000);
+        const slotEnd = new Date(slotStart.getTime() + 3600 * 1000);
+        if (slotStart > dateRange.end) break;
+
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const dateKey = `${slotStart.getFullYear()}-${pad(slotStart.getMonth() + 1)}-${pad(slotStart.getDate())}T${pad(slotStart.getHours())}:00`;
+
+        let ventas = 0;
+        let pedidos = 0;
+        let gastos = 0;
+        let gastosCount = 0;
+
+        orders.forEach(order => {
+          if (order.estado !== 'cobrado') return;
+          if (selectedBranchId !== 'all' && order.restaurantId !== selectedBranchId) return;
+          const t = new Date(order.cobradoEn || order.creadoEn || '').getTime();
+          if (!isNaN(t) && t >= slotStart.getTime() && t < slotEnd.getTime()) {
+            ventas += (order.total || 0);
+            pedidos += 1;
+          }
+        });
+
+        expenses.forEach(exp => {
+          if (selectedBranchId !== 'all' && exp.restaurantId !== selectedBranchId) return;
+          const t = new Date(exp.fecha || exp.creadoEn || '').getTime();
+          if (!isNaN(t) && t >= slotStart.getTime() && t < slotEnd.getTime()) {
+            gastos += (exp.monto || 0);
+            gastosCount += 1;
+          }
+        });
+
+        const v = Math.round(ventas * 100) / 100;
+        const g = Math.round(gastos * 100) / 100;
+        const ganancia = Math.round((v - g) * 100) / 100;
+        const margen = v > 0 ? Math.round(((v - g) / v) * 1000) / 10 : 0;
+
+        const dayOfWeek = slotStart.getDay();
+        const diaSemana = dayNamesShort[dayOfWeek];
+        const diaNum = slotStart.getDate();
+        const mesCorto = monthNamesShort[slotStart.getMonth()];
+        const hourStr = `${pad(slotStart.getHours())}:00`;
+        const label = `${diaNum} ${mesCorto} ${hourStr}`;
+        const fechaCompleta = `${dayNamesFull[dayOfWeek]}, ${diaNum} de ${monthNamesFull[slotStart.getMonth()]} ${slotStart.getFullYear()} (${hourStr} - ${pad(slotEnd.getHours())}:00)`;
+
+        slots.push({
+          fecha: dateKey,
+          label,
+          diaSemana,
+          fechaCompleta,
+          ventas: v,
+          pedidos,
+          gastos: g,
+          gastosCount,
+          ganancia,
+          margen
+        });
+      }
+      return slots;
+    }
+
     const dayMap = new Map<string, {
       ventas: number;
       pedidos: number;
@@ -189,12 +269,6 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
       }
     });
 
-    // 4. Formatear arreglo final con etiquetas en español
-    const monthNamesShort = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-    const dayNamesShort = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-    const dayNamesFull = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-    const monthNamesFull = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-
     const sortedKeys = Array.from(dayMap.keys()).sort();
 
     return sortedKeys.map(key => {
@@ -226,7 +300,7 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
         margen
       };
     });
-  }, [dateRange, orders, expenses, selectedBranchId]);
+  }, [dateRange, orders, expenses, selectedBranchId, timePreset]);
 
   // Resumen estadístico del rango
   const periodSummary = useMemo(() => {
@@ -423,6 +497,7 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
           {/* Preset Buttons */}
           <div className="flex flex-wrap items-center gap-1.5">
             {[
+              { id: '48h', label: '48 Horas' },
               { id: '7d', label: '7 Días' },
               { id: '14d', label: '14 Días' },
               { id: '30d', label: '30 Días' },
@@ -586,7 +661,9 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
         <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
           <div>
             <h3 className="font-extrabold text-sm sm:text-base text-neutral-900">
-              Curva de Tendencia Diaria ({trendData.length} días analizados)
+              {timePreset === '48h'
+                ? `Curva de Tendencia por Hora (${trendData.length} intervalos de 48h)`
+                : `Curva de Tendencia Diaria (${trendData.length} días analizados)`}
             </h3>
             <span className="text-xs text-neutral-400">
               Del {dateRange.startStr} al {dateRange.endStr}
@@ -606,7 +683,7 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
         </div>
 
         {/* Canvas del LineChart */}
-        <div className="w-full h-80 sm:h-96">
+        <div className="w-full h-72 sm:h-80">
           {trendData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
@@ -616,10 +693,14 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                 <XAxis 
                   dataKey="label" 
-                  tick={{ fill: '#64748B', fontSize: 11, fontWeight: 600 }}
+                  tick={{ fill: '#64748B', fontSize: timePreset === '48h' ? 10 : 11, fontWeight: 600 }}
                   tickLine={false}
                   axisLine={{ stroke: '#E2E8F0' }}
                   dy={6}
+                  interval={timePreset === '48h' ? 3 : 0}
+                  angle={timePreset === '48h' ? -30 : 0}
+                  textAnchor={timePreset === '48h' ? 'end' : 'middle'}
+                  height={timePreset === '48h' ? 55 : 30}
                 />
                 <YAxis 
                   tick={{ fill: '#64748B', fontSize: 11, fontWeight: 600 }}
