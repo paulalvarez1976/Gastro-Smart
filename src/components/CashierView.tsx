@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Order, CashRegisterClose } from '../types';
+import { Order, CashRegisterClose, MenuItem, Table, Client } from '../types';
 import { updateOrderStatus, createCashRegisterClose, updateTableStatus } from '../services/dataService';
 import { sounds } from '../utils/sound';
+import { WaiterPOS } from './WaiterPOS';
 import { 
   DollarSign, 
   CreditCard, 
@@ -22,13 +23,16 @@ import confetti from 'canvas-confetti';
 
 interface CashierViewProps {
   orders: Order[];
+  menuItems: MenuItem[];
+  tables: Table[];
+  clients: Client[];
 }
 
-export const CashierView: React.FC<CashierViewProps> = ({ orders }) => {
+export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tables, clients }) => {
   const { currentEmployee, currentRestaurant } = useAuth();
 
-  // Active sub-tab: 'pedidos' | 'cierre' | 'historial'
-  const [activeTab, setActiveTab] = useState<'pedidos' | 'cierre' | 'historial'>('pedidos');
+  // Active sub-tab: 'pos' | 'pedidos' | 'cierre' | 'historial'
+  const [activeTab, setActiveTab] = useState<'pos' | 'pedidos' | 'cierre' | 'historial'>('pos');
 
   // Modal de Cobro
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -200,6 +204,18 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders }) => {
         {/* Tab switcher */}
         <div className="flex items-center gap-1.5 p-1 bg-neutral-100 rounded-xl border border-neutral-200">
           <button
+            onClick={() => setActiveTab('pos')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'pos' 
+                ? 'bg-white text-neutral-900 shadow-xs' 
+                : 'text-neutral-600 hover:text-neutral-900'
+            }`}
+          >
+            <Utensils className="w-4 h-4 text-orange-600" />
+            <span>Punto de Venta</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('pedidos')}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
               activeTab === 'pedidos' 
@@ -244,6 +260,18 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders }) => {
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         
+        {/* TAB 0: Punto de Venta / Flujo de Mesero */}
+        {activeTab === 'pos' && (
+          <div className="h-full -m-4 sm:-m-6 flex flex-col">
+            <WaiterPOS 
+              menuItems={menuItems} 
+              tables={tables} 
+              orders={orders} 
+              clients={clients} 
+            />
+          </div>
+        )}
+
         {/* TAB 1: Pedidos por cobrar */}
         {activeTab === 'pedidos' && (
           <div className="max-w-6xl mx-auto space-y-4">

@@ -178,7 +178,12 @@ const MainAppContent: React.FC = () => {
         )}
 
         {currentEmployee.puesto === 'caja' && (
-          <CashierView orders={orders} />
+          <CashierView 
+            orders={orders} 
+            menuItems={menuItems}
+            tables={tables}
+            clients={clients}
+          />
         )}
 
         {currentEmployee.puesto === 'admin' && (
