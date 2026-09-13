@@ -26,6 +26,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
+import { getShiftSessionSummary } from '../services/dataService';
 
 interface TopNavProps {
   orders?: Order[];
@@ -64,6 +65,13 @@ export const TopNav: React.FC<TopNavProps> = ({
   const [shiftDuration, setShiftDuration] = useState<string>('00:00:00');
   const [showEndShiftModal, setShowEndShiftModal] = useState(false);
   const [reporteLabores, setReporteLabores] = useState('');
+  const [liveSessionMetrics, setLiveSessionMetrics] = useState<{
+    pedidosTomados: number;
+    ventasGeneradas: number;
+    pedidosCobrados: number;
+    montoCobrado: number;
+    horasTrabajadas: number;
+  } | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showAlertsModal, setShowAlertsModal] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => sounds.isMuted());
@@ -233,7 +241,16 @@ export const TopNav: React.FC<TopNavProps> = ({
     }
   };
 
+  useEffect(() => {
+    if (showEndShiftModal && currentEmployee && currentShift) {
+      getShiftSessionSummary(currentEmployee, currentShift).then(summary => {
+        setLiveSessionMetrics(summary);
+      });
+    }
+  }, [showEndShiftModal, currentEmployee, currentShift]);
+
   const calculateShiftHours = () => {
+    if (liveSessionMetrics) return liveSessionMetrics.horasTrabajadas;
     if (!currentShift) return 0;
     const start = new Date(currentShift.horaInicio).getTime();
     const now = Date.now();
@@ -243,7 +260,7 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   const handleConfirmEndShift = async () => {
     sounds.playCashRegister();
-    await endShiftAndLogout(reporteLabores);
+    await endShiftAndLogout(reporteLabores, liveSessionMetrics || undefined);
     setShowEndShiftModal(false);
   };
 
@@ -630,7 +647,7 @@ export const TopNav: React.FC<TopNavProps> = ({
             </div>
 
             {/* Summary metrics */}
-            <div className="grid grid-cols-3 gap-3 bg-neutral-50 p-3 rounded-2xl border border-neutral-200 text-center">
+            <div className={`grid ${currentEmployee?.puesto === 'caja' ? 'grid-cols-4' : 'grid-cols-3'} gap-2 sm:gap-3 bg-neutral-50 p-3 rounded-2xl border border-neutral-200 text-center`}>
               <div>
                 <div className="text-[11px] uppercase font-bold text-neutral-500">Horas</div>
                 <div className="text-lg font-black text-neutral-900 mt-0.5">
@@ -642,18 +659,28 @@ export const TopNav: React.FC<TopNavProps> = ({
               <div className="border-x border-neutral-200">
                 <div className="text-[11px] uppercase font-bold text-neutral-500">Pedidos</div>
                 <div className="text-lg font-black text-orange-600 mt-0.5">
-                  {currentShift?.pedidosTomados || 0}
+                  {liveSessionMetrics ? liveSessionMetrics.pedidosTomados : (currentShift?.pedidosTomados || 0)}
                 </div>
                 <div className="text-[10px] text-neutral-400">Atendidos</div>
               </div>
 
-              <div>
+              <div className={currentEmployee?.puesto === 'caja' ? 'border-r border-neutral-200' : ''}>
                 <div className="text-[11px] uppercase font-bold text-neutral-500">Ventas</div>
                 <div className="text-lg font-black text-emerald-600 mt-0.5">
-                  ${(currentShift?.ventasGeneradas || 0).toFixed(2)}
+                  ${((liveSessionMetrics ? liveSessionMetrics.ventasGeneradas : (currentShift?.ventasGeneradas || 0))).toFixed(2)}
                 </div>
                 <div className="text-[10px] text-neutral-400">Generadas</div>
               </div>
+
+              {currentEmployee?.puesto === 'caja' && (
+                <div>
+                  <div className="text-[11px] uppercase font-bold text-neutral-500">Cobrado</div>
+                  <div className="text-lg font-black text-blue-600 mt-0.5">
+                    ${((liveSessionMetrics ? liveSessionMetrics.montoCobrado : 0)).toFixed(2)}
+                  </div>
+                  <div className="text-[10px] text-neutral-400">En Caja ({liveSessionMetrics ? liveSessionMetrics.pedidosCobrados : 0})</div>
+                </div>
+              )}
             </div>
 
             {/* Reporte opcional de labores */}

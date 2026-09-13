@@ -79,7 +79,15 @@ interface AuthContextType {
   // Autenticación operativa (PIN)
   loginWithPin: (pin: string, branchId?: string) => Promise<{ success: boolean; message: string; employee?: Employee }>;
   logoutEmployee: () => void;
-  endShiftAndLogout: (reporteLabores?: string) => Promise<void>;
+  endShiftAndLogout: (
+    reporteLabores?: string,
+    sessionMetrics?: {
+      pedidosTomados?: number;
+      ventasGeneradas?: number;
+      pedidosCobrados?: number;
+      montoCobrado?: number;
+    }
+  ) => Promise<void>;
   
   // Utilidades de sucursales y empleados
   selectRestaurant: (restaurantId: string) => void;
@@ -692,9 +700,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentEmployee(null);
   };
 
-  const endShiftAndLogout = async (reporteLabores?: string) => {
+  const endShiftAndLogout = async (
+    reporteLabores?: string,
+    sessionMetrics?: {
+      pedidosTomados?: number;
+      ventasGeneradas?: number;
+      pedidosCobrados?: number;
+      montoCobrado?: number;
+    }
+  ) => {
     if (currentShift) {
-      await closeShift(currentShift.id, reporteLabores);
+      await closeShift(currentShift.id, reporteLabores, sessionMetrics);
     }
     setCurrentEmployee(null);
     setCurrentShift(null);

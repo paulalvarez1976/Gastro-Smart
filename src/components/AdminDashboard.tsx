@@ -25,6 +25,10 @@ import {
 } from '../services/dataService';
 import { uploadDishPhoto } from '../services/storageService';
 import { sounds } from '../utils/sound';
+import { FinancialDashboard } from './FinancialDashboard';
+import { DeliveryReconciliation } from './DeliveryReconciliation';
+import { StaffAttendanceAdminView } from './StaffAttendanceAdminView';
+import { DailySalesExpensesTrendChart } from './DailySalesExpensesTrendChart';
 import { 
   ShieldCheck, 
   Store, 
@@ -52,7 +56,12 @@ import {
   Image as ImageIcon,
   Loader2,
   Table as TableIcon,
-  LayoutGrid
+  LayoutGrid,
+  Truck,
+  ChefHat,
+  Zap,
+  Coffee,
+  ShoppingBag
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -82,7 +91,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || 'biz_default';
   
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'metricas' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('metricas');
+  const [activeTab, setActiveTab] = useState<'financiero' | 'conciliacion' | 'asistencia' | 'metricas' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('financiero');
 
   // Restaurant Modal State
   const [showRestModal, setShowRestModal] = useState(false);
@@ -127,11 +136,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [showMenuModal, setShowMenuModal] = useState(false);
   const [editingMenu, setEditingMenu] = useState<MenuItem | null>(null);
   const [menuViewMode, setMenuViewMode] = useState<'tabla' | 'tarjetas'>('tabla');
+  const [menuPrepFilter, setMenuPrepFilter] = useState<'all' | 'cocina' | 'express'>('all');
+  const [isManualCocinaTouched, setIsManualCocinaTouched] = useState(false);
   const [menuForm, setMenuForm] = useState({
     nombre: '',
     descripcion: '',
     precio: 10.0,
     categoria: 'Platos Fuertes',
+    requiereCocina: true,
     disponible: true,
     restaurantId: 'all',
     fotoUrl: '',
@@ -141,6 +153,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper para sugerir si la categoría no requiere cocina
+  const isCategoryNoKitchen = (cat: string) => {
+    const c = cat.toLowerCase().trim();
+    return c.includes('bebida') || c.includes('postre') || c.includes('panader') || 
+           c.includes('cafe') || c.includes('café') || c.includes('snack') || 
+           c.includes('dulce') || c.includes('helado') || c.includes('gaseosa') || 
+           c.includes('cerveza') || c.includes('trago') || c.includes('jugo') || 
+           c.includes('refresco') || c.includes('licor') || c.includes('vino');
+  };
 
   // Métricas generales
   const totalSales = orders
@@ -327,11 +349,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setSelectedPhotoFile(null);
     setPhotoPreviewUrl(null);
     setIsUploadingPhoto(false);
+    setIsManualCocinaTouched(false);
     setMenuForm({
       nombre: '',
       descripcion: '',
       precio: 12.0,
       categoria: 'Platos Fuertes',
+      requiereCocina: true,
       disponible: true,
       restaurantId: 'all',
       fotoUrl: '',
@@ -347,11 +371,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const existingPhoto = item.fotoUrl || item.imagenUrl || null;
     setPhotoPreviewUrl(existingPhoto);
     setIsUploadingPhoto(false);
+    setIsManualCocinaTouched(true);
     setMenuForm({
       nombre: item.nombre,
       descripcion: item.descripcion,
       precio: item.precio,
       categoria: item.categoria,
+      requiereCocina: item.requiereCocina !== false,
       disponible: item.disponible,
       restaurantId: item.restaurantId,
       fotoUrl: item.fotoUrl || item.imagenUrl || '',
@@ -389,6 +415,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         descripcion: menuForm.descripcion.trim(),
         precio: Number(menuForm.precio) || 0,
         categoria: menuForm.categoria.trim() || 'General',
+        requiereCocina: menuForm.requiereCocina !== false,
         disponible: menuForm.disponible,
         restaurantId: menuForm.restaurantId,
         fotoUrl: finalFotoUrl,
@@ -449,7 +476,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab Buttons */}
         <div className="flex items-center gap-1.5 p-1 bg-neutral-100 rounded-xl border border-neutral-200 overflow-x-auto">
           {[
-            { id: 'metricas', label: 'Dashboard', icon: TrendingUp },
+            { id: 'financiero', label: 'Finanzas & P&L', icon: DollarSign },
+            { id: 'conciliacion', label: 'Conciliación Delivery', icon: Truck },
+            { id: 'asistencia', label: 'Asistencia & Planilla', icon: Users },
+            { id: 'metricas', label: 'Tendencias & Operaciones', icon: TrendingUp },
             { id: 'restaurantes', label: 'Locales & Mesas', icon: Store },
             { id: 'empleados', label: 'Empleados & PINs', icon: Users },
             { id: 'menu', label: 'Menú & Platos', icon: UtensilsCrossed },
@@ -459,17 +489,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             const isDanger = tab.id === 'peligro';
+            const isFinancial = tab.id === 'financiero' || tab.id === 'conciliacion' || tab.id === 'asistencia';
             return (
               <button
                 key={tab.id}
                 onClick={() => { sounds.playKeypadClick(); setActiveTab(tab.id as any); }}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
                   isActive 
-                    ? isDanger ? 'bg-red-600 text-white shadow-xs' : 'bg-white text-neutral-900 shadow-xs' 
-                    : isDanger ? 'text-red-600 hover:bg-red-50' : 'text-neutral-600 hover:text-neutral-900'
+                    ? isDanger 
+                      ? 'bg-red-600 text-white shadow-xs' 
+                      : isFinancial 
+                        ? 'bg-blue-600 text-white shadow-xs' 
+                        : 'bg-white text-neutral-900 shadow-xs' 
+                    : isDanger 
+                      ? 'text-red-600 hover:bg-red-50' 
+                      : isFinancial
+                        ? 'text-blue-700 hover:bg-blue-50 font-black'
+                        : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
-                <Icon className={`w-3.5 h-3.5 ${isActive ? (isDanger ? 'text-white' : 'text-purple-600') : (isDanger ? 'text-red-500' : 'text-neutral-400')}`} />
+                <Icon className={`w-3.5 h-3.5 ${
+                  isActive 
+                    ? 'text-white' 
+                    : isDanger 
+                      ? 'text-red-500' 
+                      : isFinancial 
+                        ? 'text-blue-600' 
+                        : 'text-neutral-400'
+                }`} />
                 <span>{tab.label}</span>
               </button>
             );
@@ -480,44 +527,92 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* Main Admin Content Container */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         
-        {/* VIEW 1: Métricas & KPIs */}
+        {/* VIEW 0: Dashboard Financiero (P&L, Gastos, Ventas, Comparativas) */}
+        {activeTab === 'financiero' && (
+          <div className="max-w-7xl mx-auto space-y-6">
+            <FinancialDashboard 
+              restaurants={restaurants}
+              orders={orders}
+              shifts={shifts}
+              menuItems={menuItems}
+            />
+          </div>
+        )}
+
+        {/* VIEW CONCILIACION: Conciliación de Delivery (PedidosYa, UberEats, Rappi) */}
+        {activeTab === 'conciliacion' && (
+          <div className="max-w-7xl mx-auto space-y-6">
+            <DeliveryReconciliation
+              orders={orders}
+              restaurants={restaurants}
+              businessId={activeBizId}
+              selectedBranchId="all"
+              currentUserName={currentUserAccount?.nombre || 'Administrador'}
+              userRole={currentUserAccount?.rol === 'owner' ? 'owner' : 'admin'}
+            />
+          </div>
+        )}
+
+        {/* VIEW ASISTENCIA: Control de Asistencia, Horas Extra y Planilla Masiva */}
+        {activeTab === 'asistencia' && (
+          <div className="max-w-7xl mx-auto space-y-6">
+            <StaffAttendanceAdminView
+              shifts={shifts}
+              employees={employees}
+              restaurants={restaurants}
+              businessId={activeBizId}
+              businessName={currentBusiness?.nombre || 'Mi Negocio'}
+              currentUserName={currentUserAccount?.nombre || 'Administrador'}
+              userRole={currentUserAccount?.rol === 'owner' ? 'owner' : 'admin'}
+            />
+          </div>
+        )}
+
+        {/* VIEW 1: Métricas, Tendencias & KPIs */}
         {activeTab === 'metricas' && (
-          <div className="max-w-6xl mx-auto space-y-6">
+          <div className="max-w-7xl mx-auto space-y-6">
             
-            {/* KPI Cards */}
+            {/* Gráfico Interactivo de Tendencia de Ventas Diarias vs Gastos con Recharts */}
+            <DailySalesExpensesTrendChart
+              orders={orders}
+              restaurants={restaurants}
+              businessId={activeBizId}
+            />
+
+            {/* KPI Cards Globales */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs">
+              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
                 <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
-                  <span>Ventas Totales</span>
+                  <span>Ventas Históricas Totales</span>
                   <DollarSign className="w-4 h-4 text-emerald-600" />
                 </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2">
+                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
                   ${totalSales.toFixed(2)}
                 </div>
                 <div className="text-[11px] text-emerald-600 font-semibold mt-1">
-                  En todos los locales
+                  En todos los locales registrados
                 </div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs">
+              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
                 <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
                   <span>Comandas Cobradas</span>
                   <UtensilsCrossed className="w-4 h-4 text-orange-600" />
                 </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2">
+                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
                   {completedOrdersCount}
                 </div>
                 <div className="text-[11px] text-neutral-500 mt-1">
-                  Pedidos finalizados
+                  Pedidos finalizados con éxito
                 </div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs">
+              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
                 <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
                   <span>Locales Activos</span>
                   <Store className="w-4 h-4 text-blue-600" />
                 </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2">
+                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
                   {restaurants.length}
                 </div>
                 <div className="text-[11px] text-neutral-500 mt-1">
@@ -525,12 +620,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               </div>
 
-              <div className="bg-white p-5 rounded-2xl border border-neutral-200 shadow-xs">
+              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
                 <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
                   <span>Plantilla Empleados</span>
                   <Users className="w-4 h-4 text-purple-600" />
                 </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2">
+                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
                   {activeEmployeesCount}
                 </div>
                 <div className="text-[11px] text-neutral-500 mt-1">
@@ -540,47 +635,74 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Recent Orders Overview */}
-            <div className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-xs">
+            <div className="bg-white rounded-3xl border border-neutral-200 p-5 sm:p-6 shadow-xs">
               <h3 className="font-extrabold text-sm text-neutral-900 uppercase tracking-wider mb-3">
-                Últimas Comandas del Sistema
+                Últimas Comandas Registradas en Vivo
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b">
+                  <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b border-neutral-200">
                     <tr>
-                      <th className="p-2.5">Hora</th>
-                      <th className="p-2.5">Sede</th>
-                      <th className="p-2.5">Destino</th>
-                      <th className="p-2.5">Mesero</th>
-                      <th className="p-2.5">Estado</th>
-                      <th className="p-2.5 text-right">Total</th>
+                      <th className="p-3">Hora</th>
+                      <th className="p-3">Sede</th>
+                      <th className="p-3">Destino</th>
+                      <th className="p-3">Ruta</th>
+                      <th className="p-3">Mesero</th>
+                      <th className="p-3">Estado</th>
+                      <th className="p-3 text-right">Total</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
-                    {orders.slice(0, 8).map(o => (
-                      <tr key={o.id} className="hover:bg-neutral-50/50">
-                        <td className="p-2.5 font-mono">
+                    {orders.slice(0, 10).map(o => (
+                      <tr key={o.id} className="hover:bg-neutral-50/50 transition">
+                        <td className="p-3 font-mono text-neutral-600">
                           {new Date(o.creadoEn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </td>
-                        <td className="p-2.5 font-semibold text-neutral-700">
+                        <td className="p-3 font-semibold text-neutral-800">
                           {restaurants.find(r => r.id === o.restaurantId)?.nombre || 'Sede'}
                         </td>
-                        <td className="p-2.5">
+                        <td className="p-3 text-neutral-700">
                           {o.tipo === 'local' ? `Mesa #${o.mesaNumero}` : `Delivery (${o.empresaDelivery || 'General'})`}
                         </td>
-                        <td className="p-2.5">{o.meseroNombre}</td>
-                        <td className="p-2.5">
+                        <td className="p-3">
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                            o.ruta === 'express' || o.esVentaExpress
+                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                              : o.ruta === 'mixto'
+                              ? 'bg-purple-50 text-purple-800 border border-purple-200'
+                              : 'bg-orange-50 text-orange-800 border border-orange-200'
+                          }`}>
+                            {o.ruta === 'express' || o.esVentaExpress ? (
+                              <>
+                                <Zap className="w-3 h-3 text-emerald-600" />
+                                Express
+                              </>
+                            ) : o.ruta === 'mixto' ? (
+                              <>
+                                <ShoppingBag className="w-3 h-3 text-purple-600" />
+                                Mixto
+                              </>
+                            ) : (
+                              <>
+                                <ChefHat className="w-3 h-3 text-orange-600" />
+                                Cocina
+                              </>
+                            )}
+                          </span>
+                        </td>
+                        <td className="p-3 text-neutral-700 font-medium">{o.meseroNombre}</td>
+                        <td className="p-3">
                           <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] uppercase ${
-                            o.estado === 'cobrado' ? 'bg-neutral-100 text-neutral-800' :
-                            o.estado === 'listo' ? 'bg-emerald-100 text-emerald-800' :
-                            o.estado === 'en_preparacion' ? 'bg-blue-100 text-blue-800' :
-                            o.estado === 'rechazado' ? 'bg-red-100 text-red-800' :
-                            'bg-orange-100 text-orange-800'
+                            o.estado === 'cobrado' ? 'bg-neutral-100 text-neutral-800 border border-neutral-200' :
+                            o.estado === 'listo' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                            o.estado === 'en_preparacion' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                            o.estado === 'rechazado' ? 'bg-red-100 text-red-800 border border-red-200' :
+                            'bg-orange-100 text-orange-800 border border-orange-200'
                           }`}>
                             {o.estado.replace('_', ' ')}
                           </span>
                         </td>
-                        <td className="p-2.5 text-right font-black font-mono">
+                        <td className="p-3 text-right font-black font-mono text-neutral-900">
                           ${o.total.toFixed(2)}
                         </td>
                       </tr>
@@ -823,10 +945,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   Carta y Menú ({menuItems.length} Platos)
                 </h3>
                 <p className="text-xs text-neutral-500">
-                  Controla las fotos de los platos, disponibilidad en cocina y precios de venta.
+                  Controla fotos, precios, disponibilidad y si los productos requieren elaboración en cocina o son de entrega inmediata (Express).
                 </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Filtro Tipo de Preparación */}
+                <div className="flex bg-neutral-150 p-0.5 rounded-xl border border-neutral-200 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setMenuPrepFilter('all')}
+                    className={`px-2.5 py-1.5 rounded-lg font-bold transition ${
+                      menuPrepFilter === 'all' ? 'bg-white text-neutral-900 shadow-xs' : 'text-neutral-500 hover:text-neutral-900'
+                    }`}
+                  >
+                    Todos ({menuItems.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMenuPrepFilter('cocina')}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-bold transition ${
+                      menuPrepFilter === 'cocina' ? 'bg-white text-orange-700 shadow-xs' : 'text-neutral-500 hover:text-neutral-900'
+                    }`}
+                  >
+                    <ChefHat className="w-3.5 h-3.5" />
+                    Cocina ({menuItems.filter(i => i.requiereCocina !== false).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMenuPrepFilter('express')}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-bold transition ${
+                      menuPrepFilter === 'express' ? 'bg-white text-emerald-700 shadow-xs' : 'text-neutral-500 hover:text-neutral-900'
+                    }`}
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    Express ({menuItems.filter(i => i.requiereCocina === false).length})
+                  </button>
+                </div>
+
                 {/* Selector Vista Tabla / Cuadrícula */}
                 <div className="flex bg-neutral-150 p-0.5 rounded-xl border border-neutral-200">
                   <button
@@ -861,169 +1016,206 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            {menuViewMode === 'tabla' ? (
-              /* VISTA TABLA: Miniatura de la foto (48px) requerida por el usuario con fallback */
-              <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden shadow-xs">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b">
-                    <tr>
-                      <th className="p-3">Plato</th>
-                      <th className="p-3">Categoría</th>
-                      <th className="p-3 text-right">Precio</th>
-                      <th className="p-3">Sede</th>
-                      <th className="p-3 text-center">Disponibilidad</th>
-                      <th className="p-3 text-right">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-100 text-neutral-700">
-                    {menuItems.map(item => {
-                      const photoSrc = item.fotoUrl || item.imagenUrl;
-                      const restName = item.restaurantId === 'all' 
-                        ? 'Todas' 
-                        : (restaurants.find(r => r.id === item.restaurantId)?.nombre || 'Sede');
+            {(() => {
+              const filteredMenu = menuItems.filter(item => {
+                if (menuPrepFilter === 'cocina') return item.requiereCocina !== false;
+                if (menuPrepFilter === 'express') return item.requiereCocina === false;
+                return true;
+              });
 
-                      return (
-                        <tr key={item.id} className="hover:bg-neutral-50/50">
-                          <td className="p-3">
-                            <div className="flex items-center gap-3">
-                              {/* Miniatura 48px (w-12 h-12) con fallback si no tiene */}
-                              <div className="w-12 h-12 rounded-xl overflow-hidden bg-neutral-100 border border-neutral-200/80 shrink-0 flex items-center justify-center shadow-xs">
-                                {photoSrc ? (
-                                  <img
-                                    src={photoSrc}
-                                    alt={item.nombre}
-                                    referrerPolicy="no-referrer"
-                                    className="w-full h-full object-cover"
-                                    loading="lazy"
-                                  />
-                                ) : (
-                                  <UtensilsCrossed className="w-5 h-5 text-neutral-400" />
-                                )}
+              if (menuViewMode === 'tabla') {
+                return (
+                  <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden shadow-xs">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b">
+                        <tr>
+                          <th className="p-3">Plato</th>
+                          <th className="p-3">Categoría</th>
+                          <th className="p-3">Preparación</th>
+                          <th className="p-3 text-right">Precio</th>
+                          <th className="p-3">Sede</th>
+                          <th className="p-3 text-center">Disponibilidad</th>
+                          <th className="p-3 text-right">Acciones</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-100 text-neutral-700">
+                        {filteredMenu.map(item => {
+                          const photoSrc = item.fotoUrl || item.imagenUrl;
+                          const restName = item.restaurantId === 'all' 
+                            ? 'Todas' 
+                            : (restaurants.find(r => r.id === item.restaurantId)?.nombre || 'Sede');
+                          const isKitchen = item.requiereCocina !== false;
+
+                          return (
+                            <tr key={item.id} className="hover:bg-neutral-50/50">
+                              <td className="p-3">
+                                <div className="flex items-center gap-3">
+                                  {/* Miniatura 48px */}
+                                  <div className="w-12 h-12 rounded-xl overflow-hidden bg-neutral-100 border border-neutral-200/80 shrink-0 flex items-center justify-center shadow-xs">
+                                    {photoSrc ? (
+                                      <img
+                                        src={photoSrc}
+                                        alt={item.nombre}
+                                        referrerPolicy="no-referrer"
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    ) : (
+                                      <UtensilsCrossed className="w-5 h-5 text-neutral-400" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <div className="font-bold text-neutral-900 text-sm">{item.nombre}</div>
+                                    <div className="text-[11px] text-neutral-500 line-clamp-1 max-w-xs">{item.descripcion}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="p-3">
+                                <span className="px-2 py-0.5 rounded font-bold uppercase text-[10px] bg-neutral-100 text-neutral-600">
+                                  {item.categoria}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
+                                  isKitchen 
+                                    ? 'bg-orange-50 text-orange-800 border border-orange-200' 
+                                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                }`}>
+                                  {isKitchen ? <ChefHat className="w-3 h-3 text-orange-600" /> : <Zap className="w-3 h-3 text-emerald-600" />}
+                                  {isKitchen ? 'Cocina' : 'Express'}
+                                </span>
+                              </td>
+                              <td className="p-3 text-right font-mono font-bold text-orange-600 text-sm">
+                                ${item.precio.toFixed(2)}
+                              </td>
+                              <td className="p-3 text-neutral-600">
+                                {restName}
+                              </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => updateMenuItem(item.id, { disponible: !item.disponible })}
+                                  className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition border ${
+                                    item.disponible 
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200' 
+                                      : 'bg-red-100 text-red-800 border-red-300 hover:bg-red-200'
+                                  }`}
+                                >
+                                  {item.disponible ? 'Disponible' : 'Agotado'}
+                                </button>
+                              </td>
+                              <td className="p-3 text-right space-x-1">
+                                <button
+                                  onClick={() => handleOpenEditDish(item)}
+                                  className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 transition"
+                                  title="Editar Plato"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`¿Eliminar plato ${item.nombre}?`)) {
+                                      deleteMenuItem(item.id);
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition"
+                                  title="Eliminar Plato"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              }
+
+              return (
+                /* VISTA TARJETAS */
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredMenu.map(item => {
+                    const photoSrc = item.fotoUrl || item.imagenUrl;
+                    const isKitchen = item.requiereCocina !== false;
+
+                    return (
+                      <div key={item.id} className="bg-white rounded-2xl border border-neutral-200 p-4 shadow-xs flex flex-col justify-between">
+                        <div>
+                          <div className="w-full h-36 rounded-xl bg-neutral-100 overflow-hidden mb-3 relative">
+                            {photoSrc ? (
+                              <img src={photoSrc} alt={item.nombre} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-neutral-300">
+                                <UtensilsCrossed className="w-8 h-8" />
                               </div>
-                              <div>
-                                <div className="font-bold text-neutral-900 text-sm">{item.nombre}</div>
-                                <div className="text-[11px] text-neutral-500 line-clamp-1 max-w-xs">{item.descripcion}</div>
-                              </div>
+                            )}
+                            <div className="absolute top-2 left-2">
+                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-black uppercase text-[10px] shadow-xs ${
+                                isKitchen 
+                                  ? 'bg-orange-500 text-white' 
+                                  : 'bg-emerald-600 text-white'
+                              }`}>
+                                {isKitchen ? <ChefHat className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
+                                {isKitchen ? 'Cocina' : 'Express'}
+                              </span>
                             </div>
-                          </td>
-                          <td className="p-3">
-                            <span className="px-2 py-0.5 rounded font-bold uppercase text-[10px] bg-neutral-100 text-neutral-600">
+                            <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-black uppercase shadow-xs ${
+                              item.disponible ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
+                            }`}>
+                              {item.disponible ? 'Disponible' : 'Agotado'}
+                            </span>
+                          </div>
+
+                          <div className="flex justify-between items-start gap-2">
+                            <h4 className="font-bold text-neutral-900 text-sm">{item.nombre}</h4>
+                            <span className="font-black text-orange-600 text-base">${item.precio.toFixed(2)}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="text-[10px] uppercase font-bold text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded">
                               {item.categoria}
                             </span>
-                          </td>
-                          <td className="p-3 text-right font-mono font-bold text-orange-600 text-sm">
-                            ${item.precio.toFixed(2)}
-                          </td>
-                          <td className="p-3 text-neutral-600">
-                            {restName}
-                          </td>
-                          <td className="p-3 text-center">
-                            <button
-                              type="button"
-                              onClick={() => updateMenuItem(item.id, { disponible: !item.disponible })}
-                              className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition border ${
-                                item.disponible 
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200' 
-                                  : 'bg-red-100 text-red-800 border-red-300 hover:bg-red-200'
-                              }`}
-                            >
-                              {item.disponible ? 'Disponible' : 'Agotado'}
-                            </button>
-                          </td>
-                          <td className="p-3 text-right space-x-1">
+                          </div>
+                          <p className="text-xs text-neutral-500 mt-2 line-clamp-2">{item.descripcion}</p>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
+                          <button
+                            onClick={() => updateMenuItem(item.id, { disponible: !item.disponible })}
+                            className={`text-xs font-bold px-2.5 py-1 rounded-lg border transition ${
+                              item.disponible ? 'bg-neutral-50 text-neutral-700 hover:bg-neutral-100' : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                            }`}
+                          >
+                            {item.disponible ? 'Marcar Agotado' : 'Habilitar Plato'}
+                          </button>
+
+                          <div className="flex gap-1.5">
                             <button
                               onClick={() => handleOpenEditDish(item)}
-                              className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 transition"
-                              title="Editar Plato"
+                              className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
                               onClick={() => {
-                                if (confirm(`¿Eliminar plato ${item.nombre}?`)) {
+                                if (confirm(`¿Eliminar ${item.nombre}?`)) {
                                   deleteMenuItem(item.id);
                                 }
                               }}
-                              className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition"
-                              title="Eliminar Plato"
+                              className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              /* VISTA TARJETAS */
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {menuItems.map(item => {
-                  const photoSrc = item.fotoUrl || item.imagenUrl;
-                  return (
-                    <div key={item.id} className="bg-white rounded-2xl border border-neutral-200 p-4 shadow-xs flex flex-col justify-between">
-                      <div>
-                        <div className="w-full h-36 rounded-xl bg-neutral-100 overflow-hidden mb-3 relative">
-                          {photoSrc ? (
-                            <img src={photoSrc} alt={item.nombre} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-neutral-300">
-                              <UtensilsCrossed className="w-8 h-8" />
-                            </div>
-                          )}
-                          <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
-                            item.disponible ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
-                          }`}>
-                            {item.disponible ? 'Disponible' : 'Agotado'}
-                          </span>
-                        </div>
-
-                        <div className="flex justify-between items-start gap-2">
-                          <h4 className="font-bold text-neutral-900 text-sm">{item.nombre}</h4>
-                          <span className="font-black text-orange-600 text-base">${item.precio.toFixed(2)}</span>
-                        </div>
-
-                        <span className="text-[10px] uppercase font-bold text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded">
-                          {item.categoria}
-                        </span>
-                        <p className="text-xs text-neutral-500 mt-2 line-clamp-2">{item.descripcion}</p>
-                      </div>
-
-                      <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
-                        <button
-                          onClick={() => updateMenuItem(item.id, { disponible: !item.disponible })}
-                          className={`text-xs font-bold px-2.5 py-1 rounded-lg border transition ${
-                            item.disponible ? 'bg-neutral-50 text-neutral-700 hover:bg-neutral-100' : 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                          }`}
-                        >
-                          {item.disponible ? 'Marcar Agotado' : 'Habilitar Plato'}
-                        </button>
-
-                        <div className="flex gap-1.5">
-                          <button
-                            onClick={() => handleOpenEditDish(item)}
-                            className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (confirm(`¿Eliminar ${item.nombre}?`)) {
-                                deleteMenuItem(item.id);
-                              }
-                            }}
-                            className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1078,7 +1270,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     const overtimeHours = Math.max(0, durationHours - 8);
                     const calculatedSalary = (regularHours * rate) + (overtimeHours * rate * 1.5);
                     const isClosed = sh.estado === 'cerrado';
-                    const isPaid = sh.sueldoPagado;
+                    const isPaid = Boolean(sh.pagado ?? sh.sueldoPagado ?? false);
+                    const paidAmount = sh.montoPagadoSueldo ?? sh.sueldoTotal;
 
                     return (
                       <tr key={sh.id} className="hover:bg-neutral-50/50">
@@ -1121,7 +1314,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {isPaid ? (
                             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200">
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              Pagado (${sh.sueldoTotal?.toFixed(2) || calculatedSalary.toFixed(2)})
+                              Pagado (${(paidAmount !== undefined ? paidAmount : calculatedSalary).toFixed(2)})
                             </span>
                           ) : isClosed ? (
                             <button
@@ -1469,10 +1662,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <input
                     type="text"
                     value={menuForm.categoria}
-                    onChange={(e) => setMenuForm({ ...menuForm, categoria: e.target.value })}
-                    placeholder="Ej: Platos Fuertes, Bebidas..."
+                    onChange={(e) => {
+                      const newCat = e.target.value;
+                      setMenuForm(prev => ({
+                        ...prev,
+                        categoria: newCat,
+                        requiereCocina: isManualCocinaTouched ? prev.requiereCocina : !isCategoryNoKitchen(newCat)
+                      }));
+                    }}
+                    placeholder="Ej: Platos Fuertes, Bebidas, Postres..."
                     className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
                   />
+                </div>
+              </div>
+
+              {/* RUTA / DESTINO: ¿Requiere preparación en Cocina? */}
+              <div className="p-3.5 bg-neutral-50 rounded-2xl border border-neutral-200">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      menuForm.requiereCocina ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-700'
+                    }`}>
+                      {menuForm.requiereCocina ? <ChefHat className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-neutral-900 flex items-center gap-1.5">
+                        {menuForm.requiereCocina ? 'Preparación en Cocina' : 'Sin preparación (Venta Express)'}
+                        <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold uppercase ${
+                          menuForm.requiereCocina ? 'bg-orange-100 text-orange-800' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          {menuForm.requiereCocina ? 'Cocina' : 'Express'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 leading-tight mt-0.5">
+                        {menuForm.requiereCocina 
+                          ? 'Se enviará a la pantalla KDS de Cocina para su preparación' 
+                          : 'Listo para entrega inmediata (bebidas, postres, snacks, etc.)'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsManualCocinaTouched(true);
+                      setMenuForm(prev => ({ ...prev, requiereCocina: !prev.requiereCocina }));
+                    }}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      menuForm.requiereCocina ? 'bg-orange-600' : 'bg-neutral-300'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                        menuForm.requiereCocina ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
                 </div>
               </div>
 

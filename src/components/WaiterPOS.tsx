@@ -166,7 +166,11 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
 
   // Submit order to Kitchen
   const handleSendToKitchen = async () => {
-    if (cart.length === 0 || !currentRestaurant || !currentEmployee || !setupData) return;
+    if (cart.length === 0) {
+      alert('Debes agregar al menos un plato o producto al pedido.');
+      return;
+    }
+    if (!currentRestaurant || !currentEmployee || !setupData) return;
 
     setIsSubmitting(true);
     try {
@@ -175,8 +179,9 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
         await appendItemsToExistingOrder(
           setupData.targetExistingOrder.id,
           cart,
-          currentEmployee.nombre,
-          setupData.targetExistingOrder.timeline || []
+          {
+            userName: currentEmployee.nombre
+          }
         );
         setSuccessToast(`¡Nuevos platos agregados exitosamente a Mesa #${setupData.selectedTable?.numero}!`);
       } else {
@@ -185,6 +190,7 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
         const client = setupData.selectedClient;
 
         await createOrder({
+          businessId: currentRestaurant.businessId,
           restaurantId: currentRestaurant.id,
           meseroId: currentEmployee.id,
           meseroNombre: currentEmployee.nombre,

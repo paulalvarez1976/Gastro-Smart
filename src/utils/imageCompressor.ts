@@ -16,14 +16,15 @@ export interface CompressionResult {
 }
 
 export function compressImage(
-  file: File,
+  file: File | Blob,
   maxWidth = 800,
   quality = 0.8
 ): Promise<CompressionResult> {
   return new Promise((resolve, reject) => {
     // Validar tipo de archivo
     const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validTypes.includes(file.type.toLowerCase())) {
+    const fileType = file.type ? file.type.toLowerCase() : 'image/jpeg';
+    if (file.type && !validTypes.includes(fileType)) {
       reject(new Error('Formato no soportado. Por favor selecciona una imagen JPG, PNG o WEBP.'));
       return;
     }

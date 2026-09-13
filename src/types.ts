@@ -39,8 +39,11 @@ export interface Restaurant {
   telefono: string;
   numeroMesas?: number;
   activo: boolean;
+  timeZone?: string;
   creadoEn?: string;
 }
+
+export type EmployeeSalaryType = 'por_horas' | 'fijo';
 
 export interface Employee {
   id: string;
@@ -50,6 +53,9 @@ export interface Employee {
   puesto: Role;
   pin: string; // 4 dígitos
   tarifaHora: number;
+  tipoSueldo?: EmployeeSalaryType;
+  sueldoMensual?: number;
+  mesesPagados?: string[]; // ej. ['2026-09', '2026-08']
   activo: boolean;
   creadoEn?: string;
 }
@@ -69,11 +75,24 @@ export interface Shift {
   estado: 'abierto' | 'cerrado';
   pedidosTomados: number;
   ventasGeneradas: number;
+  pedidosCobrados?: number;
+  montoCobrado?: number;
   reporteLabores?: string;
   alertaExceso14h?: boolean;
   pagado?: boolean;
   montoPagadoSueldo?: number;
   fechaPago?: string;
+  sueldoPagado?: boolean; // legacy alias
+  sueldoTotal?: number; // legacy alias
+  resumenSesion?: {
+    horasTrabajadas: number;
+    pedidosTomados: number;
+    ventasGeneradas: number;
+    pedidosCobrados?: number;
+    montoCobrado?: number;
+    horaInicio: string;
+    horaFin?: string;
+  };
 }
 
 export interface MenuItem {
@@ -85,6 +104,7 @@ export interface MenuItem {
   precio: number;
   categoria: string;
   disponible: boolean;
+  requiereCocina?: boolean; // false para productos sin preparación en cocina (bebidas, postres listos, etc.)
   fotoUrl?: string | null;
   imagenUrl?: string | null;
 }
@@ -106,6 +126,8 @@ export interface Table {
   numero: number;
   estado: 'libre' | 'ocupada';
   capacidad?: number;
+  ubicacion?: string;
+  comandaActivaId?: string | null;
 }
 
 export type OrderStatus =
@@ -117,6 +139,8 @@ export type OrderStatus =
   | 'cobrado'
   | 'rechazado';
 
+export type OrderRoute = 'express' | 'cocina' | 'mixto';
+
 export type OrderType = 'local' | 'delivery' | 'para_llevar';
 export type DeliveryCompany = 'PedidosYa' | 'UberEats' | 'Rappi' | 'Propio' | 'Otro';
 
@@ -125,6 +149,8 @@ export interface OrderItem {
   nombre: string;
   cantidad: number;
   precio: number;
+  requiereCocina?: boolean;
+  estadoItem?: 'pendiente' | 'listo' | 'entregado';
   notas?: string | null;
   fotoUrl?: string | null;
   imagenUrl?: string | null;
@@ -157,6 +183,10 @@ export interface Order {
   propina?: number | null;
   total: number;
   estado: OrderStatus;
+  ruta?: OrderRoute; // express (sin cocina), cocina (preparación estándar), mixto (ambos)
+  estadoPago?: 'pendiente' | 'cobrado'; // Control independiente de cobro vs entrega
+  estadoEntrega?: 'pendiente' | 'entregado'; // Control de entrega en mostrador/mesa
+  esVentaExpress?: boolean;
   motivoRechazo?: string | null;
   metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia' | null;
   montoPagado?: number;
@@ -168,6 +198,9 @@ export interface Order {
   entregadoEn?: string;
   cobradoEn?: string;
   timeline?: OrderTimelineEvent[];
+  deliveryPaid?: boolean;
+  deliveryPaidDate?: string;
+  deliveryPayoutId?: string;
 }
 
 export interface CashRegisterClose {
@@ -192,13 +225,49 @@ export interface CashRegisterClose {
   creadoEn: string;
 }
 
+export type PurchaseUnit = 'kg' | 'litros' | 'unidades' | 'cajas';
+
+export interface PurchaseItem {
+  nombre: string;
+  cantidad: number;
+  unidad: PurchaseUnit | string;
+  precioUnitario: number;
+  subtotal: number;
+}
+
+export interface Supplier {
+  id: string;
+  businessId?: string;
+  nombre: string;
+  telefono?: string;
+  contacto?: string;
+  notas?: string;
+  appId?: string;
+  creadoEn?: string;
+}
+
+export type ExpenseType = 'sueldo' | 'insumos' | 'viveres' | 'transporte' | 'servicios' | 'mantenimiento' | 'otro' | 'otros';
+export type PaymentMethod = 'efectivo' | 'tarjeta' | 'transferencia' | 'credito' | 'otro';
+export type TransportVehicleType = 'mototaxi' | 'moto propia' | 'auto' | 'delivery tercero' | 'otro' | string;
+
 export interface Expense {
   id: string;
   businessId?: string;
   restaurantId: string;
-  tipo: 'sueldo' | 'insumos' | 'servicios' | 'mantenimiento' | 'otro';
+  tipo: ExpenseType;
   monto: number;
   descripcion: string;
+  vehiculo?: TransportVehicleType;
+  compraVinculadaId?: string;
+  compraVinculadaProveedor?: string;
+  proveedor?: string;
+  proveedorId?: string;
+  proveedorTelefono?: string;
+  metodoPago?: PaymentMethod;
+  comprobanteUrl?: string;
+  notas?: string;
+  itemsCompra?: PurchaseItem[];
+  registradoPor?: string;
   employeeId?: string;
   employeeName?: string;
   shiftId?: string;
@@ -225,8 +294,124 @@ export interface SecurityAlert {
   businessId: string;
   restaurantId?: string;
   restaurantNombre?: string;
-  tipo: 'fuerza_bruta_pin' | 'cambio_seguridad' | 'intruso';
+  tipo: 'fuerza_bruta_pin' | 'cambio_seguridad' | 'intruso' | 'pago_delivery_conciliado' | 'pago_sueldos_generado';
   mensaje: string;
   fecha: string;
   leido: boolean;
+  severidad?: 'baja' | 'media' | 'alta' | 'info';
+  origen?: string;
+  resuelta?: boolean;
 }
+
+export interface DailyChannelSales {
+  local: number;
+  pedidosYa: number;
+  uberEats: number;
+  rappi: number;
+  propio: number;
+  otro: number;
+}
+
+export interface DailyExpenseBreakdown {
+  sueldos: number;
+  viveres: number; // insumos / materias primas
+  transporte: number; // logística y transporte
+  servicios: number;
+  mantenimiento: number;
+  otros: number;
+}
+
+export interface DailyDishSale {
+  nombre: string;
+  cantidad: number;
+  total: number;
+}
+
+export interface DailyStat {
+  id: string; // `${businessId}_${restaurantId}_${fecha}`
+  businessId: string;
+  restaurantId: string;
+  fecha: string; // YYYY-MM-DD
+  ventasTotales: number;
+  gastosTotales: number;
+  gananciaNeta: number;
+  pedidosCobrados: number;
+  ticketPromedio: number;
+  ventasPorCanal: DailyChannelSales;
+  pedidosPorCanal: {
+    local: number;
+    pedidosYa: number;
+    uberEats: number;
+    rappi: number;
+    propio: number;
+    otro: number;
+  };
+  gastosPorTipo: DailyExpenseBreakdown;
+  ventasPorHora: Record<string, { ventas: number; gastos: number; pedidos: number }>;
+  topPlatos: DailyDishSale[];
+  horasTrabajadasTotal: number;
+  costoSueldosTurnos: number;
+  appId: 'gastro_smart';
+  creadoEn?: string;
+  actualizadoEn?: string;
+}
+
+export type FinancialTimeframe = 'dia' | 'semana' | 'mes';
+
+export interface FinancialKPI {
+  actual: number;
+  anterior: number;
+  variacionPorcentaje: number; // e.g. +12.5% or -4.2%
+}
+
+export interface FinancialSummaryData {
+  ventasTotales: FinancialKPI;
+  gastosOperativos: FinancialKPI;
+  gananciaNeta: FinancialKPI;
+  margenPorcentaje: FinancialKPI;
+  pedidosTotales: FinancialKPI;
+  ticketPromedio: FinancialKPI;
+  ventasPorCanal: {
+    canal: string;
+    nombre: string;
+    monto: number;
+    porcentaje: number;
+    pedidos: number;
+    color: string;
+  }[];
+  gastosPorTipo: {
+    tipo: string;
+    nombre: string;
+    monto: number;
+    porcentaje: number;
+    color: string;
+  }[];
+  topPlatos: DailyDishSale[];
+  horasTrabajadas: number;
+  costoLaboral: number;
+  ratioCostoLaboral: number; // (costoLaboral / ventas) * 100
+  chartData: {
+    label: string; // e.g. "12h", "Lun", "Semana 1"
+    ventas: number;
+    gastos: number;
+    ganancia: number;
+    pedidos?: number;
+  }[];
+  alertas: {
+    id: string;
+    tipo: 'warning' | 'info' | 'danger' | 'success';
+    titulo: string;
+    mensaje: string;
+  }[];
+  comparativaSucursales: {
+    restaurantId: string;
+    nombre: string;
+    ventas: number;
+    gastos: number;
+    ganancia: number;
+    pedidos: number;
+    ticketPromedio: number;
+    margen: number;
+  }[];
+}
+

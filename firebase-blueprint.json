@@ -156,7 +156,7 @@
     },
     "Expense": {
       "title": "Expense",
-      "description": "Gastos operativos y liquidaciones",
+      "description": "Gastos operativos, compras de víveres e insumos con itemsCompra y liquidaciones",
       "type": "object",
       "properties": {
         "businessId": { "type": "string" },
@@ -164,10 +164,31 @@
         "tipo": { "type": "string" },
         "monto": { "type": "number" },
         "descripcion": { "type": "string" },
+        "proveedor": { "type": "string" },
+        "proveedorTelefono": { "type": "string" },
+        "metodoPago": { "type": "string" },
+        "comprobanteUrl": { "type": "string" },
+        "notas": { "type": "string" },
+        "itemsCompra": { "type": "array" },
         "fecha": { "type": "string" },
         "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
       "required": ["businessId", "restaurantId", "monto", "descripcion", "fecha"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Directorio de proveedores registrados de víveres e insumos",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "nombre": { "type": "string" },
+        "telefono": { "type": "string" },
+        "contacto": { "type": "string" },
+        "notas": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] },
+        "creadoEn": { "type": "string" }
+      },
+      "required": ["businessId", "nombre"]
     },
     "LoginAttempt": {
       "title": "LoginAttempt",
@@ -195,6 +216,21 @@
         "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
       "required": ["businessId", "tipo", "mensaje", "fecha", "leido"]
+    },
+    "DailyStat": {
+      "title": "DailyStat",
+      "description": "Métricas financieras y operativas pre-agregadas por día y sucursal",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "fecha": { "type": "string" },
+        "ventasTotales": { "type": "number" },
+        "gastosTotales": { "type": "number" },
+        "pedidosCobrados": { "type": "number" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "restaurantId", "fecha", "ventasTotales", "gastosTotales", "pedidosCobrados"]
     }
   },
   "firestore": {
@@ -249,6 +285,10 @@
     "/securityAlerts/{alertId}": {
       "schema": "SecurityAlert",
       "description": "Alertas de seguridad"
+    },
+    "/dailyStats/{statId}": {
+      "schema": "DailyStat",
+      "description": "Estadísticas pre-agregadas diarias para análisis financiero"
     }
   }
 }

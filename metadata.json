@@ -1,7 +1,9 @@
 {
   "name": "Gastro Smart",
   "description": "Sistema completo de gestión de restaurantes multisede con roles de Administrador, Caja, Mesero y Cocina en tiempo real.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": [
+    "camera"
+  ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
