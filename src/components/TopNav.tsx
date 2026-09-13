@@ -143,12 +143,13 @@ export const TopNav: React.FC<TopNavProps> = ({
       if (ord.restaurantId !== currentRestaurant?.id) return;
       const prevStatus = prevReadyOrdersMapRef.current.get(ord.id);
       
-      // Pedido recién puesto en "listo"
+      // Pedido recién puesto en "listo" (mesero debe retirarlo)
       if (ord.estado === 'listo' && prevStatus !== 'listo') {
-        sounds.playOrderReady();
+        const toastId = 'ord-ready-' + ord.id;
+        sounds.startRepeatingAlarm(toastId, 'ready', 3800);
         const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
         setActiveToast({
-          id: 'ord-ready-' + ord.id,
+          id: toastId,
           title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
           desc: `La cocina completó el pedido con ${ord.items.length} plato(s). Listo para retirar y entregar.`,
           type: 'ready',
@@ -158,10 +159,11 @@ export const TopNav: React.FC<TopNavProps> = ({
 
       // Pedido recién rechazado por cocina
       if (ord.estado === 'rechazado' && prevStatus !== 'rechazado') {
-        sounds.playAlertWarning();
+        const toastId = 'ord-rej-' + ord.id;
+        sounds.startRepeatingAlarm(toastId, 'warning', 3800);
         const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery`;
         setActiveToast({
-          id: 'ord-rej-' + ord.id,
+          id: toastId,
           title: `⚠️ Pedido rechazado para ${targetDesc}`,
           desc: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina no pudo preparar este pedido.',
           type: 'rejected',
@@ -179,9 +181,10 @@ export const TopNav: React.FC<TopNavProps> = ({
 
     if (unreadAlerts.length > prevSecurityAlertsCountRef.current) {
       const latestAlert = unreadAlerts[0];
-      sounds.playSecurityAlert();
+      const toastId = 'sec-alert-' + (latestAlert?.id || Date.now());
+      sounds.startRepeatingAlarm(toastId, 'security', 4200);
       setActiveToast({
-        id: 'sec-alert-' + (latestAlert?.id || Date.now()),
+        id: toastId,
         title: '🛡️ ¡Alerta de Seguridad Registrada!',
         desc: latestAlert?.mensaje || 'Se detectó un incidente de seguridad en el sistema.',
         type: 'security'
@@ -191,7 +194,7 @@ export const TopNav: React.FC<TopNavProps> = ({
     prevSecurityAlertsCountRef.current = unreadAlerts.length;
   }, [unreadAlerts]);
 
-  // 3. Listener global para disparar notificaciones sonoras desde cualquier vista
+  // 3. Listener global para disparar notificaciones sonoras continuas desde cualquier vista
   useEffect(() => {
     const handleGlobalNotify = (e: Event) => {
       const customEvent = e as CustomEvent<{
@@ -204,15 +207,14 @@ export const TopNav: React.FC<TopNavProps> = ({
       const detail = customEvent.detail;
       if (!detail) return;
 
-      if (detail.sound === 'cash') sounds.playCashRegister();
-      else if (detail.sound === 'warning') sounds.playAlertWarning();
-      else if (detail.sound === 'security') sounds.playSecurityAlert();
-      else if (detail.sound === 'ready') sounds.playOrderReady();
-      else if (detail.sound === 'kitchen') sounds.playNewOrderKitchen();
-      else sounds.playNotification();
+      const toastId = 'global-toast-' + Date.now();
+      const soundType = detail.sound || (detail.type === 'ready' ? 'ready' : detail.type === 'rejected' ? 'warning' : detail.type === 'security' ? 'security' : 'notification');
+      
+      // Iniciar alarma repetitiva continua hasta marcar leído
+      sounds.startRepeatingAlarm(toastId, soundType, 4000);
 
       setActiveToast({
-        id: 'global-toast-' + Date.now(),
+        id: toastId,
         title: detail.title,
         desc: detail.desc,
         type: detail.type || 'general'
@@ -223,14 +225,13 @@ export const TopNav: React.FC<TopNavProps> = ({
     return () => window.removeEventListener('gastro-notify', handleGlobalNotify);
   }, []);
 
-  // Auto-dismiss del toast flotante después de 6 segundos
-  useEffect(() => {
-    if (!activeToast) return;
-    const timer = setTimeout(() => {
+  // Función para marcar como leída la notificación activa y detener el sonido inmediatamente
+  const handleDismissActiveToast = () => {
+    if (activeToast) {
+      sounds.stopRepeatingAlarm(activeToast.id);
       setActiveToast(null);
-    }, 6000);
-    return () => clearTimeout(timer);
-  }, [activeToast]);
+    }
+  };
 
   const calculateShiftHours = () => {
     if (!currentShift) return 0;
@@ -400,10 +401,14 @@ export const TopNav: React.FC<TopNavProps> = ({
                           </p>
                           {!alert.leido && (
                             <button
-                              onClick={() => markAlertRead(alert.id)}
+                              onClick={() => {
+                                markAlertRead(alert.id);
+                                sounds.stopRepeatingAlarm('sec-alert-' + alert.id);
+                                sounds.stopRepeatingAlarm('security-alert');
+                              }}
                               className="mt-2 text-[10px] font-bold text-red-700 hover:underline"
                             >
-                              Marcar como atendida
+                              Marcar como atendida / leída
                             </button>
                           )}
                         </div>
@@ -469,6 +474,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                       <div 
                         key={o.id}
                         onClick={() => {
+                          sounds.stopRepeatingAlarm('ord-ready-' + o.id);
+                          sounds.stopRepeatingAlarm('ord-rej-' + o.id);
                           onOrderClick?.(o);
                           setShowNotifications(false);
                         }}
@@ -539,19 +546,19 @@ export const TopNav: React.FC<TopNavProps> = ({
 
       </header>
 
-      {/* Floating Notification Toast en tiempo real */}
+      {/* Floating Notification Toast en tiempo real con repetición de sonido hasta marcar leído */}
       {activeToast && (
         <div className="fixed bottom-5 right-5 z-50 max-w-sm w-full animate-in slide-in-from-bottom-5 fade-in duration-200">
           <div className={`p-4 rounded-2xl shadow-2xl border flex items-start justify-between gap-3 backdrop-blur-md ${
             activeToast.type === 'ready' 
-              ? 'bg-emerald-900/95 text-white border-emerald-400/40 shadow-emerald-950/30'
+              ? 'bg-emerald-950/95 text-white border-emerald-400/50 shadow-emerald-950/40'
               : activeToast.type === 'security' || activeToast.type === 'rejected'
-              ? 'bg-red-950/95 text-white border-red-500/40 shadow-red-950/30'
-              : 'bg-neutral-900/95 text-white border-neutral-700/50 shadow-black/40'
+              ? 'bg-red-950/95 text-white border-red-500/50 shadow-red-950/40'
+              : 'bg-neutral-900/95 text-white border-neutral-700/50 shadow-black/50'
           }`}>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-base">
+                <span className="text-base animate-bounce">
                   {activeToast.type === 'ready' ? '🔔' : activeToast.type === 'security' ? '🛡️' : activeToast.type === 'rejected' ? '⚠️' : '✨'}
                 </span>
                 <h4 className="font-extrabold text-xs tracking-tight truncate">
@@ -561,24 +568,37 @@ export const TopNav: React.FC<TopNavProps> = ({
               <p className="text-[11px] text-neutral-200 mt-1 line-clamp-2 leading-relaxed font-medium">
                 {activeToast.desc}
               </p>
-              {activeToast.order && onOrderClick && (
+              
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    onOrderClick(activeToast.order!);
-                    setActiveToast(null);
-                  }}
-                  className="mt-2.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition shadow-xs"
+                  onClick={handleDismissActiveToast}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[11px] font-black flex items-center gap-1 transition shadow-sm active:scale-95"
                 >
-                  <span>Ver detalle del pedido</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Marcar como Leído</span>
                 </button>
-              )}
+
+                {activeToast.order && onOrderClick && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleDismissActiveToast();
+                      onOrderClick(activeToast.order!);
+                    }}
+                    className="px-2.5 py-1.5 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[11px] font-bold flex items-center gap-1 transition shadow-xs"
+                  >
+                    <span>Ver Pedido</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </div>
             <button
               type="button"
-              onClick={() => setActiveToast(null)}
+              onClick={handleDismissActiveToast}
               className="text-neutral-400 hover:text-white p-1 rounded-lg transition"
+              title="Cerrar y silenciar"
             >
               <X className="w-4 h-4" />
             </button>

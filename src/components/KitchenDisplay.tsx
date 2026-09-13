@@ -49,28 +49,23 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
          ['pendiente_cocina', 'en_preparacion', 'listo'].includes(o.estado)
   );
 
-  // Detección de nuevos pedidos entrantes y alertas de sonido
+  // Detección y alarma sonora continua para pedidos entrantes pendientes de recibir
   useEffect(() => {
     const pendingOrders = kitchenOrders.filter(o => o.estado === 'pendiente_cocina');
-    const currentPendingIds = new Set(pendingOrders.map(o => o.id));
-
-    // Si hay alguno nuevo que no estaba en el ref anterior
-    let hasNewOrder = false;
-    for (const id of currentPendingIds) {
-      if (!prevPendingIdsRef.current.has(id)) {
-        hasNewOrder = true;
-        break;
-      }
+    
+    if (pendingOrders.length > 0 && audioEnabled) {
+      // Iniciar alarma sonora continua en bucle que suena hasta que el cocinero acepte/reciba la comanda
+      sounds.startRepeatingAlarm('kitchen-pending-orders', 'kitchen', 3600);
+    } else {
+      sounds.stopRepeatingAlarm('kitchen-pending-orders');
     }
 
-    if (hasNewOrder && audioEnabled && prevPendingIdsRef.current.size > 0) {
-      sounds.playNewOrderKitchen();
-    }
-
-    prevPendingIdsRef.current = currentPendingIds;
+    return () => {
+      sounds.stopRepeatingAlarm('kitchen-pending-orders');
+    };
   }, [kitchenOrders, audioEnabled]);
 
-  // Aceptar pedido -> pasa a "en_preparacion"
+  // Aceptar / Recibir comanda individual -> pasa a "en_preparacion"
   const handleAcceptOrder = async (order: Order) => {
     sounds.playKeypadClick();
     await updateOrderStatus(
@@ -79,6 +74,20 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
       currentEmployee?.nombre || 'Chef de Cocina',
       { timeline: order.timeline || [] }
     );
+  };
+
+  // Recibir todas las comandas pendientes a la vez
+  const handleAcceptAllPending = async () => {
+    sounds.playCashRegister();
+    const pending = kitchenOrders.filter(o => o.estado === 'pendiente_cocina');
+    for (const ord of pending) {
+      await updateOrderStatus(
+        ord.id,
+        'en_preparacion',
+        currentEmployee?.nombre || 'Chef de Cocina',
+        { timeline: ord.timeline || [] }
+      );
+    }
   };
 
   // Marcar pedido como "listo" -> pasa a listo y genera sonido de alerta para mesero
@@ -174,12 +183,37 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
             }`}
             title="Activar/Desactivar sonido"
           >
-            {audioEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-red-400" />}
+            {audioEnabled ? <Volume2 className="w-4 h-4 text-emerald-400 animate-pulse" /> : <VolumeX className="w-4 h-4 text-red-400" />}
             <span className="hidden sm:inline">{audioEnabled ? 'Sonido ON' : 'Silencio'}</span>
           </button>
         </div>
 
       </div>
+
+      {/* Top Banner de Alerta Continua para Comandas Pendientes de Recibir */}
+      {kitchenOrders.some(o => o.estado === 'pendiente_cocina') && (
+        <div className="bg-orange-600/95 border-b border-orange-500 text-white px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 shadow-lg animate-pulse">
+          <div className="flex items-center gap-2">
+            <span className="p-1 rounded-lg bg-black/20 text-yellow-300 text-base">🚨</span>
+            <div>
+              <span className="font-extrabold text-sm tracking-tight">
+                ¡{kitchenOrders.filter(o => o.estado === 'pendiente_cocina').length} comanda(s) nueva(s) sin recibir!
+              </span>
+              <span className="text-xs text-orange-100 ml-2 hidden sm:inline">
+                (Emitiendo sonido continuo hasta confirmar "Recibido")
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleAcceptAllPending}
+            className="px-4 py-1.5 bg-white text-orange-900 hover:bg-orange-50 rounded-xl font-black text-xs transition shadow-md flex items-center gap-1.5"
+          >
+            <CheckCircle2 className="w-4 h-4 text-orange-600" />
+            <span>RECIBIR TODAS LAS COMANDAS</span>
+          </button>
+        </div>
+      )}
 
       {/* Main KDS Orders Stream */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden p-4 flex gap-4">
@@ -309,10 +343,15 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
                       <button
                         type="button"
                         onClick={() => handleAcceptOrder(order)}
-                        className="min-h-[56px] rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-black text-xs transition flex items-center justify-center gap-1.5 shadow-md shadow-orange-600/30"
+                        className="min-h-[56px] rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-black text-xs transition flex flex-col items-center justify-center gap-0.5 shadow-md shadow-orange-600/30 active:scale-98 animate-pulse"
                       >
-                        <Flame className="w-5 h-5" />
-                        Aceptar
+                        <div className="flex items-center gap-1.5">
+                          <Flame className="w-4 h-4" />
+                          <span>RECIBIR COMANDA</span>
+                        </div>
+                        <span className="text-[10px] text-orange-200 font-normal">
+                          (Confirmar recibido)
+                        </span>
                       </button>
                     </div>
                   )}

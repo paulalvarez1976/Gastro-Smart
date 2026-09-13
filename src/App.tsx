@@ -18,6 +18,7 @@ import {
 } from './services/dataService';
 import { Order, MenuItem, Table, Shift, Client } from './types';
 import { UtensilsCrossed, ShieldAlert, Loader2 } from 'lucide-react';
+import { sounds } from './utils/sound';
 
 const MainAppContent: React.FC = () => {
   const { 
@@ -236,6 +237,8 @@ const MainAppContent: React.FC = () => {
                 <button
                   type="button"
                   onClick={async () => {
+                    sounds.stopRepeatingAlarm('ord-ready-' + activeOrderModal.id);
+                    sounds.stopRepeatingAlarm('ord-rej-' + activeOrderModal.id);
                     await updateOrderStatus(
                       activeOrderModal.id, 
                       'entregado', 
@@ -252,10 +255,14 @@ const MainAppContent: React.FC = () => {
 
               <button
                 type="button"
-                onClick={() => setActiveOrderModal(null)}
+                onClick={() => {
+                  sounds.stopRepeatingAlarm('ord-ready-' + activeOrderModal.id);
+                  sounds.stopRepeatingAlarm('ord-rej-' + activeOrderModal.id);
+                  setActiveOrderModal(null);
+                }}
                 className="w-full h-11 rounded-xl bg-neutral-100 hover:bg-neutral-200 font-bold text-xs text-neutral-700"
               >
-                Cerrar Detalle
+                Cerrar Detalle y Silenciar
               </button>
             </div>
           </div>

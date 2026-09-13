@@ -2,6 +2,7 @@ class SoundEffects {
   private ctx: AudioContext | null = null;
   private muted: boolean = false;
   private unlocked: boolean = false;
+  private activeAlarms: Map<string, { intervalId: any; type: string }> = new Map();
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -37,11 +38,100 @@ class SoundEffects {
     if (typeof window !== 'undefined') {
       localStorage.setItem('gastro_sound_muted', muted ? 'true' : 'false');
     }
+    if (muted) {
+      this.stopAllAlarms();
+    }
   }
 
   public toggleMute(): boolean {
     this.setMuted(!this.muted);
     return this.muted;
+  }
+
+  /**
+   * Inicia una alarma sonora continua y repetitiva que suena periódicamente
+   * hasta que el colaborador marque leído / recibido o la detenga explícitamente.
+   */
+  public startRepeatingAlarm(
+    alarmKey: string, 
+    type: 'kitchen' | 'ready' | 'security' | 'warning' | 'cash' | 'notification' = 'notification',
+    intervalMs: number = 3800
+  ) {
+    if (this.muted) return;
+    
+    // Si ya está sonando esta misma alarma, no duplicar el intervalo
+    if (this.activeAlarms.has(alarmKey)) {
+      return;
+    }
+
+    const playByType = () => {
+      switch (type) {
+        case 'kitchen':
+          this.playNewOrderKitchen();
+          break;
+        case 'ready':
+          this.playOrderReady();
+          break;
+        case 'security':
+          this.playSecurityAlert();
+          break;
+        case 'warning':
+          this.playAlertWarning();
+          break;
+        case 'cash':
+          this.playCashRegister();
+          break;
+        case 'notification':
+        default:
+          this.playNotification();
+          break;
+      }
+    };
+
+    // Tocar de inmediato
+    playByType();
+
+    // Repetir en loop continuo hasta confirmación
+    const intervalId = setInterval(() => {
+      if (this.muted) {
+        this.stopRepeatingAlarm(alarmKey);
+        return;
+      }
+      playByType();
+    }, intervalMs);
+
+    this.activeAlarms.set(alarmKey, { intervalId, type });
+  }
+
+  /**
+   * Detiene una alarma continua específica identificada por su clave
+   */
+  public stopRepeatingAlarm(alarmKey: string) {
+    const existing = this.activeAlarms.get(alarmKey);
+    if (existing) {
+      clearInterval(existing.intervalId);
+      this.activeAlarms.delete(alarmKey);
+    }
+  }
+
+  /**
+   * Detiene todas las alarmas sonoras continuas activas
+   */
+  public stopAllAlarms() {
+    this.activeAlarms.forEach(alarm => {
+      clearInterval(alarm.intervalId);
+    });
+    this.activeAlarms.clear();
+  }
+
+  /**
+   * Verifica si hay alarmas sonando activamente
+   */
+  public hasActiveAlarm(alarmKey?: string): boolean {
+    if (alarmKey) {
+      return this.activeAlarms.has(alarmKey);
+    }
+    return this.activeAlarms.size > 0;
   }
 
   private init() {
