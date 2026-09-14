@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Shift } from '../types';
-import { openShift, closeShift, subscribeToShifts } from '../services/dataService';
+import { openShift, closeShift, subscribeToShifts, pauseShift, resumeShift } from '../services/dataService';
 import { sounds } from '../utils/sound';
 import { 
   Clock, 
   Calendar, 
   Play, 
   Square, 
+  Pause,
   FileText, 
   CheckCircle2, 
   LogOut, 
@@ -50,9 +51,21 @@ export const StaffAttendanceView: React.FC = () => {
 
   // Si tiene turno abierto ahora, sumarlo a las horas de hoy
   let currentShiftMinutes = 0;
-  if (currentShift && currentShift.estado === 'abierto') {
+  if (currentShift && (currentShift.estado === 'abierto' || currentShift.estado === 'en_pausa')) {
     const startMs = new Date(currentShift.horaInicio).getTime();
     currentShiftMinutes = Math.max(0, Math.floor((currentTime.getTime() - startMs) / 60000));
+    
+    if (currentShift.pausas && currentShift.pausas.length > 0) {
+      let pauseMinutes = 0;
+      currentShift.pausas.forEach(p => {
+        if (p.fin) {
+          pauseMinutes += Math.max(0, Math.floor((new Date(p.fin).getTime() - new Date(p.inicio).getTime()) / 60000));
+        } else {
+          pauseMinutes += Math.max(0, Math.floor((currentTime.getTime() - new Date(p.inicio).getTime()) / 60000));
+        }
+      });
+      currentShiftMinutes = Math.max(0, currentShiftMinutes - pauseMinutes);
+    }
   }
   const totalTodayHours = ((todayMinutesClosed + currentShiftMinutes) / 60).toFixed(1);
 
@@ -95,7 +108,7 @@ export const StaffAttendanceView: React.FC = () => {
     ? 'bg-amber-100 text-amber-800 border-amber-300'
     : 'bg-teal-100 text-teal-800 border-teal-300';
 
-  const isShiftOpen = !!(currentShift && currentShift.estado === 'abierto');
+  const isShiftOpen = !!(currentShift && (currentShift.estado === 'abierto' || currentShift.estado === 'en_pausa'));
 
   return (
     <div className="min-h-screen bg-neutral-900 text-white flex flex-col justify-between p-6 sm:p-10 select-none">
@@ -157,20 +170,50 @@ export const StaffAttendanceView: React.FC = () => {
               <span>INICIAR TURNO</span>
             </button>
           ) : (
-            <button
-              onClick={() => setShowCloseModal(true)}
-              disabled={isProcessing}
-              className="w-full h-24 sm:h-28 rounded-3xl bg-red-600 hover:bg-red-500 active:bg-red-700 text-white font-black text-2xl sm:text-3xl shadow-2xl shadow-red-900/50 transition-all transform hover:scale-[1.02] active:scale-[0.98] flex items-center justify-center gap-4 disabled:opacity-50"
-            >
-              <Square className="w-9 h-9 fill-current" />
-              <span>CERRAR TURNO</span>
-            </button>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={async () => {
+                  try {
+                    setIsProcessing(true);
+                    sounds.playNotification();
+                    if (currentShift?.estado === 'en_pausa') {
+                      await resumeShift(currentShift.id);
+                    } else {
+                      await pauseShift(currentShift.id);
+                    }
+                  } catch (e) {
+                    console.error(e);
+                    alert('Error al cambiar estado de pausa');
+                  } finally {
+                    setIsProcessing(false);
+                  }
+                }}
+                disabled={isProcessing}
+                className={`w-full h-24 sm:h-28 rounded-3xl font-black text-xl sm:text-2xl transition-all transform hover:scale-[1.02] active:scale-[0.98] flex flex-col items-center justify-center gap-2 disabled:opacity-50 ${
+                  currentShift?.estado === 'en_pausa'
+                    ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-2xl shadow-emerald-900/50'
+                    : 'bg-amber-500 hover:bg-amber-400 text-amber-950 shadow-2xl shadow-amber-900/50'
+                }`}
+              >
+                {currentShift?.estado === 'en_pausa' ? <Play className="w-8 h-8 fill-current" /> : <Pause className="w-8 h-8 fill-current" />}
+                <span>{currentShift?.estado === 'en_pausa' ? 'REANUDAR' : 'PAUSAR'}</span>
+              </button>
+              
+              <button
+                onClick={() => setShowCloseModal(true)}
+                disabled={isProcessing}
+                className="w-full h-24 sm:h-28 rounded-3xl bg-red-600 hover:bg-red-500 active:bg-red-700 text-white font-black text-xl sm:text-2xl shadow-2xl shadow-red-900/50 transition-all transform hover:scale-[1.02] active:scale-[0.98] flex flex-col items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <Square className="w-8 h-8 fill-current" />
+                <span>CERRAR TURNO</span>
+              </button>
+            </div>
           )}
 
           {isShiftOpen && (
-            <div className="mt-3 flex items-center justify-center gap-2 text-xs font-bold text-emerald-400 animate-pulse">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-              <span>Turno actualmente abierto (en curso)</span>
+            <div className={`mt-3 flex items-center justify-center gap-2 text-xs font-bold ${currentShift?.estado === 'en_pausa' ? 'text-amber-400' : 'text-emerald-400 animate-pulse'}`}>
+              <span className={`w-2.5 h-2.5 rounded-full ${currentShift?.estado === 'en_pausa' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+              <span>{currentShift?.estado === 'en_pausa' ? 'Turno actualmente en pausa' : 'Turno actualmente abierto (en curso)'}</span>
             </div>
           )}
         </div>

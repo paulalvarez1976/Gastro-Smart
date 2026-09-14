@@ -1,14 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Shift, 
   Employee, 
   Restaurant, 
   Role,
-  PaymentMethod 
+  PaymentMethod,
+  Expense
 } from '../types';
 import { 
   paySalaryBatch,
-  payFixedSalaryExpense 
+  payFixedSalaryExpense,
+  subscribeToExpenses,
+  getOperationalDateString,
+  getOperationalMonthString
 } from '../services/dataService';
 import { exportPayrollToExcel, PayrollEmployeeRow } from '../services/excelService';
 import { sounds } from '../utils/sound';
@@ -27,10 +31,15 @@ import {
   Check, 
   X,
   ChevronDown,
+  ChevronUp,
   Briefcase,
   Wallet,
   Receipt,
-  CreditCard
+  CreditCard,
+  Download,
+  CalendarCheck,
+  Layers,
+  PauseCircle
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -70,8 +79,12 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
     );
   }
 
-  // Pestaña activa: Por Horas / Turnos vs Sueldo Fijo Mensual
-  const [activeTab, setActiveTab] = useState<'turnos' | 'fijos'>('turnos');
+  // Pestaña activa: Por Horas / Turnos vs Sueldo Fijo Mensual vs Reporte Días Trabajados
+  const [activeTab, setActiveTab] = useState<'turnos' | 'fijos' | 'dias_trabajados'>('turnos');
+
+  // Estado para Reporte de Días Trabajados
+  const [expandedEmployeeId, setExpandedEmployeeId] = useState<string | null>(null);
+  const [workingDaysMonthFilter, setWorkingDaysMonthFilter] = useState<string>('all');
 
   // Filtros
   const [dateRangePreset, setDateRangePreset] = useState<'hoy' | 'semana' | 'quincena' | 'mes' | 'todos'>('semana');
@@ -99,6 +112,17 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
   const [fixedPayNotes, setFixedPayNotes] = useState<string>('');
   const [isProcessingFixedPay, setIsProcessingFixedPay] = useState<boolean>(false);
   const [fixedPayError, setFixedPayError] = useState<string | null>(null);
+
+  // Gastos de sueldos (pagos reales registrados)
+  const [salaryExpenses, setSalaryExpenses] = useState<Expense[]>([]);
+
+  useEffect(() => {
+    const targetRestId = selectedBranchId === 'all' ? null : selectedBranchId;
+    const unsub = subscribeToExpenses(businessId, targetRestId, (data) => {
+      setSalaryExpenses(data.filter(e => e.tipo === 'sueldo'));
+    });
+    return () => unsub();
+  }, [businessId, selectedBranchId]);
 
   const monthNames = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -133,32 +157,33 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
     });
   }, [employees, selectedBranchId]);
 
-  // Calcular fechas según preset
+  // Calcular fechas según preset aplicando el día operativo (5:00 a.m. - 4:59 a.m.)
   const dateFilter = useMemo(() => {
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = getOperationalDateString(now);
+    const [y, m, d] = todayStr.split('-').map(Number);
+    const opNow = new Date(y, m - 1, d, 12, 0, 0);
 
     if (dateRangePreset === 'hoy') {
-      return { start: todayStr, end: todayStr, label: 'Hoy' };
+      return { start: todayStr, end: todayStr, label: 'Hoy (Día Operativo)' };
     }
     if (dateRangePreset === 'semana') {
-      const d = new Date(now);
-      const day = d.getDay();
-      const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Lunes
-      d.setDate(diff);
-      const start = d.toISOString().split('T')[0];
+      const dateObj = new Date(opNow);
+      const day = dateObj.getDay();
+      const diff = dateObj.getDate() - day + (day === 0 ? -6 : 1); // Lunes
+      dateObj.setDate(diff);
+      const start = getOperationalDateString(dateObj);
       return { start, end: todayStr, label: 'Esta Semana' };
     }
     if (dateRangePreset === 'quincena') {
-      const d = new Date(now);
-      d.setDate(d.getDate() - 15);
-      const start = d.toISOString().split('T')[0];
+      const dateObj = new Date(opNow);
+      dateObj.setDate(dateObj.getDate() - 15);
+      const start = getOperationalDateString(dateObj);
       return { start, end: todayStr, label: 'Última Quincena (15 días)' };
     }
     if (dateRangePreset === 'mes') {
-      const d = new Date(now.getFullYear(), now.getMonth(), 1);
-      const start = d.toISOString().split('T')[0];
-      return { start, end: todayStr, label: 'Este Mes' };
+      const start = `${todayStr.slice(0, 7)}-01`;
+      return { start, end: todayStr, label: 'Este Mes Operativo' };
     }
     return { start: '2020-01-01', end: '2030-12-31', label: 'Todo el Historial' };
   }, [dateRangePreset]);
@@ -182,8 +207,8 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         if (role !== selectedRole) return false;
       }
 
-      // Filtro de fechas
-      const shiftDate = s.fecha || (s.horaInicio || '').split('T')[0];
+      // Filtro de fechas respetando el día operativo 5:00 a.m. - 4:59 a.m.
+      const shiftDate = getOperationalDateString(s.horaInicio || s.fecha);
       if (shiftDate < dateFilter.start || shiftDate > dateFilter.end) return false;
 
       return true;
@@ -200,84 +225,198 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
     return new Map(restaurants.map(r => [r.id, r.nombre]));
   }, [restaurants]);
 
-  // Agrupación y cálculo de horas normales y extras por empleado
-  // Regla: más de 8h diarias o más de 48h semanales
-  const payrollRows: PayrollEmployeeRow[] = useMemo(() => {
-    const grouped: Record<string, {
-      employee: Employee;
-      shifts: Shift[];
-      normalHours: number;
-      overtimeHours: number;
-      totalHours: number;
-    }> = {};
+  // Estructura de desglose de días trabajados por empleado
+  const workingDaysReport = useMemo(() => {
+    const targetEmployees = employees.filter(e => {
+      if (selectedBranchId !== 'all' && e.restaurantId !== selectedBranchId) return false;
+      if (selectedEmployeeId !== 'all' && e.id !== selectedEmployeeId) return false;
+      if (selectedRole !== 'all' && e.puesto !== selectedRole) return false;
+      return true;
+    });
 
-    filteredShifts.forEach(shift => {
-      const emp = employeeMap.get(shift.employeeId) || {
-        id: shift.employeeId,
-        nombre: shift.employeeName || 'Empleado',
-        puesto: shift.employeePuesto || 'mesero',
-        tarifaHora: 12,
-        restaurantId: shift.restaurantId,
-        activo: true,
-        pin: '0000'
-      };
+    return targetEmployees.map(emp => {
+      // Obtener todos los turnos de este empleado que caen en el rango filtrado
+      const empShifts = filteredShifts.filter(s => {
+        if (s.employeeId !== emp.id) return false;
+        if (workingDaysMonthFilter !== 'all') {
+          const shiftMonth = getOperationalMonthString(s.horaInicio || s.fecha);
+          if (shiftMonth !== workingDaysMonthFilter) return false;
+        }
+        return true;
+      });
 
-      if (!grouped[emp.id]) {
-        grouped[emp.id] = {
-          employee: emp,
-          shifts: [],
-          normalHours: 0,
-          overtimeHours: 0,
-          totalHours: 0
-        };
+      // Agrupar turnos por fecha operativa (5:00 a.m. - 4:59 a.m.)
+      const dayMap = new Map<string, Shift[]>();
+      empShifts.forEach(shift => {
+        const opDate = getOperationalDateString(shift.horaInicio || shift.fecha);
+        if (!dayMap.has(opDate)) {
+          dayMap.set(opDate, []);
+        }
+        dayMap.get(opDate)!.push(shift);
+      });
+
+      // Construir detalle por día
+      interface ShiftDayDetail {
+        fechaOperativa: string;
+        fechaLabel: string;
+        minutosTotales: number;
+        horasTotales: number;
+        turnos: Shift[];
+        pausasTotales: number;
+        pausasMinutos: number;
       }
 
-      const minutes = shift.minutosTrabajados || 0;
-      const hours = minutes / 60;
+      const diasDetalle: ShiftDayDetail[] = [];
+      let grandTotalMinutos = 0;
 
-      // Más de 8 horas en un solo turno se considera extra
-      const normal = Math.min(8, hours);
-      const extra = Math.max(0, hours - 8);
+      dayMap.forEach((shiftsInDay, opDate) => {
+        let minutosDia = 0;
+        let pausasCount = 0;
+        let pausasMin = 0;
 
-      grouped[emp.id].shifts.push(shift);
-      grouped[emp.id].normalHours += normal;
-      grouped[emp.id].overtimeHours += extra;
-      grouped[emp.id].totalHours += hours;
-    });
+        shiftsInDay.forEach(s => {
+          const shiftPauseMin = s.pausasMinutos ?? (s.pausas || []).reduce((sum, p) => sum + (p.minutos || 0), 0);
+          let shiftMin = s.minutosTrabajados;
+          if (shiftMin === undefined || shiftMin === null) {
+            const start = new Date(s.horaInicio).getTime();
+            const end = s.horaFin ? new Date(s.horaFin).getTime() : Date.now();
+            shiftMin = Math.max(0, Math.round((end - start) / 60000) - shiftPauseMin);
+          }
+          minutosDia += shiftMin;
+          if (s.pausas && s.pausas.length > 0) {
+            pausasCount += s.pausas.length;
+          }
+          pausasMin += shiftPauseMin;
+        });
 
-    return Object.values(grouped).map(g => {
-      const rate = g.employee.tarifaHora || 12;
-      const normalH = Math.round(g.normalHours * 10) / 10;
-      const extraH = Math.round(g.overtimeHours * 10) / 10;
-      const totalH = Math.round(g.totalHours * 10) / 10;
+        grandTotalMinutos += minutosDia;
+        const [y, m, d] = opDate.split('-').map(Number);
+        const dateObj = new Date(y, m - 1, d, 12, 0, 0);
+        const fechaLabel = dateObj.toLocaleDateString('es-ES', { 
+          weekday: 'short', 
+          day: 'numeric', 
+          month: 'short', 
+          year: 'numeric' 
+        });
 
-      const totalNormal = Math.round(normalH * rate * 100) / 100;
-      const totalExtra = Math.round(extraH * rate * overtimeMultiplier * 100) / 100;
-      const totalPagar = Math.round((totalNormal + totalExtra) * 100) / 100;
+        diasDetalle.push({
+          fechaOperativa: opDate,
+          fechaLabel,
+          minutosTotales: minutosDia,
+          horasTotales: Math.round((minutosDia / 60) * 10) / 10,
+          turnos: shiftsInDay,
+          pausasTotales: pausasCount,
+          pausasMinutos: pausasMin
+        });
+      });
 
-      const allPaid = g.shifts.length > 0 && g.shifts.every(s => Boolean(s.pagado ?? s.sueldoPagado ?? false));
-      const somePaid = g.shifts.some(s => Boolean(s.pagado ?? s.sueldoPagado ?? false));
-      const estadoPago = allPaid ? 'Pagado' : somePaid ? 'Parcial' : 'Pendiente';
+      // Ordenar días del más reciente al más antiguo
+      diasDetalle.sort((a, b) => b.fechaOperativa.localeCompare(a.fechaOperativa));
 
-      const restName = restaurantMap.get(g.employee.restaurantId) || 'Principal';
+      const diasTrabajados = diasDetalle.length;
+      const horasTotales = Math.round((grandTotalMinutos / 60) * 10) / 10;
+      const promedioHorasDia = diasTrabajados > 0 
+        ? Math.round((horasTotales / diasTrabajados) * 10) / 10 
+        : 0;
+
+      const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
 
       return {
-        empleadoId: g.employee.id,
-        nombre: g.employee.nombre,
-        puesto: g.employee.puesto,
+        empleadoId: emp.id,
+        nombre: emp.nombre,
+        puesto: emp.puesto,
+        sucursal: restName,
+        avatarUrl: emp.avatarUrl,
+        tipoSueldo: emp.tipoSueldo || 'por_hora',
+        tarifaHora: emp.tarifaHora || 0,
+        diasTrabajados,
+        horasTotales,
+        promedioHorasDia,
+        diasDetalle
+      };
+    }).sort((a, b) => b.diasTrabajados - a.diasTrabajados || b.horasTotales - a.horasTotales);
+  }, [employees, filteredShifts, workingDaysMonthFilter, restaurantMap, selectedBranchId, selectedEmployeeId, selectedRole]);
+
+  // Exportar reporte de días trabajados a CSV
+  const handleExportWorkingDaysCSV = () => {
+    sounds.playKeypadClick();
+    const headers = [
+      'Empleado',
+      'Puesto/Rol',
+      'Sucursal',
+      'Tipo Sueldo',
+      'Tarifa Hora',
+      'Dias Trabajados (Ciclo Operativo)',
+      'Horas Totales',
+      'Promedio Horas/Dia'
+    ];
+    const rows = workingDaysReport.map(r => [
+      `"${r.nombre.replace(/"/g, '""')}"`,
+      `"${r.puesto}"`,
+      `"${r.sucursal}"`,
+      `"${r.tipoSueldo}"`,
+      `"$${r.tarifaHora.toFixed(2)}"`,
+      r.diasTrabajados,
+      r.horasTotales,
+      r.promedioHorasDia
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + 
+      [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Reporte_Dias_Trabajados_${dateFilter.label.replace(/[^a-zA-Z0-9]/g, '_')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Agrupación y cálculo basado ÚNICAMENTE en pagos reales registrados (Gastos)
+  const payrollRows: PayrollEmployeeRow[] = useMemo(() => {
+    // 1. Filtrar empleados aplicables por hora
+    const hourlyEmployees = employees.filter(e => {
+      if (e.tipoSueldo === 'fijo') return false;
+      if (selectedBranchId !== 'all' && e.restaurantId !== selectedBranchId) return false;
+      if (selectedEmployeeId !== 'all' && e.id !== selectedEmployeeId) return false;
+      if (selectedRole !== 'all' && e.puesto !== selectedRole) return false;
+      return true;
+    });
+
+    // 2. Asociar los gastos reales del periodo a cada empleado
+    return hourlyEmployees.map(emp => {
+      const expForEmp = salaryExpenses.filter(e => {
+        if (e.employeeId !== emp.id) return false;
+        const expDate = (e.fecha || '').split('T')[0];
+        return expDate >= dateFilter.start && expDate <= dateFilter.end;
+      });
+
+      const totalPagado = expForEmp.reduce((sum, e) => sum + (e.monto || 0), 0);
+      const horasTrab = expForEmp.reduce((sum, e) => sum + (e.horasTrabajadas || 0), 0);
+      const horasExt = expForEmp.reduce((sum, e) => sum + (e.horasExtra || 0), 0);
+
+      const estado = expForEmp.length > 0 ? 'Pagado' : 'Sin pagos registrados';
+      const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
+      const rate = emp.tarifaHora || 0;
+
+      return {
+        empleadoId: emp.id,
+        nombre: emp.nombre,
+        puesto: emp.puesto,
         sucursal: restName,
         tarifaHora: rate,
-        horasNormales: normalH,
-        horasExtra: extraH,
-        horasTotales: totalH,
-        totalNormal,
-        totalExtra,
-        totalPagar,
-        turnosContados: g.shifts.length,
-        estadoPago
+        horasNormales: Math.max(0, horasTrab - horasExt),
+        horasExtra: horasExt,
+        horasTotales: horasTrab,
+        totalNormal: 0, // Solo mostramos los totales pagados reales
+        totalExtra: 0, 
+        totalPagar: totalPagado,
+        turnosContados: expForEmp.length,
+        estadoPago: estado
       };
     });
-  }, [filteredShifts, employeeMap, restaurantMap, overtimeMultiplier]);
+  }, [salaryExpenses, employees, restaurantMap, selectedEmployeeId, selectedBranchId, selectedRole, dateFilter]);
 
   // Datos para la gráfica de barras: Horas por día de los turnos filtrados
   const chartData = useMemo(() => {
@@ -384,12 +523,12 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         </div>
       )}
 
-      {/* Tab Navigation: Horas/Turnos vs Sueldo Fijo */}
-      <div className="flex items-center gap-2 border-b border-neutral-200 pb-2">
+      {/* Tab Navigation: Horas/Turnos vs Sueldo Fijo vs Reporte Días Trabajados */}
+      <div className="flex items-center gap-2 border-b border-neutral-200 pb-2 overflow-x-auto">
         <button
           type="button"
           onClick={() => { setActiveTab('turnos'); sounds.playKeypadClick(); }}
-          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer ${
+          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer shrink-0 ${
             activeTab === 'turnos'
               ? 'bg-purple-600 text-white shadow-xs'
               : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
@@ -402,7 +541,7 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         <button
           type="button"
           onClick={() => { setActiveTab('fijos'); sounds.playKeypadClick(); }}
-          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer ${
+          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer shrink-0 ${
             activeTab === 'fijos'
               ? 'bg-indigo-600 text-white shadow-xs'
               : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
@@ -411,7 +550,419 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
           <Wallet className="w-4 h-4" />
           <span>Personal con Sueldo Fijo Mensual ({fixedEmployees.length})</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => { setActiveTab('dias_trabajados'); sounds.playKeypadClick(); }}
+          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer shrink-0 ${
+            activeTab === 'dias_trabajados'
+              ? 'bg-emerald-600 text-white shadow-xs'
+              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+          }`}
+        >
+          <CalendarCheck className="w-4 h-4" />
+          <span>Reporte: Días Trabajados (Ciclo Operativo)</span>
+        </button>
       </div>
+
+      {/* TAB 1: Reporte de Días Trabajados (Ciclo Operativo 5:00 a.m. - 4:59 a.m.) */}
+      {activeTab === 'dias_trabajados' && (
+        <div className="space-y-6">
+          {/* Header & Controls */}
+          <div className="bg-white p-6 rounded-3xl border border-neutral-200 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1">
+                  <CalendarCheck className="w-4 h-4" />
+                  <span>Reporte Consolidado • Solo Lectura</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-neutral-900">
+                  Horas Trabajadas Resumidas en Días Laborados
+                </h2>
+                <p className="text-xs text-neutral-500 mt-0.5">
+                  Agrupación de horas y turnos de cada empleado bajo el <strong>Día Operativo (5:00 a.m. a 4:59 a.m.)</strong>.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleExportWorkingDaysCSV}
+                  className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-black transition flex items-center gap-2 border border-emerald-200 cursor-pointer shadow-xs"
+                >
+                  <Download className="w-4 h-4 text-emerald-600" />
+                  <span>Exportar CSV</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Banner Explicativo Día Operativo */}
+            <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-2xl flex items-start gap-3 text-xs text-emerald-900">
+              <span className="text-base">ℹ️</span>
+              <div>
+                <strong className="font-bold">Regla del Ciclo Operativo (5:00 a.m. - 4:59 a.m.):</strong>
+                <p className="text-emerald-800 text-[11px] mt-0.5">
+                  Todo turno iniciado entre las 5:00 a.m. de hoy y las 4:59 a.m. de la mañana siguiente se contabiliza dentro del mismo día operativo. Los turnos nocturnos o de madrugada no se fragmentan artificialmente, garantizando un recuento exacto de días trabajados por persona.
+                </p>
+              </div>
+            </div>
+
+            {/* Filtros */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2 border-t border-neutral-100">
+              {/* Preset de Rango */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+                  Rango de Fecha:
+                </label>
+                <select
+                  value={dateRangePreset}
+                  onChange={(e) => setDateRangePreset(e.target.value as any)}
+                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
+                >
+                  <option value="hoy">Hoy (Día Operativo)</option>
+                  <option value="semana">Esta Semana</option>
+                  <option value="quincena">Última Quincena (15 días)</option>
+                  <option value="mes">Este Mes Operativo</option>
+                  <option value="todos">Todo el Historial</option>
+                </select>
+              </div>
+
+              {/* Mes Operativo */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+                  Mes Específico:
+                </label>
+                <select
+                  value={workingDaysMonthFilter}
+                  onChange={(e) => setWorkingDaysMonthFilter(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
+                >
+                  <option value="all">Todos los Meses</option>
+                  {availableMonths.map(m => (
+                    <option key={m.key} value={m.key}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Sucursal */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+                  Sucursal:
+                </label>
+                <select
+                  value={selectedBranchId}
+                  onChange={(e) => setSelectedBranchId(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
+                >
+                  <option value="all">Todas las Sucursales</option>
+                  {restaurants.map(r => (
+                    <option key={r.id} value={r.id}>{r.nombre}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Rol / Puesto */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+                  Puesto / Rol:
+                </label>
+                <select
+                  value={selectedRole}
+                  onChange={(e) => setSelectedRole(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
+                >
+                  <option value="all">Todos los Puestos</option>
+                  <option value="administrador">Administrador</option>
+                  <option value="cajero">Cajero</option>
+                  <option value="mesero">Mesero</option>
+                  <option value="cocinero">Cocinero</option>
+                  <option value="repartidor">Repartidor</option>
+                </select>
+              </div>
+
+              {/* Empleado Específico */}
+              <div>
+                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+                  Empleado:
+                </label>
+                <select
+                  value={selectedEmployeeId}
+                  onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
+                >
+                  <option value="all">Todos los Empleados ({employees.length})</option>
+                  {employees.map(e => (
+                    <option key={e.id} value={e.id}>{e.nombre} ({e.puesto})</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <CalendarCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Días-Hombre Totales</span>
+                  <div className="text-2xl font-black text-neutral-900">
+                    {workingDaysReport.reduce((acc, r) => acc + r.diasTrabajados, 0)} <span className="text-xs font-bold text-neutral-400">días</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Horas Acumuladas</span>
+                  <div className="text-2xl font-black text-blue-700">
+                    {workingDaysReport.reduce((acc, r) => acc + r.horasTotales, 0).toFixed(1)} <span className="text-xs font-bold text-blue-400">hrs</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Personal con Asistencia</span>
+                  <div className="text-2xl font-black text-neutral-900">
+                    {workingDaysReport.filter(r => r.diasTrabajados > 0).length} <span className="text-xs font-bold text-neutral-400">/ {workingDaysReport.length}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Promedio Diario</span>
+                  <div className="text-2xl font-black text-amber-800">
+                    {(() => {
+                      const totalDias = workingDaysReport.reduce((acc, r) => acc + r.diasTrabajados, 0);
+                      const totalHoras = workingDaysReport.reduce((acc, r) => acc + r.horasTotales, 0);
+                      return totalDias > 0 ? (totalHoras / totalDias).toFixed(1) : '0.0';
+                    })()} <span className="text-xs font-bold text-amber-500">hrs/día</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Tabla de Empleados y Días Trabajados */}
+          <div className="bg-white rounded-3xl border border-neutral-200 overflow-hidden shadow-sm">
+            <div className="p-4 sm:p-5 border-b border-neutral-100 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-black text-neutral-900 uppercase tracking-wider">
+                  Resumen de Días Trabajados por Empleado
+                </h3>
+                <p className="text-xs text-neutral-400">
+                  Desglose de días laborados, horas netas trabajadas y detalle de cada jornada diaria.
+                </p>
+              </div>
+              <span className="text-xs font-bold text-neutral-500 bg-neutral-100 px-3 py-1 rounded-full">
+                {workingDaysReport.length} empleados
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-neutral-50 text-neutral-500 border-b border-neutral-200 font-bold">
+                    <th className="p-3.5">Empleado</th>
+                    <th className="p-3.5">Puesto</th>
+                    <th className="p-3.5">Sucursal</th>
+                    <th className="p-3.5">Tipo Sueldo</th>
+                    <th className="p-3.5 text-center">Días Trabajados</th>
+                    <th className="p-3.5 text-right">Horas Totales</th>
+                    <th className="p-3.5 text-right">Promedio / Día</th>
+                    <th className="p-3.5 text-center">Detalle</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100">
+                  {workingDaysReport.map(row => {
+                    const isExpanded = expandedEmployeeId === row.empleadoId;
+
+                    return (
+                      <React.Fragment key={row.empleadoId}>
+                        <tr className={`hover:bg-neutral-50/60 transition ${isExpanded ? 'bg-emerald-50/20' : ''}`}>
+                          <td className="p-3.5 font-bold text-neutral-900">
+                            <div className="flex items-center gap-2.5">
+                              {row.avatarUrl ? (
+                                <img src={row.avatarUrl} alt={row.nombre} className="w-8 h-8 rounded-full object-cover border border-neutral-200" />
+                              ) : (
+                                <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">
+                                  {row.nombre.charAt(0)}
+                                </div>
+                              )}
+                              <div>
+                                <span className="block text-neutral-900 font-bold">{row.nombre}</span>
+                                <span className="text-[10px] text-neutral-400 font-normal">ID: {row.empleadoId.slice(0, 6)}</span>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="p-3.5 uppercase font-medium text-neutral-600">
+                            {row.puesto}
+                          </td>
+
+                          <td className="p-3.5 text-neutral-600 font-medium">
+                            {row.sucursal}
+                          </td>
+
+                          <td className="p-3.5">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                              row.tipoSueldo === 'fijo' 
+                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' 
+                                : 'bg-purple-50 text-purple-700 border border-purple-200'
+                            }`}>
+                              {row.tipoSueldo === 'fijo' ? 'Fijo Mensual' : `Por Hora ($${row.tarifaHora}/h)`}
+                            </span>
+                          </td>
+
+                          <td className="p-3.5 text-center">
+                            <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black ${
+                              row.diasTrabajados > 0
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-neutral-100 text-neutral-400'
+                            }`}>
+                              <CalendarCheck className="w-3.5 h-3.5 text-emerald-600" />
+                              {row.diasTrabajados} {row.diasTrabajados === 1 ? 'día' : 'días'}
+                            </span>
+                          </td>
+
+                          <td className="p-3.5 text-right font-mono font-bold text-sm text-neutral-900">
+                            {row.horasTotales.toFixed(1)} hrs
+                          </td>
+
+                          <td className="p-3.5 text-right font-mono font-bold text-neutral-600">
+                            {row.promedioHorasDia.toFixed(1)} hrs/día
+                          </td>
+
+                          <td className="p-3.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedEmployeeId(isExpanded ? null : row.empleadoId);
+                                sounds.playKeypadClick();
+                              }}
+                              disabled={row.diasTrabajados === 0}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 mx-auto cursor-pointer ${
+                                row.diasTrabajados === 0 
+                                  ? 'opacity-40 cursor-not-allowed bg-neutral-100 text-neutral-400' 
+                                  : isExpanded 
+                                    ? 'bg-emerald-600 text-white shadow-xs' 
+                                    : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
+                              }`}
+                            >
+                              <span>{isExpanded ? 'Ocultar' : 'Ver Días'}</span>
+                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            </button>
+                          </td>
+                        </tr>
+
+                        {/* Desglose de jornadas diarias por empleado */}
+                        {isExpanded && (
+                          <tr className="bg-emerald-50/15">
+                            <td colSpan={8} className="p-4 sm:p-6 border-b border-neutral-200">
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <h4 className="text-xs font-black uppercase tracking-wider text-emerald-900 flex items-center gap-2">
+                                    <Calendar className="w-4 h-4 text-emerald-700" />
+                                    Jornadas Diarias de {row.nombre} ({row.diasDetalle.length} días registrados)
+                                  </h4>
+                                  <span className="text-[11px] text-neutral-500 font-medium">
+                                    Ciclo: 5:00 a.m. a 4:59 a.m.
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                                  {row.diasDetalle.map((dia, idx) => (
+                                    <div key={idx} className="bg-white rounded-2xl border border-emerald-200 p-3.5 space-y-2 shadow-xs">
+                                      <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 text-[10px] font-black flex items-center justify-center">
+                                            #{idx + 1}
+                                          </div>
+                                          <div>
+                                            <strong className="text-xs font-bold text-neutral-900 capitalize block">
+                                              {dia.fechaLabel}
+                                            </strong>
+                                            <span className="text-[10px] text-neutral-400 font-mono">
+                                              {dia.fechaOperativa}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <span className="text-xs font-black text-emerald-700 font-mono bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                                          {dia.horasTotales.toFixed(1)} hrs
+                                        </span>
+                                      </div>
+
+                                      {/* Turnos en este día operativo */}
+                                      <div className="space-y-1.5 text-[11px]">
+                                        {dia.turnos.map(t => {
+                                          const hInicio = t.horaInicio ? new Date(t.horaInicio).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+                                          const hFin = t.horaFin ? new Date(t.horaFin).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : 'En curso';
+                                          const pauseMin = t.pausasMinutos ?? (t.pausas || []).reduce((sum, p) => sum + (p.minutos || 0), 0);
+
+                                          return (
+                                            <div key={t.id} className="p-2 bg-neutral-50 rounded-xl flex items-center justify-between border border-neutral-100">
+                                              <div>
+                                                <span className="font-bold text-neutral-800">{hInicio} - {hFin}</span>
+                                                {pauseMin > 0 && (
+                                                  <span className="block text-[10px] text-amber-700 font-medium">
+                                                    Pausas: {pauseMin}m ({t.pausas?.length || 1} pausa)
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                                t.pagado 
+                                                  ? 'bg-emerald-100 text-emerald-800' 
+                                                  : 'bg-amber-100 text-amber-800'
+                                              }`}>
+                                                {t.pagado ? 'Pagado' : 'Pendiente'}
+                                              </span>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+
+                  {workingDaysReport.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-neutral-400 font-medium">
+                        No se encontraron registros de turnos o empleados en el rango y filtros seleccionados.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeTab === 'fijos' ? (
         /* Vista de Sueldo Fijo Mensual */
@@ -458,11 +1009,16 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
             </div>
 
             <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <span className="text-xs text-neutral-500 font-bold uppercase">Planilla Fija de {selectedMonthLabel}</span>
+              <span className="text-xs text-neutral-500 font-bold uppercase">Pagos Reales en {selectedMonthLabel}</span>
               <div className="text-2xl font-black text-indigo-600 mt-1 font-mono">
-                ${fixedEmployees.reduce((acc, e) => acc + (e.sueldoMensual || 0), 0).toFixed(2)}
+                ${salaryExpenses
+                  .filter(exp => 
+                    (exp.fecha || '').startsWith(fixedSalaryMonthKey) && 
+                    fixedEmployees.some(e => e.id === exp.employeeId)
+                  )
+                  .reduce((sum, exp) => sum + (exp.monto || 0), 0).toFixed(2)}
               </div>
-              <span className="text-[11px] text-neutral-400 mt-0.5 block">Monto presupuestado mensual</span>
+              <span className="text-[11px] text-neutral-400 mt-0.5 block">Total de gastos registrados en el mes</span>
             </div>
 
             <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
@@ -490,7 +1046,8 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                     <th className="p-3.5">Empleado</th>
                     <th className="p-3.5">Puesto</th>
                     <th className="p-3.5">Sucursal</th>
-                    <th className="p-3.5 text-right">Sueldo Mensual ($)</th>
+                    <th className="p-3.5 text-right">Sueldo Base ($)</th>
+                    <th className="p-3.5 text-right text-indigo-700">Pagado Real ($)</th>
                     <th className="p-3.5 text-center">Estado {selectedMonthLabel}</th>
                     <th className="p-3.5">Historial Pagado</th>
                     <th className="p-3.5 text-right">Acción</th>
@@ -500,6 +1057,10 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                   {fixedEmployees.map(emp => {
                     const isPaidForSelectedMonth = (emp.mesesPagados || []).includes(fixedSalaryMonthKey);
                     const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
+                    
+                    const actualPaidAmount = salaryExpenses
+                      .filter(e => e.employeeId === emp.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
+                      .reduce((sum, e) => sum + (e.monto || 0), 0);
 
                     return (
                       <tr key={emp.id} className="hover:bg-neutral-50/50 transition">
@@ -516,8 +1077,11 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                         </td>
                         <td className="p-3.5 uppercase font-medium text-neutral-600">{emp.puesto}</td>
                         <td className="p-3.5 text-neutral-500">{restName}</td>
-                        <td className="p-3.5 text-right font-mono font-black text-sm text-neutral-900">
+                        <td className="p-3.5 text-right font-mono font-bold text-sm text-neutral-500">
                           ${(emp.sueldoMensual || 0).toFixed(2)}
+                        </td>
+                        <td className="p-3.5 text-right font-mono font-black text-sm text-indigo-700 bg-indigo-50/30">
+                          ${actualPaidAmount.toFixed(2)}
                         </td>
                         <td className="p-3.5 text-center">
                           {isPaidForSelectedMonth ? (
@@ -535,8 +1099,8 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                         <td className="p-3.5">
                           <div className="flex flex-wrap gap-1 max-w-xs">
                             {(emp.mesesPagados || []).length > 0 ? (
-                              (emp.mesesPagados || []).slice(-3).map(m => (
-                                <span key={m} className="px-1.5 py-0.5 rounded-md bg-neutral-100 text-neutral-600 text-[10px] font-mono">
+                              (emp.mesesPagados || []).slice(-3).map((m, mIdx) => (
+                                <span key={`${m}-${mIdx}`} className="px-1.5 py-0.5 rounded-md bg-neutral-100 text-neutral-600 text-[10px] font-mono">
                                   {m}
                                 </span>
                               ))
@@ -715,11 +1279,11 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Total a Pagar Estimado</span>
+          <span className="text-xs text-neutral-500 font-bold uppercase">Pagos Registrados (Gastos)</span>
           <div className="text-2xl font-black text-emerald-600 mt-1">
             ${grandTotalPayable.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-neutral-400 mt-0.5 block">Planilla correspondiente al periodo filtrado</span>
+          <span className="text-[11px] text-neutral-400 mt-0.5 block">Total abonado a este personal en el periodo</span>
         </div>
       </div>
 
@@ -770,7 +1334,7 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                 <th className="p-3.5 text-right">Horas Normales</th>
                 <th className="p-3.5 text-right">Horas Extra</th>
                 <th className="p-3.5 text-right">Horas Totales</th>
-                <th className="p-3.5 text-right">Total a Pagar ($)</th>
+                <th className="p-3.5 text-right text-emerald-700">Pagado Real ($)</th>
                 <th className="p-3.5 text-center">Estado</th>
               </tr>
             </thead>

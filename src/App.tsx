@@ -177,12 +177,13 @@ const MainAppContent: React.FC = () => {
           />
         )}
 
-        {currentEmployee.puesto === 'caja' && (
+        {(currentEmployee.puesto === 'caja' || currentEmployee.puesto === 'mostrador') && (
           <CashierView 
             orders={orders} 
             menuItems={menuItems}
             tables={tables}
             clients={clients}
+            initialTab={currentEmployee.puesto === 'mostrador' ? 'mostrador' : 'pos'}
           />
         )}
 

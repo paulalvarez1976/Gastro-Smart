@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Order, SecurityAlert } from '../types';
 import { 
@@ -23,10 +23,12 @@ import {
   Volume2,
   VolumeX,
   Flame,
-  ArrowRight
+  ArrowRight,
+  Pause,
+  Play
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
-import { getShiftSessionSummary } from '../services/dataService';
+import { getShiftSessionSummary, pauseShift, resumeShift } from '../services/dataService';
 
 interface TopNavProps {
   orders?: Order[];
@@ -106,7 +108,19 @@ export const TopNav: React.FC<TopNavProps> = ({
     const updateTimer = () => {
       const start = new Date(currentShift.horaInicio).getTime();
       const now = Date.now();
-      const diffMs = Math.max(0, now - start);
+      let diffMs = Math.max(0, now - start);
+
+      if (currentShift.pausas && currentShift.pausas.length > 0) {
+        currentShift.pausas.forEach(p => {
+          if (p.fin) {
+            diffMs -= (new Date(p.fin).getTime() - new Date(p.inicio).getTime());
+          } else {
+            diffMs -= (now - new Date(p.inicio).getTime());
+          }
+        });
+      }
+
+      diffMs = Math.max(0, diffMs);
 
       const hours = Math.floor(diffMs / (1000 * 60 * 60));
       const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
@@ -122,43 +136,118 @@ export const TopNav: React.FC<TopNavProps> = ({
     return () => clearInterval(interval);
   }, [currentShift]);
 
-  // Alertas para mesero y personal: pedidos que acaban de pasar a "listo" o fueron rechazados
-  const readyOrdersForServer = orders.filter(
-    o => o.restaurantId === currentRestaurant?.id && 
-         (o.estado === 'listo' || o.estado === 'rechazado') &&
-         (!currentEmployee || currentEmployee.puesto === 'admin' || o.meseroId === currentEmployee.id)
-  );
+  const userPuesto = currentEmployee?.puesto;
+  const userRol = currentUserAccount?.rol;
+
+  const isCocina = userPuesto === 'cocina' || userPuesto === 'ayudante_cocina';
+  const isMesero = userPuesto === 'mesero';
+  const isMostrador = userPuesto === 'mostrador' || userPuesto === 'caja';
+  const isAdminOrOwner = !currentEmployee || userPuesto === 'admin' || userRol === 'admin' || userRol === 'owner';
+
+  // Alertas y avisos relevantes para el personal según su rol:
+  // Regla 1: Pedidos con cocina -> Alerta conjunta para Mesero y Mostrador al estar listo.
+  // Regla 2: Pedidos 100% mostrador -> Alerta exclusiva para Mostrador (Cocina y Mesero no son alertados).
+  const readyOrdersForServer = useMemo(() => {
+    if (isCocina) {
+      return [];
+    }
+
+    return orders.filter(o => {
+      if (o.restaurantId !== currentRestaurant?.id) return false;
+
+      const hasKitchen = o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
+      const is100Mostrador = !hasKitchen || o.ruta === 'express';
+
+      if (isMesero) {
+        if (is100Mostrador) return false;
+        return (o.estado === 'listo' || o.estado === 'rechazado') &&
+               (!currentEmployee || o.meseroId === currentEmployee.id);
+      }
+
+      if (isMostrador) {
+        if (o.estado === 'listo') return true;
+        if (is100Mostrador && o.estadoPago !== 'cobrado' && o.estadoEntrega !== 'entregado') return true;
+        return false;
+      }
+
+      if (isAdminOrOwner) {
+        if (o.estado === 'listo' || o.estado === 'rechazado') return true;
+        if (is100Mostrador && o.estadoPago !== 'cobrado' && o.estadoEntrega !== 'entregado') return true;
+        return false;
+      }
+
+      return false;
+    });
+  }, [orders, currentRestaurant?.id, isCocina, isMesero, isMostrador, isAdminOrOwner, currentEmployee]);
 
   const unreadAlerts = securityAlerts.filter(a => !a.leido);
 
   // ================= NOTIFICACIONES SONORAS EN TIEMPO REAL =================
-  // 1. Detección y sincronización de alarmas sonoras con el estado real de los pedidos
+  // Sincronización de alarmas sonoras con Regla 1 (Cocina lista -> Mesero + Mostrador) y Regla 2 (100% mostrador -> Solo Mostrador)
   useEffect(() => {
+    // Cocina gestiona sus alarmas en KitchenDisplay; no duplicar en TopNav
+    if (isCocina) {
+      sounds.stopAllAlarms();
+      return;
+    }
+
     const currentMap = new Map<string, string>();
+    const activeAlarmKeys = new Set<string>();
+
     orders.forEach(o => {
-      if (o.restaurantId === currentRestaurant?.id) {
-        currentMap.set(o.id, o.estado);
+      if (o.restaurantId !== currentRestaurant?.id) return;
+      currentMap.set(o.id, o.estado);
 
-        const readyAlarmId = 'ord-ready-' + o.id;
-        const rejectAlarmId = 'ord-rej-' + o.id;
+      const hasKitchen = o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
+      const is100Mostrador = !hasKitchen || o.ruta === 'express';
 
-        // Reproducir sonido si el pedido está listo y pendiente de retiro, de lo contrario detener inmediatamente
-        if (o.estado === 'listo') {
+      const readyAlarmId = 'ord-ready-' + o.id;
+      const mostradorAlarmId = 'ord-mostrador-' + o.id;
+      const rejectAlarmId = 'ord-rej-' + o.id;
+
+      // ================= REGLA 1 =================
+      // Pedido con productos de cocina que pasó a "listo":
+      // Suena SIMULTÁNEAMENTE para Mesero y Mostrador
+      if (o.estado === 'listo' && !is100Mostrador) {
+        const shouldAlertMesero = (isMesero && (!currentEmployee || o.meseroId === currentEmployee.id)) || isAdminOrOwner;
+        const shouldAlertMostrador = isMostrador || isAdminOrOwner;
+
+        if (shouldAlertMesero || shouldAlertMostrador) {
+          activeAlarmKeys.add(readyAlarmId);
           if (!sounds.hasActiveAlarm(readyAlarmId)) {
             sounds.startRepeatingAlarm(readyAlarmId, 'ready', 3800);
           }
-        } else {
-          sounds.stopRepeatingAlarm(readyAlarmId);
         }
+      }
 
-        // Reproducir sonido si está rechazado, de lo contrario detener
-        if (o.estado === 'rechazado') {
+      // ================= REGLA 2 =================
+      // Pedido 100% cobro directo / mostrador (sin cocina):
+      // SOLO Mostrador recibe la alerta sonora
+      if (is100Mostrador && o.estadoPago !== 'cobrado' && o.estadoEntrega !== 'entregado' && o.estado !== 'rechazado') {
+        const shouldAlertMostrador = isMostrador || isAdminOrOwner;
+        if (shouldAlertMostrador) {
+          activeAlarmKeys.add(mostradorAlarmId);
+          if (!sounds.hasActiveAlarm(mostradorAlarmId)) {
+            sounds.startRepeatingAlarm(mostradorAlarmId, 'counter', 3800);
+          }
+        }
+      }
+
+      // Alerta de rechazo por cocina:
+      if (o.estado === 'rechazado' && !is100Mostrador) {
+        if (isMesero || isAdminOrOwner) {
+          activeAlarmKeys.add(rejectAlarmId);
           if (!sounds.hasActiveAlarm(rejectAlarmId)) {
             sounds.startRepeatingAlarm(rejectAlarmId, 'warning', 3800);
           }
-        } else {
-          sounds.stopRepeatingAlarm(rejectAlarmId);
         }
+      }
+    });
+
+    // Detener cualquier alarma de pedidos que ya no estén activos
+    sounds.getActiveAlarmKeys().forEach(key => {
+      if ((key.startsWith('ord-ready-') || key.startsWith('ord-mostrador-') || key.startsWith('ord-rej-')) && !activeAlarmKeys.has(key)) {
+        sounds.stopRepeatingAlarm(key);
       }
     });
 
@@ -169,35 +258,63 @@ export const TopNav: React.FC<TopNavProps> = ({
       return;
     }
 
-    // Verificar si algún pedido cambió a 'listo' o 'rechazado' para mostrar toast visual
+    // Verificar transiciones de estado para mostrar toasts visuales contextuales
     orders.forEach(ord => {
       if (ord.restaurantId !== currentRestaurant?.id) return;
       const prevStatus = prevReadyOrdersMapRef.current.get(ord.id);
-      
-      // Pedido recién puesto en "listo" (mesero debe retirarlo)
-      if (ord.estado === 'listo' && prevStatus !== 'listo') {
+      const hasKitchen = ord.ruta !== 'express' && (ord.items || []).some(it => it.requiereCocina !== false);
+      const is100Mostrador = !hasKitchen || ord.ruta === 'express';
+      const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
+
+      // Regla 1: Transición a "listo" (Cocina completó pedido) -> Alerta a Mesero y Mostrador
+      if (ord.estado === 'listo' && prevStatus !== 'listo' && !is100Mostrador) {
         const toastId = 'ord-ready-' + ord.id;
-        const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
-        setActiveToast({
-          id: toastId,
-          title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
-          desc: `La cocina completó el pedido con ${ord.items.length} plato(s). Listo para retirar y entregar.`,
-          type: 'ready',
-          order: ord
-        });
+        if (isMostrador) {
+          setActiveToast({
+            id: toastId,
+            title: `✅ ¡Cocina lista para ${targetDesc}!`,
+            desc: `La cocina completó el pedido. Despachar productos de mostrador para entrega conjunta con el mesero.`,
+            type: 'ready',
+            order: ord
+          });
+        } else if (isMesero || isAdminOrOwner) {
+          setActiveToast({
+            id: toastId,
+            title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
+            desc: `La cocina completó el pedido con ${ord.items.length} plato(s). Listo para retirar y entregar.`,
+            type: 'ready',
+            order: ord
+          });
+        }
       }
 
-      // Pedido recién rechazado por cocina
-      if (ord.estado === 'rechazado' && prevStatus !== 'rechazado') {
-        const toastId = 'ord-rej-' + ord.id;
-        const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery`;
-        setActiveToast({
-          id: toastId,
-          title: `⚠️ Pedido rechazado para ${targetDesc}`,
-          desc: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina no pudo preparar este pedido.',
-          type: 'rejected',
-          order: ord
-        });
+      // Regla 2: Nuevo pedido 100% Mostrador entrante -> Notificación solo a Mostrador
+      if (is100Mostrador && prevStatus === undefined && ord.estadoPago !== 'cobrado' && ord.estadoEntrega !== 'entregado') {
+        if (isMostrador || isAdminOrOwner) {
+          const toastId = 'ord-mostrador-' + ord.id;
+          const itemsDesc = ord.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ');
+          setActiveToast({
+            id: toastId,
+            title: `⚡ ¡Nuevo Pedido en Mostrador para ${targetDesc}!`,
+            desc: `Despachar productos de mostrador: ${itemsDesc}`,
+            type: 'general',
+            order: ord
+          });
+        }
+      }
+
+      // Rechazado por Cocina
+      if (ord.estado === 'rechazado' && prevStatus !== 'rechazado' && !is100Mostrador) {
+        if (isMesero || isAdminOrOwner) {
+          const toastId = 'ord-rej-' + ord.id;
+          setActiveToast({
+            id: toastId,
+            title: `⚠️ Pedido rechazado para ${targetDesc}`,
+            desc: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina no pudo preparar este pedido.',
+            type: 'rejected',
+            order: ord
+          });
+        }
       }
     });
 
@@ -207,7 +324,7 @@ export const TopNav: React.FC<TopNavProps> = ({
       // Limpiar alarmas al desmontar o cambiar de restaurante/negocio
       sounds.stopAllAlarms();
     };
-  }, [orders, currentRestaurant?.id]);
+  }, [orders, currentRestaurant?.id, isCocina, isMesero, isMostrador, isAdminOrOwner, currentEmployee]);
 
   // 2. Detección de Alertas de Seguridad en tiempo real (PIN brute-force, etc.)
   useEffect(() => {
@@ -353,8 +470,8 @@ export const TopNav: React.FC<TopNavProps> = ({
                 className="bg-transparent text-xs sm:text-sm font-bold text-neutral-800 outline-none cursor-pointer pr-1"
                 disabled={!currentUserAccount && currentEmployee?.puesto !== 'admin' && allRestaurants.length <= 1}
               >
-                {allRestaurants.map((rest) => (
-                  <option key={rest.id} value={rest.id}>
+                {allRestaurants.map((rest, idx) => (
+                  <option key={`${rest.id}-${idx}`} value={rest.id}>
                     {rest.nombre}
                   </option>
                 ))}
@@ -427,9 +544,9 @@ export const TopNav: React.FC<TopNavProps> = ({
                         No hay incidentes de seguridad registrados.
                       </div>
                     ) : (
-                      securityAlerts.map(alert => (
+                      securityAlerts.map((alert, idx) => (
                         <div 
-                          key={alert.id}
+                          key={`${alert.id}-${idx}`}
                           className={`p-3 rounded-xl border ${
                             alert.tipo === 'fuerza_bruta_pin' 
                               ? 'bg-red-50/80 border-red-200 text-red-950' 
@@ -470,10 +587,17 @@ export const TopNav: React.FC<TopNavProps> = ({
 
           {/* Shift Active Indicator (for staff) */}
           {currentShift && (
-            <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200/80 rounded-xl text-xs font-semibold text-amber-900">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-              <Clock className="w-3.5 h-3.5 text-amber-600" />
+            <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 border rounded-xl text-xs font-semibold ${
+              currentShift.estado === 'en_pausa' 
+                ? 'bg-neutral-100 border-neutral-200 text-neutral-600' 
+                : 'bg-amber-50 border-amber-200/80 text-amber-900'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${
+                currentShift.estado === 'en_pausa' ? 'bg-amber-500' : 'bg-emerald-500 animate-ping'
+              }`} />
+              <Clock className={`w-3.5 h-3.5 ${currentShift.estado === 'en_pausa' ? 'text-amber-500' : 'text-amber-600'}`} />
               <span>{shiftDuration}</span>
+              {currentShift.estado === 'en_pausa' && <span className="ml-1 text-[10px] font-black uppercase text-amber-600">PAUSA</span>}
             </div>
           )}
 
@@ -518,39 +642,47 @@ export const TopNav: React.FC<TopNavProps> = ({
                       No hay pedidos pendientes de retiro
                     </div>
                   ) : (
-                    readyOrdersForServer.map(o => (
-                      <div 
-                        key={o.id}
-                        onClick={() => {
-                          sounds.stopRepeatingAlarm('ord-ready-' + o.id);
-                          sounds.stopRepeatingAlarm('ord-rej-' + o.id);
-                          onOrderClick?.(o);
-                          setShowNotifications(false);
-                        }}
-                        className={`p-2.5 rounded-xl border text-xs cursor-pointer transition ${
-                          o.estado === 'listo' 
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100' 
-                            : 'bg-red-50 border-red-200 text-red-900 hover:bg-red-100'
-                        }`}
-                      >
-                        <div className="font-bold flex items-center justify-between">
-                          <span>
-                            {o.tipo === 'local' ? `Mesa #${o.mesaNumero}` : `Delivery (${o.empresaDelivery || 'General'})`}
-                          </span>
-                          <span className="uppercase text-[10px] px-1.5 py-0.5 rounded bg-white/80">
-                            {o.estado === 'listo' ? '¡LISTO PARA ENTREGAR!' : 'RECHAZADO'}
-                          </span>
-                        </div>
-                        <div className="text-[11px] mt-1 text-neutral-600 truncate">
-                          {o.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}
-                        </div>
-                        {o.motivoRechazo && (
-                          <div className="text-[10px] text-red-600 mt-1 font-semibold">
-                            Motivo: {o.motivoRechazo}
+                    readyOrdersForServer.map((o, idx) => {
+                      const isExpressOrder = o.ruta === 'express' || !(o.items || []).some(it => it.requiereCocina !== false);
+                      return (
+                        <div 
+                          key={`${o.id}-${idx}`}
+                          onClick={() => {
+                            sounds.stopRepeatingAlarm('ord-ready-' + o.id);
+                            sounds.stopRepeatingAlarm('ord-mostrador-' + o.id);
+                            sounds.stopRepeatingAlarm('ord-rej-' + o.id);
+                            onOrderClick?.(o);
+                            setShowNotifications(false);
+                          }}
+                          className={`p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                            isExpressOrder
+                              ? 'bg-purple-50 border-purple-200 text-purple-900 hover:bg-purple-100'
+                              : o.estado === 'listo' 
+                                ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100' 
+                                : 'bg-red-50 border-red-200 text-red-900 hover:bg-red-100'
+                          }`}
+                        >
+                          <div className="font-bold flex items-center justify-between">
+                            <span>
+                              {o.tipo === 'local' ? `Mesa #${o.mesaNumero}` : `Delivery (${o.empresaDelivery || 'General'})`}
+                            </span>
+                            <span className="uppercase text-[10px] px-1.5 py-0.5 rounded bg-white/80 font-black">
+                              {isExpressOrder 
+                                ? '⚡ MOSTRADOR' 
+                                : (o.estado === 'listo' ? '¡LISTO PARA ENTREGAR!' : 'RECHAZADO')}
+                            </span>
                           </div>
-                        )}
-                      </div>
-                    ))
+                          <div className="text-[11px] mt-1 text-neutral-600 truncate">
+                            {o.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}
+                          </div>
+                          {o.motivoRechazo && (
+                            <div className="text-[10px] text-red-600 mt-1 font-semibold">
+                              Motivo: {o.motivoRechazo}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -579,14 +711,36 @@ export const TopNav: React.FC<TopNavProps> = ({
                 <span className="hidden sm:inline">Cerrar Sesión</span>
               </button>
             ) : (
-              <button
-                onClick={() => setShowEndShiftModal(true)}
-                className="px-2.5 sm:px-3 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
-                title="Cerrar turno y ver balance"
-              >
-                <LogOut className="w-4 h-4" />
-                <span className="hidden sm:inline">Cerrar Turno</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {currentShift && (
+                  <button
+                    onClick={async () => {
+                      if (currentShift.estado === 'en_pausa') {
+                        await resumeShift(currentShift.id);
+                      } else {
+                        await pauseShift(currentShift.id);
+                      }
+                    }}
+                    className={`px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+                      currentShift.estado === 'en_pausa' 
+                        ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200' 
+                        : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
+                    }`}
+                    title={currentShift.estado === 'en_pausa' ? "Reanudar Turno" : "Pausar Turno (descanso)"}
+                  >
+                    {currentShift.estado === 'en_pausa' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    <span className="hidden sm:inline">{currentShift.estado === 'en_pausa' ? 'Reanudar' : 'Pausar'}</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowEndShiftModal(true)}
+                  className="px-2.5 sm:px-3 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                  title="Cerrar turno y ver balance"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span className="hidden sm:inline">Cerrar Turno</span>
+                </button>
+              </div>
             )}
           </div>
 

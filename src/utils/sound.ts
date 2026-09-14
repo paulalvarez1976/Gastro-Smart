@@ -54,7 +54,7 @@ class SoundEffects {
    */
   public startRepeatingAlarm(
     alarmKey: string, 
-    type: 'kitchen' | 'ready' | 'security' | 'warning' | 'cash' | 'notification' = 'notification',
+    type: 'kitchen' | 'ready' | 'security' | 'warning' | 'cash' | 'notification' | 'counter' = 'notification',
     intervalMs: number = 3800
   ) {
     if (this.muted) return;
@@ -71,6 +71,9 @@ class SoundEffects {
           break;
         case 'ready':
           this.playOrderReady();
+          break;
+        case 'counter':
+          this.playCounterOrder();
           break;
         case 'security':
           this.playSecurityAlert();
@@ -122,6 +125,13 @@ class SoundEffects {
       clearInterval(alarm.intervalId);
     });
     this.activeAlarms.clear();
+  }
+
+  /**
+   * Obtiene la lista de claves de alarmas activas
+   */
+  public getActiveAlarmKeys(): string[] {
+    return Array.from(this.activeAlarms.keys());
   }
 
   /**
@@ -224,6 +234,39 @@ class SoundEffects {
       [
         { freq: 1396.91, start: now, dur: 0.25, gain: 0.25 },
         { freq: 1760.00, start: now + 0.09, dur: 0.45, gain: 0.3 }
+      ].forEach(item => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(item.freq, item.start);
+
+        gain.gain.setValueAtTime(item.gain, item.start);
+        gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
+
+        osc.connect(gain);
+        gain.connect(this.ctx!.destination);
+
+        osc.start(item.start);
+        osc.stop(item.start + item.dur);
+      });
+    } catch (e) {
+      console.warn('Audio play error:', e);
+    }
+  }
+
+  // Sonido de campana para nuevo pedido en Mostrador (despacho express / cobro directo)
+  playCounterOrder() {
+    if (this.muted) return;
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+
+      // Tres notas brillantes y elegantes tipo mostrador/despacho (G5 -> C6 -> E6)
+      [
+        { freq: 783.99, start: now, dur: 0.28, gain: 0.3 },
+        { freq: 1046.50, start: now + 0.12, dur: 0.32, gain: 0.35 },
+        { freq: 1318.51, start: now + 0.26, dur: 0.55, gain: 0.32 }
       ].forEach(item => {
         const osc = this.ctx!.createOscillator();
         const gain = this.ctx!.createGain();

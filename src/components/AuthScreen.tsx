@@ -27,6 +27,7 @@ export const AuthScreen: React.FC = () => {
   const { 
     loginAdminWithEmail, 
     loginAdminWithGoogle,
+    loginDemoMode,
     registerOwnerAndBusiness, 
     resetAdminPassword,
     loginWithPin, 
@@ -478,7 +479,23 @@ export const AuthScreen: React.FC = () => {
               </div>
 
               {/* Demo Helper Rápido */}
-              <div className="mt-4 pt-3 border-t border-neutral-100">
+              <div className="mt-4 pt-3 border-t border-neutral-100 space-y-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    sounds.playKeypadClick();
+                    const res = await loginDemoMode();
+                    if (res.success) {
+                      sounds.playCashRegister();
+                    } else {
+                      setAdminFeedback({ type: 'error', text: res.message });
+                    }
+                  }}
+                  className="w-full py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-white" />
+                  <span>🚀 Acceso DEMO Instantáneo (Sin Red / Offline)</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => {

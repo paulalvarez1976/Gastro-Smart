@@ -71,6 +71,7 @@ interface AuthContextType {
   // Autenticación de Admin / Owner
   loginAdminWithEmail: (email: string, pass: string) => Promise<{ success: boolean; message: string; notRegisteredInApp?: boolean }>;
   loginAdminWithGoogle: () => Promise<{ success: boolean; message: string }>;
+  loginDemoMode: () => Promise<{ success: boolean; message: string }>;
   registerOwnerAndBusiness: (data: { businessName: string; rif_o_ruc: string; ownerName: string; email: string; pass: string }) => Promise<{ success: boolean; message: string; isExistingLogin?: boolean; isEmailInUse?: boolean }>;
   logoutAdmin: () => Promise<void>;
   resetAdminPassword: (email: string) => Promise<{ success: boolean; message: string }>;
@@ -330,8 +331,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         msg = 'Email o contraseña inválidos.';
       } else if (err.code === 'auth/too-many-requests') {
         msg = 'Demasiados intentos fallidos. Acceso temporalmente bloqueado por Firebase.';
+      } else if (err.code === 'auth/network-request-failed' || err.message?.includes('network-request-failed')) {
+        msg = 'Error de conexión con Firebase Auth (auth/network-request-failed). Utilice el acceso DEMO offline.';
       }
       return { success: false, message: msg };
+    }
+  };
+
+  const loginDemoMode = async (): Promise<{ success: boolean; message: string }> => {
+    try {
+      const demoAccount: UserAccount = {
+        uid: 'demo_owner_uid',
+        email: 'demo@gastrosmart.com',
+        nombre: 'Dueño Administrador (Demo)',
+        rol: 'owner',
+        businessId: 'biz_demo123',
+        restaurantId: null,
+        appId: 'gastro_smart',
+        creadoEn: new Date().toISOString(),
+        ultimoAcceso: new Date().toISOString()
+      };
+      setCurrentUserAccount(demoAccount);
+      return { success: true, message: '¡Acceso Demo Iniciado Exitosamente!' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Error en acceso demo' };
     }
   };
 
@@ -764,6 +787,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         lockSeverity,
         loginAdminWithEmail,
         loginAdminWithGoogle,
+        loginDemoMode,
         registerOwnerAndBusiness,
         logoutAdmin,
         resetAdminPassword,

@@ -29,6 +29,7 @@ import { FinancialDashboard } from './FinancialDashboard';
 import { DeliveryReconciliation } from './DeliveryReconciliation';
 import { StaffAttendanceAdminView } from './StaffAttendanceAdminView';
 import { DailySalesExpensesTrendChart } from './DailySalesExpensesTrendChart';
+import { AdminRepairModal } from './AdminRepairModal';
 import { 
   ShieldCheck, 
   Store, 
@@ -61,7 +62,8 @@ import {
   ChefHat,
   Zap,
   Coffee,
-  ShoppingBag
+  ShoppingBag,
+  Wrench
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -92,6 +94,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   // Navigation tabs
   const [activeTab, setActiveTab] = useState<'financiero' | 'conciliacion' | 'asistencia' | 'metricas' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('financiero');
+
+  // Modal Reparar Pedidos Atascados
+  const [showRepairModal, setShowRepairModal] = useState(false);
 
   // Restaurant Modal State
   const [showRestModal, setShowRestModal] = useState(false);
@@ -398,7 +403,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       descripcion: item.descripcion,
       precio: item.precio,
       categoria: item.categoria,
-      requiereCocina: item.requiereCocina !== false,
+      requiereCocina: item.requiereCocina === true,
       disponible: item.disponible,
       restaurantId: item.restaurantId,
       fotoUrl: item.fotoUrl || item.imagenUrl || '',
@@ -436,7 +441,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         descripcion: menuForm.descripcion.trim(),
         precio: Number(menuForm.precio) || 0,
         categoria: menuForm.categoria.trim() || 'General',
-        requiereCocina: menuForm.requiereCocina !== false,
+        requiereCocina: menuForm.requiereCocina === true,
         disponible: menuForm.disponible,
         restaurantId: menuForm.restaurantId,
         fotoUrl: finalFotoUrl,
@@ -543,6 +548,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             );
           })}
         </div>
+
+        {/* Botón Reparar Pedidos Atascados */}
+        <button
+          type="button"
+          onClick={() => { sounds.playKeypadClick(); setShowRepairModal(true); }}
+          className="px-3.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0"
+          title="Herramienta de Administrador para reparar pedidos con estados inconsistentes"
+        >
+          <Wrench className="w-3.5 h-3.5 text-purple-600" />
+          <span>Reparar pedidos atascados</span>
+        </button>
       </div>
 
       {/* Main Admin Content Container */}
@@ -901,12 +917,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <span className={`px-2 py-0.5 rounded font-bold uppercase text-[10px] ${
                           emp.puesto === 'admin' ? 'bg-purple-100 text-purple-800' :
                           emp.puesto === 'caja' ? 'bg-blue-100 text-blue-800' :
+                          emp.puesto === 'mostrador' ? 'bg-fuchsia-100 text-fuchsia-800' :
                           emp.puesto === 'mesero' ? 'bg-amber-100 text-amber-800' :
                           emp.puesto === 'cocina' ? 'bg-emerald-100 text-emerald-800' :
                           emp.puesto === 'ayudante_cocina' ? 'bg-teal-100 text-teal-800' :
                           'bg-indigo-100 text-indigo-800'
                         }`}>
                           {emp.puesto === 'ayudante_cocina' ? 'Ayudante Cocina' :
+                           emp.puesto === 'mostrador' ? 'Mostrador / Despacho' :
                            emp.puesto === 'limpieza' ? 'Limpieza' : emp.puesto}
                         </span>
                       </td>
@@ -997,7 +1015,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }`}
                   >
                     <ChefHat className="w-3.5 h-3.5" />
-                    Cocina ({menuItems.filter(i => i.requiereCocina !== false).length})
+                    Cocina ({menuItems.filter(i => i.requiereCocina === true).length})
                   </button>
                   <button
                     type="button"
@@ -1007,7 +1025,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }`}
                   >
                     <Zap className="w-3.5 h-3.5" />
-                    Express ({menuItems.filter(i => i.requiereCocina === false).length})
+                    Express ({menuItems.filter(i => i.requiereCocina !== true).length})
                   </button>
                 </div>
 
@@ -1047,8 +1065,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             {(() => {
               const filteredMenu = menuItems.filter(item => {
-                if (menuPrepFilter === 'cocina') return item.requiereCocina !== false;
-                if (menuPrepFilter === 'express') return item.requiereCocina === false;
+                if (menuPrepFilter === 'cocina') return item.requiereCocina === true;
+                if (menuPrepFilter === 'express') return item.requiereCocina !== true;
                 return true;
               });
 
@@ -1073,7 +1091,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           const restName = item.restaurantId === 'all' 
                             ? 'Todas' 
                             : (restaurants.find(r => r.id === item.restaurantId)?.nombre || 'Sede');
-                          const isKitchen = item.requiereCocina !== false;
+                          const isKitchen = item.requiereCocina === true;
 
                           return (
                             <tr key={item.id} className="hover:bg-neutral-50/50">
@@ -1167,7 +1185,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {filteredMenu.map(item => {
                     const photoSrc = item.fotoUrl || item.imagenUrl;
-                    const isKitchen = item.requiereCocina !== false;
+                    const isKitchen = item.requiereCocina === true;
 
                     return (
                       <div key={item.id} className="bg-white rounded-2xl border border-neutral-200 p-4 shadow-xs flex flex-col justify-between">
@@ -1291,9 +1309,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {shifts.map(sh => {
                     const emp = employees.find(e => e.id === sh.employeeId);
                     const rate = emp?.tarifaHora || 12;
-                    const durationHours = sh.horaFin 
+                    let durationHours = sh.horaFin 
                       ? Math.max(0.1, (new Date(sh.horaFin).getTime() - new Date(sh.horaInicio).getTime()) / (1000 * 60 * 60))
                       : (new Date().getTime() - new Date(sh.horaInicio).getTime()) / (1000 * 60 * 60);
+                    
+                    if (sh.pausas && sh.pausas.length > 0) {
+                      let pauseHours = 0;
+                      sh.pausas.forEach(p => {
+                        const endPause = p.fin ? new Date(p.fin).getTime() : new Date().getTime();
+                        pauseHours += (endPause - new Date(p.inicio).getTime()) / (1000 * 60 * 60);
+                      });
+                      durationHours = Math.max(0.1, durationHours - pauseHours);
+                    }
                     
                     const regularHours = Math.min(8, durationHours);
                     const overtimeHours = Math.max(0, durationHours - 8);
@@ -1325,9 +1352,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </td>
                         <td className="p-3 text-center">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            sh.estado === 'abierto' ? 'bg-emerald-100 text-emerald-800' : 'bg-neutral-100 text-neutral-600'
+                            sh.estado === 'abierto' ? 'bg-emerald-100 text-emerald-800' :
+                            sh.estado === 'en_pausa' ? 'bg-amber-100 text-amber-800' :
+                            'bg-neutral-100 text-neutral-600'
                           }`}>
-                            {sh.estado}
+                            {sh.estado === 'en_pausa' ? 'en pausa' : sh.estado}
                           </span>
                         </td>
                         <td className="p-3 text-right font-mono text-neutral-600">
@@ -1532,6 +1561,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     <option value="admin">Administrador</option>
                     <option value="caja">Cajero / Caja</option>
+                    <option value="mostrador">Personal de Mostrador / Despacho</option>
                     <option value="mesero">Mesero / POS</option>
                     <option value="cocina">Cocinero / KDS</option>
                     <option value="ayudante_cocina">Ayudante de Cocina</option>
@@ -2102,6 +2132,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal Reparar Pedidos Atascados */}
+      <AdminRepairModal
+        orders={orders}
+        isOpen={showRepairModal}
+        onClose={() => setShowRepairModal(false)}
+        adminName={currentUserAccount?.nombre || 'Administrador'}
+      />
 
     </div>
   );

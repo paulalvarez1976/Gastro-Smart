@@ -87,7 +87,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
   const { 
     currentUserAccount, 
     currentEmployee, 
-    currentBusiness 
+    currentBusiness,
+    allEmployees 
   } = useAuth();
 
   const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || currentBusiness?.id || 'biz_default';
@@ -144,6 +145,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
   const [showNewPurchaseModal, setShowNewPurchaseModal] = useState<boolean>(false);
   // Estado del Formulario de Nuevo Gasto (Cualquier categoría: transporte, alquiler, servicios, etc.)
   const [showNewExpenseModal, setShowNewExpenseModal] = useState<boolean>(false);
+  const [showAllDishesModal, setShowAllDishesModal] = useState<boolean>(false);
   const [activeSubView, setActiveSubView] = useState<'kpis' | 'historial_insumos'>('kpis');
   const [isRecalculatingToday, setIsRecalculatingToday] = useState<boolean>(false);
   const [todayToastMessage, setTodayToastMessage] = useState<string | null>(null);
@@ -224,7 +226,9 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
         previousStats,
         accessibleRestaurants,
         targetRestId,
-        menuItems
+        menuItems,
+        orders,
+        ranges.currentDates
       );
 
       setSummaryData(enrichedSummary);
@@ -847,8 +851,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
             </div>
 
             <div className="mt-4 space-y-3.5">
-              {summaryData?.ventasPorCanal.map((item) => (
-                <div key={item.canal} className="space-y-1">
+              {summaryData?.ventasPorCanal.map((item, idx) => (
+                <div key={`${item.canal}-${idx}`} className="space-y-1">
                   <div className="flex items-center justify-between text-xs font-bold">
                     <span className="text-neutral-700 flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -894,8 +898,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
             </div>
 
             <div className="mt-4 space-y-3.5">
-              {summaryData?.gastosPorTipo.map((item) => (
-                <div key={item.tipo} className="space-y-1">
+              {summaryData?.gastosPorTipo.map((item, idx) => (
+                <div key={`${item.tipo}-${idx}`} className="space-y-1">
                   <div className="flex items-center justify-between text-xs font-bold">
                     <span className="text-neutral-700 flex items-center gap-1.5">
                       <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
@@ -927,23 +931,25 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
           </div>
         </div>
 
-        {/* PANEL 3: Top 5 Platos Más Vendidos */}
+        {/* PANEL 3: Top Platos Más Vendidos */}
         <div className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
               <h4 className="font-extrabold text-neutral-900 text-sm uppercase tracking-wider flex items-center gap-2">
                 <Utensils className="w-4 h-4 text-amber-600" />
-                <span>Top 5 Platos Estrella</span>
+                <span>Ventas de Platos</span>
               </h4>
               <span className="text-[11px] font-bold text-neutral-500">
-                Por Unidades
+                {summaryData?.topPlatos && summaryData.topPlatos.length > 0 
+                  ? `${summaryData.topPlatos.reduce((acc, p) => acc + p.cantidad, 0)} u. vendidas`
+                  : 'Por Unidades'}
               </span>
             </div>
 
             <div className="mt-4 divide-y divide-neutral-100">
               {summaryData?.topPlatos && summaryData.topPlatos.length > 0 ? (
-                summaryData.topPlatos.map((dish, idx) => (
-                  <div key={dish.nombre} className="py-2.5 flex items-center justify-between">
+                summaryData.topPlatos.slice(0, 5).map((dish, idx) => (
+                  <div key={`${dish.nombre}-${idx}`} className="py-2.5 flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
                       <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black ${
                         idx === 0 ? 'bg-amber-400 text-amber-950 shadow-xs' :
@@ -969,15 +975,29 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                 ))
               ) : (
                 <div className="py-8 text-center text-xs text-neutral-400">
-                  No hay comandas registradas en este periodo
+                  No hay ventas de platos registradas en este periodo
                 </div>
               )}
             </div>
+
+            {summaryData?.topPlatos && summaryData.topPlatos.length > 5 && (
+              <div className="mt-3 text-center">
+                <button
+                  type="button"
+                  onClick={() => setShowAllDishesModal(true)}
+                  className="text-xs font-bold text-amber-600 hover:text-amber-700 hover:underline"
+                >
+                  Ver todos los {summaryData.topPlatos.length} platos vendidos →
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="mt-4 pt-3 border-t border-neutral-100 text-[11px] text-neutral-500 flex justify-between font-semibold">
-            <span>Carta analizada:</span>
-            <span className="text-neutral-700 font-bold">{menuItems.length} platos en menú</span>
+            <span>Total ventas de platos:</span>
+            <span className="text-amber-700 font-bold font-mono">
+              ${summaryData?.topPlatos ? summaryData.topPlatos.reduce((acc, p) => acc + p.total, 0).toFixed(2) : '0.00'}
+            </span>
           </div>
         </div>
 
@@ -1000,9 +1020,9 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
 
           <div className="mt-4 space-y-3">
             {summaryData?.alertas && summaryData.alertas.length > 0 ? (
-              summaryData.alertas.map((alerta) => (
+              summaryData.alertas.map((alerta, idx) => (
                 <div 
-                  key={alerta.id}
+                  key={`${alerta.id}-${idx}`}
                   className={`p-3.5 rounded-xl border flex items-start gap-3 ${
                     alerta.tipo === 'danger' ? 'bg-rose-50 border-rose-200 text-rose-900' :
                     alerta.tipo === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-900' :
@@ -1179,8 +1199,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100">
-                {sortedBranches.map((branch) => (
-                  <tr key={branch.restaurantId} className="hover:bg-neutral-50/70 transition">
+                {sortedBranches.map((branch, idx) => (
+                  <tr key={`${branch.restaurantId}-${idx}`} className="hover:bg-neutral-50/70 transition">
                     <td className="p-3 font-bold text-neutral-900 flex items-center gap-2">
                       <Building2 className="w-3.5 h-3.5 text-neutral-400" />
                       <span>{branch.nombre}</span>
@@ -1393,11 +1413,76 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
           currentRestaurantId={selectedBranchId !== 'all' ? selectedBranchId : undefined}
           businessId={activeBizId}
           userDisplayName={currentUserAccount?.nombre || currentEmployee?.nombre || 'Administrador'}
+          employees={allEmployees}
           onClose={() => setShowNewExpenseModal(false)}
           onSuccess={() => {
             loadFinancialData(true);
           }}
         />
+      )}
+
+      {/* 13. MODAL DETALLE DE TODOS LOS PLATOS VENDIDOS */}
+      {showAllDishesModal && summaryData?.topPlatos && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl border border-neutral-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 border-b border-neutral-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                  <Utensils className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-neutral-900">Ventas Detalladas de Platos</h3>
+                  <p className="text-xs text-neutral-500">{periodLabels.current} • {summaryData.topPlatos.length} platos vendidos</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAllDishesModal(false)}
+                className="w-8 h-8 rounded-full bg-neutral-100 hover:bg-neutral-200 text-neutral-600 flex items-center justify-center"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto divide-y divide-neutral-100 flex-1">
+              {summaryData.topPlatos.map((dish, idx) => (
+                <div key={`${dish.nombre}-${idx}`} className="py-2.5 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="w-6 h-6 rounded-full bg-neutral-100 text-neutral-700 font-bold text-xs flex items-center justify-center shrink-0">
+                      {idx + 1}
+                    </span>
+                    <span className="font-bold text-sm text-neutral-800">
+                      {dish.nombre}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-black text-neutral-900">
+                      {dish.cantidad} <span className="text-xs font-normal text-neutral-500">unidades</span>
+                    </div>
+                    <div className="text-xs font-mono font-bold text-emerald-600">
+                      ${dish.total.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-4 border-t border-neutral-100 bg-neutral-50/70 rounded-b-2xl flex items-center justify-between">
+              <div>
+                <div className="text-xs text-neutral-500 font-medium">Total Unidades:</div>
+                <div className="text-sm font-black text-neutral-900">
+                  {summaryData.topPlatos.reduce((acc, p) => acc + p.cantidad, 0)} u.
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-neutral-500 font-medium">Recaudación Total:</div>
+                <div className="text-sm font-mono font-black text-amber-700">
+                  ${summaryData.topPlatos.reduce((acc, p) => acc + p.total, 0).toFixed(2)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

@@ -30,6 +30,10 @@ import {
   OrderStatus, 
   OrderRoute,
   OrderItem,
+  ItemStatus,
+  OrderRound,
+  OrderDiner,
+  PartialPayment,
   OrderTimelineEvent,
   CashRegisterClose,
   Expense,
@@ -39,7 +43,16 @@ import {
   Supplier,
   PaymentMethod
 } from '../types';
-import { getDailyStatDocId, formatDateKey, computeDailyStatFromRawData, getRestaurantLocalDateString } from './financialService';
+import { 
+  getDailyStatDocId, 
+  formatDateKey, 
+  computeDailyStatFromRawData, 
+  getRestaurantLocalDateString,
+  getOperationalDateString,
+  getOperationalMonthString
+} from './financialService';
+
+export { getOperationalDateString, getOperationalMonthString };
 import { guardarDocumento, limpiarDatosUndefined, actualizarDocumento } from './firestoreUtils';
 
 // ======================= BUSINESSES (MULTI-TENANT) =======================
@@ -444,7 +457,7 @@ export function subscribeToActiveShift(employeeId: string, callback: (shift: Shi
     collection(db, 'shifts'),
     where('appId', '==', 'gastro_smart'),
     where('employeeId', '==', employeeId),
-    where('estado', '==', 'abierto'),
+    where('estado', 'in', ['abierto', 'en_pausa']),
     limit(1)
   );
   return onSnapshot(q, (snapshot) => {
@@ -504,7 +517,7 @@ export async function openShift(employee: Employee, restaurantNombre: string, bu
     collection(db, 'shifts'),
     where('appId', '==', 'gastro_smart'),
     where('employeeId', '==', employee.id),
-    where('estado', '==', 'abierto'),
+    where('estado', 'in', ['abierto', 'en_pausa']),
     limit(1)
   ));
 
@@ -547,7 +560,22 @@ export async function getShiftSessionSummary(
 }> {
   const start = new Date(shift.horaInicio).getTime();
   const end = Date.now();
-  const minutesWorked = Math.max(1, Math.round((end - start) / (1000 * 60)));
+  let minutesWorked = Math.max(1, Math.round((end - start) / (1000 * 60)));
+
+  // Restar el tiempo de pausas
+  if (shift.pausas && shift.pausas.length > 0) {
+    let pauseMinutes = 0;
+    shift.pausas.forEach(p => {
+      if (p.fin) {
+        pauseMinutes += Math.round((new Date(p.fin).getTime() - new Date(p.inicio).getTime()) / (1000 * 60));
+      } else {
+        // Pausa en curso
+        pauseMinutes += Math.round((end - new Date(p.inicio).getTime()) / (1000 * 60));
+      }
+    });
+    minutesWorked = Math.max(1, minutesWorked - pauseMinutes);
+  }
+
   const hoursWorked = Math.round((minutesWorked / 60) * 10) / 10;
 
   let pedidosTomados = 0;
@@ -640,7 +668,22 @@ export async function closeShift(
   const horaFin = new Date().toISOString();
   const start = new Date(data.horaInicio).getTime();
   const end = new Date(horaFin).getTime();
-  const minutesWorked = Math.max(1, Math.round((end - start) / (1000 * 60)));
+  let minutesWorked = Math.max(1, Math.round((end - start) / (1000 * 60)));
+
+  // Restar el tiempo de pausas
+  if (data.pausas && data.pausas.length > 0) {
+    let pauseMinutes = 0;
+    data.pausas.forEach(p => {
+      if (p.fin) {
+        pauseMinutes += Math.round((new Date(p.fin).getTime() - new Date(p.inicio).getTime()) / (1000 * 60));
+      } else {
+        // Pausa en curso (cerrando el turno mientras estaba en pausa)
+        pauseMinutes += Math.round((end - new Date(p.inicio).getTime()) / (1000 * 60));
+      }
+    });
+    minutesWorked = Math.max(1, minutesWorked - pauseMinutes);
+  }
+
   const hoursWorked = Math.round((minutesWorked / 60) * 10) / 10;
 
   const pedidosTomados = sessionMetrics?.pedidosTomados ?? data.pedidosTomados ?? 0;
@@ -688,6 +731,54 @@ export async function closeShift(
     horasTrabajadas: hoursWorked,
     minutosTrabajados: minutesWorked
   };
+}
+
+export async function pauseShift(shiftId: string): Promise<void> {
+  const shiftRef = doc(db, 'shifts', shiftId);
+  const snap = await getDoc(shiftRef);
+  if (!snap.exists()) {
+    throw new Error('Turno no encontrado');
+  }
+  const data = snap.data() as Shift;
+  if (data.estado !== 'abierto') {
+    throw new Error('El turno no está abierto');
+  }
+
+  const pausas = data.pausas || [];
+  pausas.push({
+    inicio: new Date().toISOString()
+  });
+
+  await updateDoc(shiftRef, {
+    estado: 'en_pausa',
+    pausas
+  });
+}
+
+export async function resumeShift(shiftId: string): Promise<void> {
+  const shiftRef = doc(db, 'shifts', shiftId);
+  const snap = await getDoc(shiftRef);
+  if (!snap.exists()) {
+    throw new Error('Turno no encontrado');
+  }
+  const data = snap.data() as Shift;
+  if (data.estado !== 'en_pausa') {
+    throw new Error('El turno no está en pausa');
+  }
+
+  const pausas = data.pausas || [];
+  if (pausas.length > 0) {
+    const lastPause = pausas[pausas.length - 1];
+    if (!lastPause.fin) {
+      lastPause.fin = new Date().toISOString();
+      lastPause.minutos = Math.round((new Date(lastPause.fin).getTime() - new Date(lastPause.inicio).getTime()) / (1000 * 60));
+    }
+  }
+
+  await updateDoc(shiftRef, {
+    estado: 'abierto',
+    pausas
+  });
 }
 
 export async function payShiftSalary(shift: Shift, employee: Employee): Promise<{ expenseId: string; amount: number }> {
@@ -906,7 +997,91 @@ export function subscribeToTables(
 }
 
 export async function updateTableStatus(tableId: string, estado: 'libre' | 'ocupada') {
-  return updateDoc(doc(db, 'tables', tableId), { estado });
+  const updatePayload: Record<string, any> = { estado };
+  if (estado === 'libre') {
+    updatePayload.comandaActivaId = null;
+  }
+  return updateDoc(doc(db, 'tables', tableId), updatePayload);
+}
+
+/**
+ * Libera automáticamente la mesa cambiando su estado a 'libre' y comandaActivaId a null
+ * ÚNICAMENTE si todos los pedidos asociados a esa mesa están cobrados o cancelados/rechazados.
+ * Si aún quedan pedidos abiertos pendientes de cobro, la mesa permanece 'ocupada'.
+ */
+export async function releaseTableIfAllOrdersPaid(
+  tableId: string, 
+  currentPaidOrderId?: string
+): Promise<{ released: boolean; pendingOrdersCount: number }> {
+  if (!tableId) return { released: false, pendingOrdersCount: 0 };
+  
+  try {
+    const ordersRef = collection(db, 'orders');
+    const q = query(
+      ordersRef,
+      where('appId', '==', 'gastro_smart'),
+      where('mesaId', '==', tableId)
+    );
+    const snap = await getDocs(q);
+    
+    // Contar cuántos pedidos activos pendientes de cobro quedan en esta mesa
+    const pendingOrders = snap.docs.filter(docSnap => {
+      if (docSnap.id === currentPaidOrderId) return false;
+      const data = docSnap.data() as Order;
+      // Si está cobrado o rechazado, ya no está pendiente de cobro
+      if (data.estado === 'cobrado' || data.estadoPago === 'cobrado' || data.estado === 'rechazado') {
+        return false;
+      }
+      return true;
+    });
+
+    if (pendingOrders.length === 0) {
+      // No queda ningún pedido pendiente en esta mesa -> Liberar automáticamente de inmediato
+      await updateDoc(doc(db, 'tables', tableId), {
+        estado: 'libre',
+        comandaActivaId: null
+      });
+      return { released: true, pendingOrdersCount: 0 };
+    } else {
+      // Quedan otras cuentas o pedidos abiertos -> La mesa permanece ocupada
+      return { released: false, pendingOrdersCount: pendingOrders.length };
+    }
+  } catch (err) {
+    console.warn('Error en releaseTableIfAllOrdersPaid:', err);
+    return { released: false, pendingOrdersCount: 0 };
+  }
+}
+
+/**
+ * Revierte un pedido marcado como 'entregado'/'retirado' de vuelta a 'listo'
+ * para corregir clics accidentales del mesero sin romper la orden de pago.
+ */
+export async function revertOrderToReady(orderId: string, userName: string) {
+  const orderRef = doc(db, 'orders', orderId);
+  const snap = await getDoc(orderRef);
+  if (!snap.exists()) return;
+  const orderData = snap.data() as Order;
+  
+  if (orderData.estado === 'cobrado' || orderData.estadoPago === 'cobrado') {
+    throw new Error('El pedido ya fue cobrado y no puede ser revertido.');
+  }
+
+  const now = new Date().toISOString();
+  const timeline: OrderTimelineEvent[] = [
+    ...(orderData.timeline || []),
+    {
+      estado: 'listo' as OrderStatus,
+      fecha: now,
+      usuario: userName,
+      motivo: 'Corrección: retiro revertido a Listo para entrega'
+    }
+  ];
+
+  await updateDoc(orderRef, {
+    estado: 'listo',
+    estadoEntrega: 'pendiente',
+    timeline
+  });
 }
 
 // ======================= ORDERS & NOTIFICATIONS =======================
@@ -951,16 +1126,58 @@ export function subscribeToOrders(
   });
 }
 
-export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { creadoEn?: string }) {
-  const initialTimeline: OrderTimelineEvent[] = [
-    {
-      estado: data.estado || 'pendiente_cocina',
-      fecha: new Date().toISOString(),
-      usuario: data.meseroNombre || 'Mesero',
-      motivo: null
-    }
-  ];
+export interface OrderRoutingDecision {
+  ruta: OrderRoute;
+  requiresKitchen: boolean;
+  is100Mostrador: boolean;
+  initialState: OrderStatus;
+  esVentaExpress: boolean;
+}
 
+/**
+ * REGLA DEFINITIVA DE ENRUTAMIENTO COCINA VS. MOSTRADOR SEGÚN COMPOSICIÓN DEL PEDIDO
+ * 
+ * Regla 1 (Al menos un producto que requiere preparación):
+ *   - Todo el pedido pasa por Cocina.
+ *   - ruta: 'cocina' (si 100% cocina) o 'mixto' (si combina cocina + mostrador).
+ *   - initialState: 'pendiente_cocina'.
+ *   - Cocina recibe la alerta sonora, visualiza los platos a preparar, y marca "Listo para entregar".
+ *   - Al marcar "Listo para entregar", la alerta suena SIMULTÁNEAMENTE para Mesero y Mostrador.
+ * 
+ * Regla 2 (100% productos que NO requieren preparación / cobro directo):
+ *   - El pedido NO pasa por Cocina en absoluto (no se le notifica, no aparece en su cola ni recibe alerta).
+ *   - El pedido va directo a Mostrador.
+ *   - ruta: 'express'.
+ *   - initialState: 'listo' (listo para despacho en mostrador).
+ *   - SOLO Mostrador recibe la alerta sonora indicando qué productos debe entregar.
+ */
+export function determineOrderRouting(items: OrderItem[]): OrderRoutingDecision {
+  const safeItems = items || [];
+  // Un producto requiere cocina si su flag requiereCocina no es explícitamente false
+  const hasKitchenItem = safeItems.some(i => i.requiereCocina !== false);
+  const hasNonKitchenItem = safeItems.some(i => i.requiereCocina === false);
+
+  if (hasKitchenItem) {
+    const ruta: OrderRoute = hasNonKitchenItem ? 'mixto' : 'cocina';
+    return {
+      ruta,
+      requiresKitchen: true,
+      is100Mostrador: false,
+      initialState: 'pendiente_cocina',
+      esVentaExpress: false
+    };
+  } else {
+    return {
+      ruta: 'express',
+      requiresKitchen: false,
+      is100Mostrador: true,
+      initialState: 'pendiente_cocina',
+      esVentaExpress: true
+    };
+  }
+}
+
+export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { creadoEn?: string }) {
   let targetBusinessId = data.businessId;
   if (!targetBusinessId && data.restaurantId) {
     try {
@@ -973,36 +1190,70 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
     }
   }
 
-  // Determinar ruta del pedido si no viene especificada
-  let computedRuta: OrderRoute = data.ruta || 'cocina';
-  if (!data.ruta && data.items && data.items.length > 0) {
-    const allNoKitchen = data.items.every(i => i.requiereCocina === false);
-    const someNoKitchen = data.items.some(i => i.requiereCocina === false);
-    const someKitchen = data.items.some(i => i.requiereCocina !== false);
-    if (allNoKitchen) {
-      computedRuta = 'express';
-    } else if (someNoKitchen && someKitchen) {
-      computedRuta = 'mixto';
-    } else {
-      computedRuta = 'cocina';
+  // Sanitizar items primero para evaluar la composición completa del pedido
+  const nowIso = new Date().toISOString();
+  const sanitizedItems: OrderItem[] = (data.items || []).map((it, idx) => {
+    const itemNeedsKitchen = it.requiereCocina !== false;
+    return {
+      ...it,
+      id: it.id || `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+      requiereCocina: itemNeedsKitchen,
+      estadoItem: it.estadoItem || (itemNeedsKitchen ? 'pendiente' : 'listo'),
+      estado: it.estado || (itemNeedsKitchen ? 'pendiente_cocina' : 'listo'),
+      ronda: it.ronda || 1,
+      rondaEnviadaEn: it.rondaEnviadaEn || nowIso,
+      comensalId: it.comensalId || null,
+      comensalNombre: it.comensalNombre || null,
+      comensalNumero: it.comensalNumero || null,
+      cobrado: Boolean(it.cobrado)
+    };
+  });
+
+  // Evaluación canónica única del enrutamiento (Regla 1 vs Regla 2)
+  const routing = determineOrderRouting(sanitizedItems);
+  const computedRuta: OrderRoute = data.ruta || routing.ruta;
+  const isExpress = computedRuta === 'express' || routing.esVentaExpress || Boolean(data.esVentaExpress);
+  
+  // Regla 1: El estado inicial al crear/enviar el pedido debe ser SIEMPRE 'pendiente_cocina' (NUNCA 'listo')
+  // Salvo que venga ya expresamente marcado como 'cobrado' en venta rápida de mostrador
+  const finalInitialState: OrderStatus = (data.estado === 'cobrado') ? 'cobrado' : 'pendiente_cocina';
+
+  const initialTimeline: OrderTimelineEvent[] = [
+    {
+      estado: finalInitialState,
+      fecha: nowIso,
+      usuario: data.meseroNombre || 'Mesero',
+      motivo: data.tipo === 'local' ? `Mesa #${data.mesaNumero || ''} · Ronda 1 enviada a cocina` : null
     }
-  }
+  ];
 
-  const isExpress = computedRuta === 'express' || Boolean(data.esVentaExpress);
+  const initialRondas: OrderRound[] = [
+    {
+      numero: 1,
+      enviadoEn: nowIso,
+      meseroNombre: data.meseroNombre || 'Mesero',
+      estado: finalInitialState === 'cobrado' ? 'entregado' : 'pendiente_cocina',
+      itemsCount: sanitizedItems.length
+    }
+  ];
 
-  const sanitizedItems: OrderItem[] = (data.items || []).map(it => ({
-    ...it,
-    requiereCocina: it.requiereCocina !== undefined ? it.requiereCocina : true,
-    estadoItem: it.estadoItem || (it.requiereCocina === false ? 'listo' : 'pendiente')
-  }));
+  const totalCalculated = data.total || 0;
 
   const sanitizedData: any = {
     ...data,
+    estado: finalInitialState,
     items: sanitizedItems,
     ruta: computedRuta,
     esVentaExpress: isExpress,
     estadoPago: data.estadoPago || (data.estado === 'cobrado' ? 'cobrado' : 'pendiente'),
     estadoEntrega: data.estadoEntrega || (data.estado === 'entregado' ? 'entregado' : 'pendiente'),
+    rondaActual: 1,
+    rondas: initialRondas,
+    comensales: data.comensales || [],
+    cobros: data.cobros || [],
+    montoCobradoAcumulado: data.montoCobradoAcumulado || (data.estado === 'cobrado' ? totalCalculated : 0),
+    saldoPendiente: data.saldoPendiente !== undefined ? data.saldoPendiente : (data.estado === 'cobrado' ? 0 : totalCalculated),
+    fuga: null,
     businessId: targetBusinessId || 'biz_default',
     appId: 'gastro_smart',
     empresaDelivery: data.tipo === 'delivery' ? (data.empresaDelivery || 'Propio') : null,
@@ -1019,7 +1270,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
     montoPagado: data.montoPagado || 0,
     vuelto: data.vuelto || 0,
     cajeroNombre: data.cajeroNombre || null,
-    creadoEn: data.creadoEn || new Date().toISOString(),
+    creadoEn: data.creadoEn || nowIso,
     timeline: initialTimeline
   };
 
@@ -1042,7 +1293,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
       collection(db, 'shifts'),
       where('appId', '==', 'gastro_smart'),
       where('employeeId', '==', data.meseroId),
-      where('estado', '==', 'abierto'),
+      where('estado', 'in', ['abierto', 'en_pausa']),
       limit(1)
     ));
     if (!shiftSnap.empty) {
@@ -1132,11 +1383,25 @@ export async function appendItemsToExistingOrder(
       throw new Error('No se puede ampliar una comanda que ya fue cobrada o cancelada.');
     }
 
-    const sanitizedNewItems: OrderItem[] = newItems.map(it => ({
-      ...it,
-      requiereCocina: it.requiereCocina !== undefined ? it.requiereCocina : true,
-      estadoItem: it.estadoItem || (it.requiereCocina === false ? 'listo' : 'pendiente')
-    }));
+    const nextRound = (currentOrder.rondaActual || 1) + 1;
+    const nowIso = new Date().toISOString();
+
+    const sanitizedNewItems: OrderItem[] = newItems.map((it, idx) => {
+      const itemNeedsKitchen = it.requiereCocina !== false;
+      return {
+        ...it,
+        id: it.id || `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+        requiereCocina: itemNeedsKitchen,
+        estadoItem: it.estadoItem || (itemNeedsKitchen ? 'pendiente' : 'listo'),
+        estado: it.estado || (itemNeedsKitchen ? 'pendiente_cocina' : 'listo'),
+        ronda: it.ronda || nextRound,
+        rondaEnviadaEn: it.rondaEnviadaEn || nowIso,
+        comensalId: it.comensalId || null,
+        comensalNombre: it.comensalNombre || null,
+        comensalNumero: it.comensalNumero || null,
+        cobrado: Boolean(it.cobrado)
+      };
+    });
 
     const mergedItems = [...(currentOrder.items || []), ...sanitizedNewItems];
 
@@ -1146,35 +1411,67 @@ export async function appendItemsToExistingOrder(
     const descuento = currentOrder.descuento || 0;
     const propina = currentOrder.propina || 0;
     const total = Math.max(0, Math.round((subtotal - descuento + propina) * 100) / 100);
+    const montoCobradoAcumulado = currentOrder.montoCobradoAcumulado || 0;
+    const saldoPendiente = Math.max(0, Math.round((total - montoCobradoAcumulado) * 100) / 100);
 
-    // Determinar la ruta de preparación según los ítems
-    const allNoKitchen = mergedItems.every(i => i.requiereCocina === false);
-    const someNoKitchen = mergedItems.some(i => i.requiereCocina === false);
-    const someKitchen = mergedItems.some(i => i.requiereCocina !== false);
-    let computedRuta: OrderRoute = 'cocina';
-    if (allNoKitchen) computedRuta = 'express';
-    else if (someNoKitchen && someKitchen) computedRuta = 'mixto';
+    // Evaluación canónica única del enrutamiento de la comanda ampliada
+    const routing = determineOrderRouting(mergedItems);
+    const computedRuta: OrderRoute = routing.ruta;
+    const isExpress = routing.esVentaExpress;
+    const nextState: OrderStatus = 'pendiente_cocina';
 
     const userName = typeof options === 'string' ? options : (options?.userName || 'Mesero');
     const addedCount = newItems.reduce((acc, it) => acc + (it.cantidad || 1), 0);
 
     const timelineEvent: OrderTimelineEvent = (typeof options === 'object' && options?.timelineEvent) ? options.timelineEvent : {
-      estado: 'pendiente_cocina',
-      fecha: new Date().toISOString(),
+      estado: nextState,
+      fecha: nowIso,
       usuario: userName,
-      motivo: `Ampliación de comanda: +${addedCount} plato(s) agregados (${newItems.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')})`
+      motivo: `Mesa #${currentOrder.mesaNumero || ''} · Ronda ${nextRound} enviada a cocina (+${addedCount} plato(s): ${newItems.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')})`
     };
 
     const mergedTimeline = [...(currentOrder.timeline || []), timelineEvent];
+
+    // Actualizar historial de rondas
+    const existingRondas: OrderRound[] = currentOrder.rondas && currentOrder.rondas.length > 0 
+      ? currentOrder.rondas 
+      : [{
+          numero: 1,
+          enviadoEn: currentOrder.creadoEn || nowIso,
+          meseroNombre: currentOrder.meseroNombre || 'Mesero',
+          estado: 'entregado',
+          itemsCount: (currentOrder.items || []).length
+        }];
+
+    const newRoundRecord: OrderRound = {
+      numero: nextRound,
+      enviadoEn: nowIso,
+      meseroNombre: userName,
+      estado: 'pendiente_cocina',
+      itemsCount: sanitizedNewItems.length
+    };
+
+    const updatedRondas = [...existingRondas, newRoundRecord];
+
+    // Mezclar comensales si se enviaron actualizados
+    let mergedComensales = currentOrder.comensales || [];
+    if (typeof options === 'object' && (options as any)?.comensales) {
+      mergedComensales = (options as any).comensales;
+    }
 
     tx.update(orderRef, {
       items: mergedItems,
       subtotal,
       total,
+      saldoPendiente,
+      montoCobradoAcumulado,
+      rondaActual: nextRound,
+      rondas: updatedRondas,
+      comensales: mergedComensales,
       timeline: mergedTimeline,
-      estado: 'pendiente_cocina', // Despierta la pantalla de KDS/Cocina
+      estado: nextState, // Despierta KDS con la nueva ronda
       ruta: computedRuta,
-      esVentaExpress: computedRuta === 'express'
+      esVentaExpress: isExpress
     });
 
     if (currentOrder.mesaId) {
@@ -1186,47 +1483,451 @@ export async function appendItemsToExistingOrder(
   });
 }
 
-export async function updateOrderStatus(
-  orderId: string, 
-  newStatus: OrderStatus, 
-  userName: string, 
-  options?: {
-    motivoRechazo?: string;
-    timeline?: OrderTimelineEvent[];
-    metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
-    montoPagado?: number;
-    vuelto?: number;
-    cajeroNombre?: string;
+/**
+ * Actualiza el estado de una RONDA específica de una comanda (ej: Ronda 2 -> en_preparacion -> listo -> entregado)
+ */
+export async function updateOrderRoundStatus(
+  orderId: string,
+  roundNumber: number,
+  newStatus: 'aceptado' | 'en_preparacion' | 'listo' | 'entregado',
+  userName: string
+): Promise<void> {
+  const orderRef = doc(db, 'orders', orderId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists()) return;
+    const order = snap.data() as Order;
+    const now = new Date().toISOString();
+
+    const updatedItems = (order.items || []).map(it => {
+      const itemRound = it.ronda || 1;
+      if (itemRound === roundNumber && it.requiereCocina !== false) {
+        return {
+          ...it,
+          estado: newStatus,
+          estadoItem: newStatus === 'listo' ? 'listo' : (newStatus === 'entregado' ? 'entregado' : 'pendiente')
+        };
+      }
+      return it;
+    });
+
+    const updatedRondas = (order.rondas || []).map(r => {
+      if (r.numero === roundNumber) {
+        return {
+          ...r,
+          estado: newStatus,
+          ...(newStatus === 'aceptado' ? { aceptadoEn: now } : {}),
+          ...(newStatus === 'en_preparacion' ? { enPreparacionEn: now } : {}),
+          ...(newStatus === 'listo' ? { listoEn: now } : {}),
+          ...(newStatus === 'entregado' ? { entregadoEn: now } : {})
+        };
+      }
+      return r;
+    });
+
+    // Determinar estado general del pedido
+    const hasKitchenPending = updatedItems.some(i => i.requiereCocina !== false && (i.estado === 'pendiente_cocina' || !i.estado));
+    const hasKitchenPrep = updatedItems.some(i => i.requiereCocina !== false && (i.estado === 'aceptado' || i.estado === 'en_preparacion'));
+    const hasKitchenReady = updatedItems.some(i => i.requiereCocina !== false && i.estado === 'listo');
+    
+    let overallState: OrderStatus = order.estado;
+    if (order.estado !== 'cobrado') {
+      if (hasKitchenPending) overallState = 'pendiente_cocina';
+      else if (hasKitchenPrep) overallState = 'en_preparacion';
+      else if (hasKitchenReady) overallState = 'listo';
+      else overallState = 'entregado';
+    }
+
+    const newTimelineEvent: OrderTimelineEvent = {
+      estado: overallState,
+      fecha: now,
+      usuario: userName || 'Cocina',
+      motivo: `Mesa #${order.mesaNumero || ''} · Ronda ${roundNumber} pasada a ${newStatus}`
+    };
+
+    tx.update(orderRef, {
+      items: updatedItems,
+      rondas: updatedRondas,
+      estado: overallState,
+      timeline: [...(order.timeline || []), newTimelineEvent]
+    });
+  });
+}
+
+/**
+ * Actualiza el estado de un ITEM individual de una comanda
+ */
+export async function updateOrderItemStatus(
+  orderId: string,
+  itemIdOrIndex: string | number,
+  newStatus: ItemStatus,
+  userName: string
+): Promise<void> {
+  const orderRef = doc(db, 'orders', orderId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists()) return;
+    const order = snap.data() as Order;
+    const now = new Date().toISOString();
+
+    const updatedItems = (order.items || []).map((it, idx) => {
+      const match = typeof itemIdOrIndex === 'number' ? idx === itemIdOrIndex : it.id === itemIdOrIndex;
+      if (match) {
+        return {
+          ...it,
+          estado: newStatus,
+          estadoItem: newStatus === 'listo' ? 'listo' : (newStatus === 'entregado' ? 'entregado' : 'pendiente')
+        };
+      }
+      return it;
+    });
+
+    const hasKitchenPending = updatedItems.some(i => i.requiereCocina !== false && i.estado === 'pendiente_cocina');
+    const hasKitchenPrep = updatedItems.some(i => i.requiereCocina !== false && (i.estado === 'aceptado' || i.estado === 'en_preparacion'));
+    const hasKitchenReady = updatedItems.some(i => i.requiereCocina !== false && i.estado === 'listo');
+
+    let overallState: OrderStatus = order.estado;
+    if (order.estado !== 'cobrado') {
+      if (hasKitchenPending) overallState = 'pendiente_cocina';
+      else if (hasKitchenPrep) overallState = 'en_preparacion';
+      else if (hasKitchenReady) overallState = 'listo';
+      else overallState = 'entregado';
+    }
+
+    tx.update(orderRef, {
+      items: updatedItems,
+      estado: overallState
+    });
+  });
+}
+
+/**
+ * Registra un cobro parcial (Cobro por comensal, partes iguales o cuenta general)
+ */
+export async function registerPartialPayment(
+  orderId: string,
+  paymentData: {
+    tipo: 'comensal' | 'partes_iguales' | 'total' | 'general';
+    comensalId?: string;
+    comensalNombre?: string;
+    comensalNumero?: number;
+    items?: OrderItem[];
+    monto: number;
     subtotal?: number;
-    total?: number;
     descuento?: number;
     propina?: number;
-    estadoEntrega?: 'pendiente' | 'entregado';
-    estadoPago?: 'pendiente' | 'cobrado';
-    ruta?: OrderRoute;
-    items?: OrderItem[];
-  },
-  _extraParam?: any
-) {
+    total: number;
+    metodoPago: string;
+    montoRecibido?: number;
+    vuelto?: number;
+    cajeroNombre?: string;
+    clienteNombre?: string;
+    clienteTelefono?: string;
+    numeroParte?: number;
+    totalPartes?: number;
+  }
+): Promise<{ orderCompleted: boolean; saldoRestante: number; paymentId: string }> {
+  const orderRef = doc(db, 'orders', orderId);
+  let orderCompleted = false;
+  let saldoRestante = 0;
+  const paymentId = 'pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists()) throw new Error('Pedido no existe');
+    const order = snap.data() as Order;
+    const now = new Date().toISOString();
+
+    const newPayment: PartialPayment = {
+      id: paymentId,
+      tipo: paymentData.tipo,
+      comensalId: paymentData.comensalId || undefined,
+      comensalNombre: paymentData.comensalNombre || undefined,
+      comensalNumero: paymentData.comensalNumero || undefined,
+      items: paymentData.items || undefined,
+      monto: paymentData.monto,
+      subtotal: paymentData.subtotal || paymentData.monto,
+      descuento: paymentData.descuento || 0,
+      propina: paymentData.propina || 0,
+      total: paymentData.total,
+      metodoPago: paymentData.metodoPago,
+      montoRecibido: paymentData.montoRecibido,
+      vuelto: paymentData.vuelto || 0,
+      fecha: now,
+      cajeroNombre: paymentData.cajeroNombre || 'Cajero',
+      clienteNombre: paymentData.clienteNombre,
+      clienteTelefono: paymentData.clienteTelefono,
+      ticketImpreso: true,
+      numeroParte: paymentData.numeroParte,
+      totalPartes: paymentData.totalPartes
+    };
+
+    const existingCobros = order.cobros || [];
+    const updatedCobros = [...existingCobros, newPayment];
+    const totalCobrado = Math.round(updatedCobros.reduce((sum, c) => sum + (c.monto || c.total || 0), 0) * 100) / 100;
+    const orderTotal = order.total || 0;
+    const newSaldoPendiente = Math.max(0, Math.round((orderTotal - totalCobrado) * 100) / 100);
+    saldoRestante = newSaldoPendiente;
+
+    // Actualizar items si el cobro fue por comensal o cuenta general
+    const updatedItems = (order.items || []).map(it => {
+      if (paymentData.tipo === 'comensal' && paymentData.comensalId && (it.comensalId === paymentData.comensalId || it.comensalNombre === paymentData.comensalNombre)) {
+        return { ...it, cobrado: true, cobroId: paymentId, estado: 'cobrado' as ItemStatus };
+      }
+      if (paymentData.tipo === 'general' && (!it.comensalId || it.comensalId === 'general')) {
+        return { ...it, cobrado: true, cobroId: paymentId, estado: 'cobrado' as ItemStatus };
+      }
+      return it;
+    });
+
+    // Actualizar comensales
+    const updatedComensales = (order.comensales || []).map(c => {
+      if (paymentData.tipo === 'comensal' && (c.id === paymentData.comensalId || c.nombre === paymentData.comensalNombre)) {
+        return { ...c, pagado: true, montoPagado: (c.montoPagado || 0) + paymentData.total };
+      }
+      return c;
+    });
+
+    const isFullyPaid = newSaldoPendiente <= 0.01;
+    orderCompleted = isFullyPaid;
+
+    const timelineEvent: OrderTimelineEvent = {
+      estado: isFullyPaid ? 'cobrado' : order.estado,
+      fecha: now,
+      usuario: paymentData.cajeroNombre || 'Cajero',
+      motivo: isFullyPaid 
+        ? `Cobro final completado (${paymentData.tipo === 'comensal' ? `Comensal: ${paymentData.comensalNombre}` : 'Cuenta liquidada'}). Total cobrado: $${totalCobrado.toFixed(2)}`
+        : `Pago parcial registrado: $${paymentData.total.toFixed(2)} (${paymentData.tipo === 'comensal' ? `Comensal: ${paymentData.comensalNombre}` : `Parte ${paymentData.numeroParte || 1}/${paymentData.totalPartes || 1}`}). Saldo pendiente: $${newSaldoPendiente.toFixed(2)}`
+    };
+
+    const updatePayload: any = {
+      cobros: updatedCobros,
+      montoCobradoAcumulado: totalCobrado,
+      saldoPendiente: newSaldoPendiente,
+      items: updatedItems,
+      comensales: updatedComensales,
+      estadoPago: isFullyPaid ? 'cobrado' : 'parcial',
+      timeline: [...(order.timeline || []), timelineEvent]
+    };
+
+    if (isFullyPaid) {
+      updatePayload.estado = 'cobrado';
+      updatePayload.cobradoEn = now;
+      updatePayload.metodoPago = paymentData.metodoPago;
+      updatePayload.montoPagado = totalCobrado;
+      updatePayload.cajeroNombre = paymentData.cajeroNombre;
+    }
+
+    tx.update(orderRef, updatePayload);
+
+    // Si está totalmente pagado y tenía mesa, liberar la mesa
+    if (isFullyPaid && order.mesaId) {
+      tx.update(doc(db, 'tables', order.mesaId), {
+        estado: 'libre',
+        comandaActivaId: null
+      });
+    }
+  });
+
+  // Sincronizar estadísticas diarias con el monto cobrado en este pago parcial
+  try {
+    const snap = await getDoc(orderRef);
+    if (snap.exists()) {
+      const orderData = snap.data() as Order;
+      const fechaHoy = getOperationalDateString(new Date());
+      const bId = orderData.businessId || 'biz_default';
+      const rId = orderData.restaurantId;
+      const statDocId = getDailyStatDocId(bId, rId, fechaHoy);
+      const statRef = doc(db, 'dailyStats', statDocId);
+      const statSnap = await getDoc(statRef);
+      const amountPaid = paymentData.total;
+
+      if (statSnap.exists()) {
+        const prevStat = statSnap.data() as DailyStat;
+        const newVentas = (prevStat.ventasTotales || 0) + amountPaid;
+        const newPedidos = orderCompleted ? (prevStat.pedidosCobrados || 0) + 1 : (prevStat.pedidosCobrados || 0);
+        const newGastos = prevStat.gastosTotales || 0;
+        await updateDoc(statRef, {
+          ventasTotales: Math.round(newVentas * 100) / 100,
+          pedidosCobrados: newPedidos,
+          gananciaNeta: Math.round((newVentas - newGastos) * 100) / 100,
+          actualizadoEn: new Date().toISOString()
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('Error updating dailyStats for partial payment:', e);
+  }
+
+  // Si se registró teléfono de comensal, vincular al historial del cliente
+  if (paymentData.clienteTelefono) {
+    try {
+      const clientsSnap = await getDocs(query(
+        collection(db, 'clients'),
+        where('appId', '==', 'gastro_smart'),
+        where('telefono', '==', paymentData.clienteTelefono),
+        limit(1)
+      ));
+      if (!clientsSnap.empty) {
+        const clDoc = clientsSnap.docs[0];
+        const clData = clDoc.data();
+        await updateDoc(clDoc.ref, {
+          totalConsumido: (clData.totalConsumido || 0) + paymentData.total,
+          pedidosCount: (clData.pedidosCount || 0) + 1,
+          ultimaVisita: new Date().toISOString()
+        });
+      }
+    } catch (e) {
+      console.warn('Error updating client loyalty for diner payment:', e);
+    }
+  }
+
+  return { orderCompleted, saldoRestante, paymentId };
+}
+
+/**
+ * Cierre por Fuga / Salió sin pagar (Permite a Administrador/Cajero registrar la pérdida y liberar la mesa)
+ */
+export async function registerOrderFuga(
+  orderId: string,
+  motivo: string,
+  userName: string
+): Promise<void> {
+  const orderRef = doc(db, 'orders', orderId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(orderRef);
+    if (!snap.exists()) throw new Error('Pedido no existe');
+    const order = snap.data() as Order;
+    const now = new Date().toISOString();
+    const saldoPerdido = order.saldoPendiente !== undefined ? order.saldoPendiente : (order.total || 0);
+
+    const fugaRecord = {
+      motivo: motivo.trim() || 'Comensales salieron sin pagar',
+      usuario: userName,
+      fecha: now,
+      montoPerdido: saldoPerdido
+    };
+
+    const timelineEvent: OrderTimelineEvent = {
+      estado: 'cobrado',
+      fecha: now,
+      usuario: userName,
+      motivo: `Cierre forzado por fuga (Salió sin pagar). Motivo: ${fugaRecord.motivo}. Saldo perdido: $${saldoPerdido.toFixed(2)}`
+    };
+
+    tx.update(orderRef, {
+      fuga: fugaRecord,
+      estado: 'cobrado',
+      estadoPago: 'cobrado',
+      cobradoEn: now,
+      saldoPendiente: 0,
+      timeline: [...(order.timeline || []), timelineEvent]
+    });
+
+    if (order.mesaId) {
+      tx.update(doc(db, 'tables', order.mesaId), {
+        estado: 'libre',
+        comandaActivaId: null
+      });
+    }
+  });
+}
+
+/**
+ * Tabla de Transiciones Legales de la Máquina de Estados:
+ * pendiente_cocina → aceptado → en_preparacion → listo → entregado → cobrado
+ * pendiente_cocina → rechazado (con motivo)
+ * (los estados nunca saltan pasos ni retroceden, salvo admin)
+ */
+export const LEGAL_ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  pendiente_cocina: ['aceptado', 'rechazado', 'cobrado'],
+  aceptado: ['en_preparacion', 'rechazado', 'cobrado'],
+  en_preparacion: ['listo', 'rechazado', 'cobrado'],
+  listo: ['entregado', 'cobrado'],
+  entregado: ['cobrado'],
+  cobrado: ['entregado'],
+  rechazado: []
+};
+
+export interface CambiarEstadoPedidoOptions {
+  motivoRechazo?: string;
+  motivo?: string;
+  timeline?: OrderTimelineEvent[];
+  metodoPago?: 'efectivo' | 'tarjeta' | 'transferencia';
+  montoPagado?: number;
+  vuelto?: number;
+  cajeroNombre?: string;
+  subtotal?: number;
+  total?: number;
+  descuento?: number;
+  propina?: number;
+  montoCobradoAcumulado?: number;
+  saldoPendiente?: number;
+  estadoEntrega?: 'pendiente' | 'entregado';
+  estadoPago?: 'pendiente' | 'cobrado';
+  ruta?: OrderRoute;
+  items?: OrderItem[];
+  esAdmin?: boolean;
+  forzarAdmin?: boolean;
+}
+
+/**
+ * Función Centralizada para TODOS los cambios de estado de pedidos.
+ * Valida que la transición sea legal y añade el evento al timeline.
+ */
+export async function cambiarEstadoPedido(
+  orderId: string, 
+  nuevoEstado: OrderStatus, 
+  usuario: string, 
+  options?: CambiarEstadoPedidoOptions
+): Promise<boolean> {
+  if (!orderId) {
+    console.error('cambiarEstadoPedido: orderId no proporcionado');
+    return false;
+  }
+
   const orderRef = doc(db, 'orders', orderId);
   const currentSnap = await getDoc(orderRef);
-  if (!currentSnap.exists()) return;
+  if (!currentSnap.exists()) {
+    console.error(`cambiarEstadoPedido: Pedido #${orderId} no existe`);
+    return false;
+  }
+
   const orderData = currentSnap.data() as Order;
+  const estadoActual = orderData.estado || 'pendiente_cocina';
+
+  // Si ya está en ese estado, no hacer nada redundante
+  if (estadoActual === nuevoEstado) {
+    return true;
+  }
+
+  const isAdmin = Boolean(options?.esAdmin || options?.forzarAdmin);
+  const legalNextStates = LEGAL_ORDER_TRANSITIONS[estadoActual] || [];
+  const isLegal = legalNextStates.includes(nuevoEstado);
+
+  if (!isLegal && !isAdmin) {
+    const errorMsg = `Transición inválida: ${estadoActual} → ${nuevoEstado}`;
+    console.error(errorMsg);
+    console.warn(errorMsg);
+    throw new Error(errorMsg);
+  }
 
   const now = new Date().toISOString();
   const currentTimeline = options?.timeline || orderData.timeline || [];
+  const newTimelineEvent: OrderTimelineEvent = {
+    estado: nuevoEstado,
+    fecha: now,
+    usuario: usuario || 'Sistema',
+    motivo: options?.motivoRechazo || options?.motivo || null
+  };
+
   const updatedTimeline: OrderTimelineEvent[] = [
     ...currentTimeline,
-    {
-      estado: newStatus,
-      fecha: now,
-      usuario: userName,
-      motivo: options?.motivoRechazo || null
-    }
+    newTimelineEvent
   ];
 
   const updatePayload: any = {
-    estado: newStatus,
+    estado: nuevoEstado,
     timeline: updatedTimeline
   };
 
@@ -1239,30 +1940,42 @@ export async function updateOrderStatus(
   if (options?.ruta !== undefined) updatePayload.ruta = options.ruta;
   if (options?.items !== undefined) updatePayload.items = options.items;
 
-  if (newStatus === 'aceptado') updatePayload.aceptadoEn = now;
-  if (newStatus === 'listo') updatePayload.listoEn = now;
-  if (newStatus === 'entregado') {
+  if (nuevoEstado === 'aceptado') {
+    updatePayload.aceptadoEn = now;
+  }
+  if (nuevoEstado === 'en_preparacion' && !orderData.enPreparacionEn) {
+    updatePayload.enPreparacionEn = now;
+  }
+  if (nuevoEstado === 'listo') {
+    updatePayload.listoEn = now;
+  }
+  if (nuevoEstado === 'entregado') {
     updatePayload.entregadoEn = now;
     updatePayload.estadoEntrega = 'entregado';
-  }
-
-  if (newStatus === 'rechazado' && options?.motivoRechazo) {
-    updatePayload.motivoRechazo = options.motivoRechazo;
-    if (orderData.mesaId) {
-      await updateTableStatus(orderData.mesaId, 'libre');
+    if (estadoActual === 'cobrado' || orderData.estadoPago === 'cobrado') {
+      updatePayload.estado = 'cobrado';
     }
   }
 
-  if (newStatus === 'cobrado') {
+  if (nuevoEstado === 'rechazado') {
+    const motivo = options?.motivoRechazo || options?.motivo || 'Rechazado por cocina';
+    updatePayload.motivoRechazo = motivo;
+    if (orderData.mesaId) {
+      await releaseTableIfAllOrdersPaid(orderData.mesaId, orderId);
+    }
+  }
+
+  if (nuevoEstado === 'cobrado') {
     updatePayload.cobradoEn = now;
     updatePayload.estadoPago = 'cobrado';
+
     if (options?.metodoPago) updatePayload.metodoPago = options.metodoPago;
     if (options?.montoPagado !== undefined) updatePayload.montoPagado = options.montoPagado;
     if (options?.vuelto !== undefined) updatePayload.vuelto = options.vuelto;
     if (options?.cajeroNombre) updatePayload.cajeroNombre = options.cajeroNombre;
 
     if (orderData.mesaId) {
-      await updateTableStatus(orderData.mesaId, 'libre');
+      await releaseTableIfAllOrdersPaid(orderData.mesaId, orderId);
     }
 
     try {
@@ -1270,7 +1983,7 @@ export async function updateOrderStatus(
         collection(db, 'shifts'),
         where('appId', '==', 'gastro_smart'),
         where('employeeId', '==', orderData.meseroId),
-        where('estado', '==', 'abierto'),
+        where('estado', 'in', ['abierto', 'en_pausa']),
         limit(1)
       ));
       if (!shiftSnap.empty) {
@@ -1286,7 +1999,7 @@ export async function updateOrderStatus(
 
     // Sincronizar en tiempo real con dailyStats
     try {
-      const fechaHoy = formatDateKey(new Date());
+      const fechaHoy = getOperationalDateString(new Date());
       const bId = orderData.businessId || 'biz_default';
       const rId = orderData.restaurantId;
       const statDocId = getDailyStatDocId(bId, rId, fechaHoy);
@@ -1299,11 +2012,30 @@ export async function updateOrderStatus(
         const newVentas = (prevStat.ventasTotales || 0) + totalOrder;
         const newPedidos = (prevStat.pedidosCobrados || 0) + 1;
         const newGastos = prevStat.gastosTotales || 0;
+
+        // Actualizar topPlatos acumulando los ítems de esta comanda
+        const existingTopPlatos = [...(prevStat.topPlatos || [])];
+        (orderData.items || []).forEach(item => {
+          const found = existingTopPlatos.find(p => p.nombre === item.nombre);
+          if (found) {
+            found.cantidad += (item.cantidad || 1);
+            found.total += (item.precio || 0) * (item.cantidad || 1);
+          } else {
+            existingTopPlatos.push({
+              nombre: item.nombre,
+              cantidad: item.cantidad || 1,
+              total: (item.precio || 0) * (item.cantidad || 1)
+            });
+          }
+        });
+        existingTopPlatos.sort((a, b) => b.cantidad - a.cantidad);
+
         await updateDoc(statRef, {
           ventasTotales: Math.round(newVentas * 100) / 100,
           pedidosCobrados: newPedidos,
           gananciaNeta: Math.round((newVentas - newGastos) * 100) / 100,
           ticketPromedio: newPedidos > 0 ? Math.round((newVentas / newPedidos) * 100) / 100 : 0,
+          topPlatos: existingTopPlatos,
           actualizadoEn: new Date().toISOString()
         });
       } else {
@@ -1346,39 +2078,32 @@ export async function updateOrderStatus(
         await setDoc(statRef, initialStat);
       }
     } catch (e) {
-      console.warn('Could not update dailyStats for order:', e);
+      console.warn('Could not update dailyStats:', e);
     }
   }
 
-  return updateDoc(orderRef, updatePayload);
+  await updateDoc(orderRef, updatePayload);
+  return true;
 }
 
 /**
- * Marca un pedido como entregado (especialmente útil para entregas en mostrador/express)
+ * Wrapper de compatibilidad directa hacia cambiarEstadoPedido
+ */
+export async function updateOrderStatus(
+  orderId: string, 
+  newStatus: OrderStatus, 
+  userName: string, 
+  options?: CambiarEstadoPedidoOptions,
+  _extraParam?: any
+) {
+  return cambiarEstadoPedido(orderId, newStatus, userName, options);
+}
+
+/**
+ * Marca un pedido como entregado (especialmente útil para entregas en mostrador/express o retiro de mesero)
  */
 export async function markOrderDelivered(orderId: string, userName: string): Promise<void> {
-  const orderRef = doc(db, 'orders', orderId);
-  const snap = await getDoc(orderRef);
-  if (!snap.exists()) return;
-  const order = snap.data() as Order;
-
-  const now = new Date().toISOString();
-  const timeline = order.timeline || [];
-  const updatedTimeline: OrderTimelineEvent[] = [
-    ...timeline,
-    {
-      estado: 'entregado',
-      fecha: now,
-      usuario: userName,
-      motivo: 'Entrega en mostrador confirmada'
-    }
-  ];
-
-  await updateDoc(orderRef, {
-    estadoEntrega: 'entregado',
-    entregadoEn: now,
-    timeline: updatedTimeline
-  });
+  await cambiarEstadoPedido(orderId, 'entregado', userName);
 }
 
 // ======================= CLIENTS =======================
@@ -2245,8 +2970,9 @@ export async function diagnoseDailyStats(
     orderSnap.docs.forEach(d => {
       const o = d.data() as Order;
       if (restaurantId && o.restaurantId !== restaurantId) return;
-      if (o.estado !== 'cobrado') return;
-      const orderDate = (o.cobradoEn || o.creadoEn || '').split('T')[0];
+      const isPaid = o.estado === 'cobrado' || o.estadoPago === 'cobrado';
+      if (!isPaid) return;
+      const orderDate = getOperationalDateString(o.cobradoEn || o.creadoEn);
       const tot = o.total || 0;
 
       if (filterDates.includes(orderDate)) {
@@ -2413,7 +3139,7 @@ export async function recalculateTodayDailyStats(
   dateStr?: string,
   timeZone?: string
 ): Promise<{ recalculatedCount: number; targetDate: string }> {
-  const targetDate = dateStr || getRestaurantLocalDateString(new Date(), timeZone);
+  const targetDate = dateStr || getOperationalDateString(new Date());
   const targetRestIds = restaurantId ? [restaurantId] : restaurants.map(r => r.id);
   let recalculatedCount = 0;
 

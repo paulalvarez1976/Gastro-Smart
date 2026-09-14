@@ -242,7 +242,7 @@ export const DeliveryReconciliation: React.FC<DeliveryReconciliationProps> = ({
 
       {/* Grid of Delivery Companies */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {summaries.map(item => {
+        {summaries.map((item, idx) => {
           const isGreen = item.semaforo === 'verde';
           const isYellow = item.semaforo === 'amarillo';
           const isRed = item.semaforo === 'rojo';
@@ -257,7 +257,7 @@ export const DeliveryReconciliation: React.FC<DeliveryReconciliationProps> = ({
 
           return (
             <div 
-              key={item.empresa}
+              key={`${item.empresa}-${idx}`}
               className={`bg-white rounded-3xl p-6 border shadow-sm transition hover:shadow-md flex flex-col justify-between ${brand.bg}`}
             >
               <div>

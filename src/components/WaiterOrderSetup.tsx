@@ -407,14 +407,14 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                   No hay mesas configuradas para este restaurante. Puedes crearlas en el Panel de Administrador.
                 </div>
               ) : (
-                [...tables].sort((a, b) => a.numero - b.numero).map(table => {
+                [...tables].sort((a, b) => a.numero - b.numero).map((table, idx) => {
                   const openOrder = getOpenOrderForTable(table);
                   const isOccupied = !!openOrder || table.estado === 'ocupada';
                   const isSelected = selectedTableId === table.id;
 
                   return (
                     <div
-                      key={table.id}
+                      key={`${table.id}-${idx}`}
                       onClick={() => handleTableClick(table)}
                       className={`min-h-[125px] rounded-2xl p-3.5 border-2 transition-all duration-150 flex flex-col justify-between cursor-pointer select-none relative shadow-xs active:scale-97 ${
                         isSelected
@@ -558,9 +558,9 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                 </div>
                 {filteredClients.length > 0 && (
                   <div className="bg-white rounded-xl border border-neutral-200 divide-y divide-neutral-100 shadow-sm overflow-hidden">
-                    {filteredClients.map(cli => (
+                    {filteredClients.map((cli, idx) => (
                       <div
-                        key={cli.id}
+                        key={`${cli.id}-${idx}`}
                         onClick={() => {
                           handleSelectClient(cli);
                           setLinkClientToTable(false);
@@ -649,9 +649,9 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {(['Propio', 'PedidosYa', 'UberEats', 'Rappi', 'Otro'] as DeliveryCompany[]).map((comp) => (
+                  {(['Propio', 'PedidosYa', 'UberEats', 'Rappi', 'Otro'] as DeliveryCompany[]).map((comp, idx) => (
                     <button
-                      key={comp}
+                      key={`${comp}-${idx}`}
                       type="button"
                       onClick={() => {
                         sounds.playKeypadClick();
@@ -738,9 +738,9 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                         </button>
                       </div>
                     ) : (
-                      filteredClients.map(client => (
+                      filteredClients.map((client, idx) => (
                         <div
-                          key={client.id}
+                          key={`${client.id}-${idx}`}
                           onClick={() => handleSelectClient(client)}
                           className="p-3.5 hover:bg-orange-50/80 cursor-pointer flex items-center justify-between transition"
                         >
@@ -881,7 +881,7 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
 
                         return (
                           <div
-                            key={order.id || idx}
+                            key={`hist-${order.id || idx}-${idx}`}
                             className="p-2.5 rounded-xl bg-white border border-neutral-200 text-xs flex flex-col justify-between shadow-2xs"
                           >
                             <div>

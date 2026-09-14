@@ -51,15 +51,50 @@ export function getRestaurantLocalDateString(date: Date = new Date(), timeZone?:
 }
 
 /**
- * Formato YYYY-MM-DD estándar
+ * Retorna la fecha operativa YYYY-MM-DD para cualquier fecha, string ISO o timestamp.
+ * REGLA OPERATIVA: El día operativo de restaurante inicia a las 5:00 a.m. y concluye
+ * a las 4:59 a.m. del día siguiente.
+ * Por ejemplo:
+ * - 2026-09-14T03:30:00 -> pertenece al día operativo 2026-09-13 (madrugada de la jornada)
+ * - 2026-09-14T05:00:00 -> pertenece al día operativo 2026-09-14 (inicio jornada)
+ * - 2026-09-14T23:59:00 -> pertenece al día operativo 2026-09-14
+ * Desplazar el timestamp en -5 horas (-5 * 60 * 60 * 1000 ms) garantiza la alineación matemática perfecta.
  */
-export function formatDateKey(date: Date, timeZone?: string): string {
-  return getRestaurantLocalDateString(date, timeZone);
+export function getOperationalDateString(dateInput?: string | Date | number | null): string {
+  if (!dateInput) return '';
+  // Si ya es estrictamente una fecha 'YYYY-MM-DD' sin hora
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+    return dateInput;
+  }
+  const d = typeof dateInput === 'string' || typeof dateInput === 'number' ? new Date(dateInput) : dateInput;
+  if (isNaN(d.getTime())) return '';
+  // Desplazar 5 horas hacia atrás
+  const shifted = new Date(d.getTime() - 5 * 60 * 60 * 1000);
+  const y = shifted.getFullYear();
+  const m = String(shifted.getMonth() + 1).padStart(2, '0');
+  const day = String(shifted.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Retorna el mes operativo YYYY-MM para cualquier fecha/timestamp.
+ * El mes operativo inicia a las 5:00 a.m. del 1er día del mes y concluye a las 4:59 a.m. del 1er día del mes siguiente.
+ */
+export function getOperationalMonthString(dateInput?: string | Date | number | null): string {
+  const opDate = getOperationalDateString(dateInput);
+  return opDate ? opDate.substring(0, 7) : '';
+}
+
+/**
+ * Formato YYYY-MM-DD estándar basado en día operativo
+ */
+export function formatDateKey(date: Date, _timeZone?: string): string {
+  return getOperationalDateString(date);
 }
 
 /**
  * Calcula las estadísticas agregadas para un restaurante en una fecha específica
- * leyendo directamente las comandas cobradas y los gastos de ese día.
+ * leyendo directamente las comandas cobradas y los gastos de ese día operativo.
  */
 export function computeDailyStatFromRawData(
   businessId: string,
@@ -69,28 +104,29 @@ export function computeDailyStatFromRawData(
   expenses: Expense[],
   shifts: Shift[]
 ): DailyStat {
-  // Filtrar pedidos cobrados del restaurante y fecha
+  // Filtrar pedidos cobrados del restaurante para la fecha operativa (5:00 a.m. a 4:59 a.m.)
   const dayOrders = orders.filter(o => {
-    if (o.businessId && o.businessId !== businessId) return false;
+    if (o.businessId && businessId && o.businessId !== businessId && o.businessId !== 'biz_default' && businessId !== 'biz_default') return false;
     if (o.restaurantId !== restaurantId) return false;
-    if (o.estado !== 'cobrado') return false;
-    const orderDate = (o.cobradoEn || o.creadoEn || '').split('T')[0];
+    const isPaid = o.estado === 'cobrado' || o.estadoPago === 'cobrado';
+    if (!isPaid) return false;
+    const orderDate = getOperationalDateString(o.cobradoEn || o.creadoEn);
     return orderDate === fecha;
   });
 
-  // Filtrar gastos del restaurante y fecha
+  // Filtrar gastos del restaurante para la fecha operativa
   const dayExpenses = expenses.filter(e => {
     if (e.businessId && e.businessId !== businessId) return false;
     if (e.restaurantId !== restaurantId) return false;
-    const expDate = (e.fecha || e.creadoEn || '').split('T')[0];
+    const expDate = getOperationalDateString(e.fecha || e.creadoEn);
     return expDate === fecha;
   });
 
-  // Filtrar turnos
+  // Filtrar turnos según fecha operativa de inicio
   const dayShifts = shifts.filter(s => {
     if (s.businessId && s.businessId !== businessId) return false;
     if (s.restaurantId !== restaurantId) return false;
-    const shiftDate = (s.fecha || s.horaInicio || '').split('T')[0];
+    const shiftDate = getOperationalDateString(s.horaInicio || s.fecha);
     return shiftDate === fecha;
   });
 
@@ -301,7 +337,7 @@ export async function getDailyStatsForRange(
     console.warn('Error fetching dailyStats from Firestore, fallback to computed:', err);
   }
 
-  const todayStr = formatDateKey(new Date());
+  const todayOpStr = getOperationalDateString(new Date());
   const finalStats: DailyStat[] = [];
 
   // Para cada combinación de fecha y restaurante:
@@ -310,16 +346,19 @@ export async function getDailyStatsForRange(
       const docId = getDailyStatDocId(businessId, rest.id, date);
       const existing = statsFromDb.get(docId);
 
-      // Verificar si existen órdenes cobradas en memoria para este día y restaurante
+      // Verificar si existen órdenes cobradas en memoria para este día operativo y restaurante
       const hasCobradoOrders = allOrders.some(o => {
         if (o.restaurantId !== rest.id) return false;
-        if (o.estado !== 'cobrado') return false;
-        const ordDate = (o.cobradoEn || o.creadoEn || '').split('T')[0];
+        const isPaid = o.estado === 'cobrado' || o.estadoPago === 'cobrado';
+        if (!isPaid) return false;
+        const ordDate = getOperationalDateString(o.cobradoEn || o.creadoEn);
         return ordDate === date;
       });
 
-      // Si es el día de hoy, si falta en DB, o si en DB tenía 0 ventas pero existen pedidos cobrados:
-      const needsRecompute = !existing || date === todayStr || (hasCobradoOrders && (existing.ventasTotales || 0) === 0);
+      // Si es el día de hoy, si falta en DB, o si en DB tenía 0 ventas pero existen pedidos cobrados, o si faltan topPlatos:
+      const needsRecompute = !existing 
+        || date === todayOpStr 
+        || (hasCobradoOrders && ((existing.ventasTotales || 0) === 0 || !existing.topPlatos || existing.topPlatos.length === 0));
 
       if (needsRecompute) {
         const computed = computeDailyStatFromRawData(
@@ -331,7 +370,7 @@ export async function getDailyStatsForRange(
           allShifts
         );
         // Persistir en Firestore si hay ventas, gastos o si es hoy
-        if (computed.ventasTotales > 0 || computed.gastosTotales > 0 || date === todayStr) {
+        if (computed.ventasTotales > 0 || computed.gastosTotales > 0 || date === todayOpStr) {
           saveDailyStat(computed).catch(() => {});
         }
         finalStats.push(computed);
@@ -353,18 +392,19 @@ export function getPeriodDateRanges(timeframe: FinancialTimeframe): {
   currentLabel: string;
   previousLabel: string;
 } {
-  const now = new Date();
+  const currentOpDateStr = getOperationalDateString(new Date());
+  const [opYear, opMonth, opDay] = currentOpDateStr.split('-').map(Number);
+  const opDateObj = new Date(opYear, opMonth - 1, opDay, 12, 0, 0);
   const currentDates: string[] = [];
   const previousDates: string[] = [];
 
   if (timeframe === 'dia') {
-    // Hoy vs Ayer
-    const todayStr = formatDateKey(now);
-    currentDates.push(todayStr);
+    // Hoy vs Ayer (días operativos)
+    currentDates.push(currentOpDateStr);
 
-    const yesterday = new Date(now);
+    const yesterday = new Date(opDateObj);
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = formatDateKey(yesterday);
+    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
     previousDates.push(yesterdayStr);
 
     return {
@@ -376,17 +416,17 @@ export function getPeriodDateRanges(timeframe: FinancialTimeframe): {
   }
 
   if (timeframe === 'semana') {
-    // Semana actual (últimos 7 días) vs 7 días previos
+    // Semana actual (últimos 7 días operativos) vs 7 días previos
     for (let i = 6; i >= 0; i--) {
-      const d = new Date(now);
+      const d = new Date(opDateObj);
       d.setDate(d.getDate() - i);
-      currentDates.push(formatDateKey(d));
+      currentDates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
     for (let i = 13; i >= 7; i--) {
-      const d = new Date(now);
+      const d = new Date(opDateObj);
       d.setDate(d.getDate() - i);
-      previousDates.push(formatDateKey(d));
+      previousDates.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
     return {
@@ -397,25 +437,23 @@ export function getPeriodDateRanges(timeframe: FinancialTimeframe): {
     };
   }
 
-  // Mes: Mes actual (desde el 1 hasta hoy o fin de mes) vs Mes anterior equivalente
-  const year = now.getFullYear();
-  const month = now.getMonth(); // 0-indexed
+  // Mes: Mes operativo actual (desde el 1 hasta fin del mes operativo) vs Mes anterior equivalente
+  const year = opYear;
+  const month = opMonth - 1; // 0-indexed
   const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
 
   for (let day = 1; day <= daysInCurrentMonth; day++) {
-    const d = new Date(year, month, day);
-    currentDates.push(formatDateKey(d));
+    currentDates.push(`${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
   }
 
   // Mes anterior
-  const prevMonthDate = new Date(year, month - 1, 1);
+  const prevMonthDate = new Date(year, month - 1, 1, 12, 0, 0);
   const prevYear = prevMonthDate.getFullYear();
   const prevMonth = prevMonthDate.getMonth();
   const daysInPrevMonth = new Date(prevYear, prevMonth + 1, 0).getDate();
 
   for (let day = 1; day <= daysInPrevMonth; day++) {
-    const d = new Date(prevYear, prevMonth, day);
-    previousDates.push(formatDateKey(d));
+    previousDates.push(`${prevYear}-${String(prevMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
   }
 
   const monthNames = [
@@ -452,7 +490,9 @@ export function aggregateFinancialSummary(
   previousStats: DailyStat[],
   restaurants: Restaurant[],
   selectedRestaurantId: string | null,
-  allMenuItems: MenuItem[]
+  allMenuItems: MenuItem[],
+  allOrders?: Order[],
+  currentDates?: string[]
 ): FinancialSummaryData {
   // 1. Totales Periodo Actual
   let currVentas = 0;
@@ -551,6 +591,26 @@ export function aggregateFinancialSummary(
       restData.pedidos += stat.pedidosCobrados || 0;
     }
   });
+
+  // Respaldo y sincronización en tiempo real con órdenes en memoria si dishMap está vacío
+  if (allOrders && allOrders.length > 0 && currentDates && currentDates.length > 0 && dishMap.size === 0) {
+    const datesSet = new Set(currentDates);
+    allOrders.forEach(ord => {
+      if (selectedRestaurantId && ord.restaurantId !== selectedRestaurantId) return;
+      const isPaid = ord.estado === 'cobrado' || ord.estadoPago === 'cobrado';
+      if (!isPaid) return;
+      const opDate = getOperationalDateString(ord.cobradoEn || ord.creadoEn);
+      if (datesSet.has(opDate)) {
+        (ord.items || []).forEach(item => {
+          const itemKey = item.nombre;
+          const prev = dishMap.get(itemKey) || { nombre: item.nombre, cantidad: 0, total: 0 };
+          prev.cantidad += (item.cantidad || 1);
+          prev.total += (item.precio || 0) * (item.cantidad || 1);
+          dishMap.set(itemKey, prev);
+        });
+      }
+    });
+  }
 
   // 2. Totales Periodo Anterior
   let prevVentas = 0;

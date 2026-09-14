@@ -1,4 +1,4 @@
-export type Role = 'owner' | 'admin' | 'caja' | 'mesero' | 'cocina' | 'ayudante_cocina' | 'limpieza';
+export type Role = 'owner' | 'admin' | 'caja' | 'mesero' | 'cocina' | 'ayudante_cocina' | 'limpieza' | 'mostrador';
 export type UserRole = 'owner' | 'admin';
 
 export const GASTRO_SMART_APP_ID = 'gastro_smart' as const;
@@ -62,6 +62,12 @@ export interface Employee {
   creadoEn?: string;
 }
 
+export interface PauseRecord {
+  inicio: string;
+  fin?: string;
+  minutos?: number;
+}
+
 export interface Shift {
   id: string;
   businessId?: string;
@@ -74,7 +80,9 @@ export interface Shift {
   horaInicio: string; // ISO string o formato HH:mm
   horaFin?: string;
   minutosTrabajados?: number;
-  estado: 'abierto' | 'cerrado';
+  estado: 'abierto' | 'cerrado' | 'en_pausa';
+  pausas?: PauseRecord[];
+  pausasMinutos?: number;
   pedidosTomados: number;
   ventasGeneradas: number;
   pedidosCobrados?: number;
@@ -146,16 +154,82 @@ export type OrderRoute = 'express' | 'cocina' | 'mixto';
 export type OrderType = 'local' | 'delivery' | 'para_llevar';
 export type DeliveryCompany = 'PedidosYa' | 'UberEats' | 'Rappi' | 'Propio' | 'Otro';
 
+export type ItemStatus =
+  | 'pendiente_cocina'
+  | 'aceptado'
+  | 'en_preparacion'
+  | 'listo'
+  | 'entregado'
+  | 'cobrado';
+
 export interface OrderItem {
+  id?: string;
   menuItemId: string;
   nombre: string;
   cantidad: number;
   precio: number;
   requiereCocina?: boolean;
   estadoItem?: 'pendiente' | 'listo' | 'entregado';
+  estado?: ItemStatus; // Estado granular del item: pendiente_cocina, en_preparacion, listo, entregado, cobrado
+  ronda?: number; // Número de ronda: 1, 2, 3...
+  rondaEnviadaEn?: string; // Timestamp de envío de la ronda
+  comensalId?: string | null; // ID del comensal: 'c1', 'c2', 'general', etc.
+  comensalNombre?: string | null; // Nombre opcional (ej: 'Rosa', 'El señor del sombrero')
+  comensalNumero?: number | null; // Número de comensal: 1..12
+  cobrado?: boolean; // Indica si el item ya fue pagado en cobro dividido
+  cobroId?: string | null;
   notas?: string | null;
   fotoUrl?: string | null;
   imagenUrl?: string | null;
+}
+
+export interface OrderDiner {
+  id: string; // ej: 'c1', 'c2'
+  numero: number; // 1, 2, 3...
+  nombre?: string; // ej: 'Rosa', 'Carlos'
+  telefono?: string; // opcional para vincular historial de cliente al cobrar
+  pagado?: boolean;
+  montoPagado?: number;
+  total?: number;
+}
+
+export interface PartialPayment {
+  id: string;
+  tipo: 'comensal' | 'partes_iguales' | 'total' | 'general';
+  comensalId?: string;
+  comensalNombre?: string;
+  comensalNumero?: number;
+  items?: OrderItem[];
+  monto: number;
+  montoEntregado?: number;
+  subtotal?: number;
+  descuento?: number;
+  propina?: number;
+  total: number;
+  metodoPago: 'efectivo' | 'tarjeta' | 'transferencia' | string;
+  montoRecibido?: number;
+  vuelto?: number;
+  fecha: string;
+  creadoEn?: string;
+  cajeroNombre?: string;
+  clienteNombre?: string;
+  clienteTelefono?: string;
+  ticketImpreso?: boolean;
+  transaccionId?: string;
+  numeroParte?: number;
+  totalPartes?: number;
+}
+
+export interface OrderRound {
+  numero: number;
+  enviadoEn: string;
+  meseroNombre?: string;
+  estado: 'pendiente_cocina' | 'aceptado' | 'en_preparacion' | 'listo' | 'entregado';
+  aceptadoEn?: string;
+  enPreparacionEn?: string;
+  listoEn?: string;
+  entregadoEn?: string;
+  itemsCount: number;
 }
 
 export interface OrderTimelineEvent {
@@ -186,7 +260,7 @@ export interface Order {
   total: number;
   estado: OrderStatus;
   ruta?: OrderRoute; // express (sin cocina), cocina (preparación estándar), mixto (ambos)
-  estadoPago?: 'pendiente' | 'cobrado'; // Control independiente de cobro vs entrega
+  estadoPago?: 'pendiente' | 'parcial' | 'cobrado'; // Control independiente de cobro vs entrega
   estadoEntrega?: 'pendiente' | 'entregado'; // Control de entrega en mostrador/mesa
   esVentaExpress?: boolean;
   motivoRechazo?: string | null;
@@ -196,6 +270,7 @@ export interface Order {
   cajeroNombre?: string;
   creadoEn: string;
   aceptadoEn?: string;
+  enPreparacionEn?: string;
   listoEn?: string;
   entregadoEn?: string;
   cobradoEn?: string;
@@ -203,6 +278,18 @@ export interface Order {
   deliveryPaid?: boolean;
   deliveryPaidDate?: string;
   deliveryPayoutId?: string;
+  rondaActual?: number; // Ronda más reciente (1, 2, 3...)
+  rondas?: OrderRound[]; // Historial de rondas de la mesa
+  comensales?: OrderDiner[]; // Comensales con nombre/código
+  cobros?: PartialPayment[]; // Pagos parciales registrados
+  montoCobradoAcumulado?: number; // Total pagado hasta el momento
+  saldoPendiente?: number; // Cuánto falta por pagar
+  fuga?: {
+    motivo: string;
+    usuario: string;
+    fecha: string;
+    montoPerdido: number;
+  } | null;
 }
 
 export interface CashRegisterClose {

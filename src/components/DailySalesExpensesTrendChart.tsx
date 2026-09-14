@@ -30,7 +30,7 @@ import {
   Table as TableIcon
 } from 'lucide-react';
 import { Order, Restaurant, Expense } from '../types';
-import { subscribeToExpenses } from '../services/dataService';
+import { subscribeToExpenses, getOperationalDateString } from '../services/dataService';
 import { sounds } from '../utils/sound';
 
 interface DailyTrendItem {
@@ -67,13 +67,15 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
   // Filtros de fecha
   const [timePreset, setTimePreset] = useState<TimePreset>('30d');
 
-  // Fechas personalizadas (formato YYYY-MM-DD)
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  // Fechas personalizadas basadas en día operativo (5:00 a.m. a 4:59 a.m.)
+  const todayStr = useMemo(() => getOperationalDateString(new Date()), []);
   
   const thirtyDaysAgoStr = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 29);
-    return d.toISOString().split('T')[0];
+    const op = getOperationalDateString(new Date());
+    const [y, m, d] = op.split('-').map(Number);
+    const dateObj = new Date(y, m - 1, d, 12, 0, 0);
+    dateObj.setDate(dateObj.getDate() - 29);
+    return getOperationalDateString(dateObj);
   }, []);
 
   const [customStartDate, setCustomStartDate] = useState<string>(thirtyDaysAgoStr);
@@ -104,14 +106,17 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
     };
   }, [businessId, selectedBranchId]);
 
-  // Calcular rango efectivo de fechas [startDate, endDate]
+  // Calcular rango efectivo de fechas [startDate, endDate] basado en día operativo
   const dateRange = useMemo<{ start: Date; end: Date; startStr: string; endStr: string }>(() => {
-    const now = new Date();
+    const opTodayStr = getOperationalDateString(new Date());
+    const [opY, opM, opD] = opTodayStr.split('-').map(Number);
+    const now = new Date(opY, opM - 1, opD, 12, 0, 0);
     let start = new Date(now);
     let end = new Date(now);
 
     if (timePreset === '48h') {
-      end = new Date(now);
+      const realNow = new Date();
+      end = new Date(realNow);
       start = new Date(end.getTime() - 48 * 3600 * 1000);
     } else if (timePreset === '7d') {
       start.setDate(now.getDate() - 6);
@@ -244,12 +249,12 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
       current.setDate(current.getDate() + 1);
     }
 
-    // 2. Acumular ventas de órdenes cobradas
+    // 2. Acumular ventas de órdenes cobradas según fecha operativa
     orders.forEach(order => {
       if (order.estado !== 'cobrado') return;
       if (selectedBranchId !== 'all' && order.restaurantId !== selectedBranchId) return;
 
-      const orderDateStr = (order.cobradoEn || order.creadoEn || '').split('T')[0];
+      const orderDateStr = getOperationalDateString(order.cobradoEn || order.creadoEn);
       if (orderDateStr && dayMap.has(orderDateStr)) {
         const existing = dayMap.get(orderDateStr)!;
         existing.ventas += (order.total || 0);
@@ -257,11 +262,11 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
       }
     });
 
-    // 3. Acumular gastos
+    // 3. Acumular gastos según fecha operativa
     expenses.forEach(exp => {
       if (selectedBranchId !== 'all' && exp.restaurantId !== selectedBranchId) return;
 
-      const expDateStr = (exp.fecha || exp.creadoEn || '').split('T')[0];
+      const expDateStr = getOperationalDateString(exp.fecha || exp.creadoEn);
       if (expDateStr && dayMap.has(expDateStr)) {
         const existing = dayMap.get(expDateStr)!;
         existing.gastos += (exp.monto || 0);
@@ -471,8 +476,8 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
                 className="bg-transparent text-xs font-bold text-neutral-800 pr-3 py-1.5 outline-hidden cursor-pointer"
               >
                 <option value="all">🏢 Todas las Sucursales</option>
-                {restaurants.map(r => (
-                  <option key={r.id} value={r.id}>
+                {restaurants.map((r, idx) => (
+                  <option key={`${r.id}-${idx}`} value={r.id}>
                     📍 {r.nombre}
                   </option>
                 ))}
@@ -794,10 +799,10 @@ export const DailySalesExpensesTrendChart: React.FC<DailySalesExpensesTrendChart
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100 font-mono">
-                {trendData.slice().reverse().map(row => {
+                {trendData.slice().reverse().map((row, idx) => {
                   const isProfit = row.ganancia >= 0;
                   return (
-                    <tr key={row.fecha} className="hover:bg-neutral-50/50 transition">
+                    <tr key={`${row.fecha}-${idx}`} className="hover:bg-neutral-50/50 transition">
                       <td className="p-3 font-bold text-neutral-900 font-sans">{row.fecha}</td>
                       <td className="p-3 text-neutral-600 font-sans">{row.diaSemana}</td>
                       <td className="p-3 text-right text-neutral-600">{row.pedidos}</td>
