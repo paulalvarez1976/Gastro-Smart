@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { MenuItem, Table, OrderItem, OrderType, DeliveryCompany, Order, Client, OrderDiner } from '../types';
@@ -353,7 +354,7 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
         // Create brand new order (Round 1)
         const newOrderPayload: Omit<Order, 'id' | 'creadoEn'> = {
           restaurantId: currentRestaurant.id,
-          businessId: currentRestaurant.businessId || 'biz_default',
+          businessId: currentRestaurant.businessId || UNIQUE_BUSINESS_ID,
           tipo: setupData.orderType,
           mesaId: setupData.selectedTable ? setupData.selectedTable.id : null,
           mesaNumero: setupData.selectedTable ? setupData.selectedTable.numero : null,

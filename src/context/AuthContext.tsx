@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID, getAdminEmailsWhitelist } from '../config/business';
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { 
   onAuthStateChanged, 
@@ -28,6 +29,7 @@ import {
   subscribeToBusiness,
   subscribeToAllBusinesses,
   getBusiness,
+  getOrCreateSingleBusiness,
   openShift, 
   closeShift, 
   updateEmployee,
@@ -368,6 +370,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const email = user.email || '';
       const name = user.displayName || 'Dueño';
 
+      // Verificar whitelist
+      const whitelist = getAdminEmailsWhitelist();
+      if (whitelist.length > 0 && !whitelist.includes(email.toLowerCase())) {
+        await signOut(auth);
+        return { success: false, message: 'Este email no está autorizado para crear una cuenta de administrador. Contactá al dueño del negocio.' };
+      }
+
       // Verificar si ya existe en Gastro Smart
       const existingAccount = await getUserAccount(uid);
       if (existingAccount) {
@@ -376,26 +385,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: true, message: `¡Bienvenido, ${existingAccount.nombre}!` };
       }
 
-      // Si no existe, crear negocio y cuenta de dueño automáticamente
-      const businessId = 'biz_' + Date.now().toString(36);
-      const bizName = `Gastro Negocio de ${name}`;
-      await createBusiness({
-        nombre: bizName,
-        rif_o_ruc: 'N/A',
-        plan: 'pro',
-        activo: true,
-        creadoEn: new Date().toISOString(),
-        ownerUid: uid,
-        email: email,
-        logoUrl: user.photoURL || null
-      }, businessId);
-
-      // Sembrar sucursal principal y empleados iniciales con PINs
-      try {
-        await bootstrapNewBusinessDefaults(businessId, bizName);
-      } catch (bootErr) {
-        console.warn('Bootstrap new business defaults warning:', bootErr);
-      }
+      // Usar negocio único
+      await getOrCreateSingleBusiness(UNIQUE_BUSINESS_ID);
+      const businessId = UNIQUE_BUSINESS_ID;
 
       const newUserAccount: UserAccount = {
         uid,
@@ -411,7 +403,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await createUserAccount(newUserAccount);
       setCurrentUserAccount(newUserAccount);
 
-      return { success: true, message: '¡Cuenta de negocio creada con Google exitosamente!' };
+      return { success: true, message: '¡Cuenta de administrador vinculada exitosamente!' };
     } catch (err: any) {
       console.error('Google Auth error:', err);
       let msg = err.message || 'Error al autenticar con Google.';
@@ -427,40 +419,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const registerOwnerAndBusiness = async (data: {
-    businessName: string;
-    rif_o_ruc: string;
     ownerName: string;
     email: string;
     pass: string;
   }): Promise<{ success: boolean; message: string; isExistingLogin?: boolean; isEmailInUse?: boolean }> => {
     const trimmedEmail = data.email.trim();
+
+    // Validar whitelist
+    const whitelist = getAdminEmailsWhitelist();
+    if (whitelist.length > 0 && !whitelist.includes(trimmedEmail.toLowerCase())) {
+      return { success: false, message: 'Este email no está autorizado para crear una cuenta de administrador. Contactá al dueño del negocio.' };
+    }
+
     try {
       // 1. Intento crear el usuario con createUserWithEmailAndPassword
       const userCredential = await createUserWithEmailAndPassword(auth, trimmedEmail, data.pass);
       const uid = userCredential.user.uid;
 
-      // 2. Crear negocio en Firestore
-      const businessId = 'biz_' + Date.now().toString(36);
-      const bizName = data.businessName.trim();
-      await createBusiness({
-        nombre: bizName,
-        rif_o_ruc: data.rif_o_ruc.trim() || 'N/A',
-        plan: 'pro',
-        activo: true,
-        creadoEn: new Date().toISOString(),
-        ownerUid: uid,
-        email: trimmedEmail,
-        logoUrl: null
-      }, businessId);
+      await getOrCreateSingleBusiness(UNIQUE_BUSINESS_ID);
+      const businessId = UNIQUE_BUSINESS_ID;
 
-      // Sembrar sucursal principal y empleados iniciales con PINs
-      try {
-        await bootstrapNewBusinessDefaults(businessId, bizName);
-      } catch (bootErr) {
-        console.warn('Bootstrap new business defaults warning:', bootErr);
-      }
-
-      // 3. Crear registro de usuario en colección users con appId: "gastro_smart" y rol 'owner'
+      // 2. Crear registro de usuario en colección users con appId: "gastro_smart" y rol 'owner'
       const newUserAccount: UserAccount = {
         uid,
         email: trimmedEmail,
@@ -475,7 +454,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await createUserAccount(newUserAccount);
       setCurrentUserAccount(newUserAccount);
 
-      return { success: true, message: '¡Cuenta de negocio y dueño creadas exitosamente!' };
+      return { success: true, message: '¡Cuenta de administrador creada exitosamente!' };
     } catch (err: any) {
       console.error('Registration attempt caught error:', err);
 
@@ -489,26 +468,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const existingAccount = await getUserAccount(uid);
 
           if (!existingAccount) {
-            // Usuario nuevo de Gastro Smart con correo existente en el proyecto compartido
-            const businessId = 'biz_' + Date.now().toString(36);
-            const bizName = data.businessName.trim();
-            await createBusiness({
-              nombre: bizName,
-              rif_o_ruc: data.rif_o_ruc.trim() || 'N/A',
-              plan: 'pro',
-              activo: true,
-              creadoEn: new Date().toISOString(),
-              ownerUid: uid,
-              email: trimmedEmail,
-              logoUrl: null
-            }, businessId);
-
-            // Sembrar sucursal principal y empleados iniciales con PINs
-            try {
-              await bootstrapNewBusinessDefaults(businessId, bizName);
-            } catch (bootErr) {
-              console.warn('Bootstrap new business defaults warning:', bootErr);
-            }
+            await getOrCreateSingleBusiness(UNIQUE_BUSINESS_ID);
+            const businessId = UNIQUE_BUSINESS_ID;
 
             const newUserAccount: UserAccount = {
               uid,
@@ -619,7 +580,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ? allRestaurants.find(r => r.id === employee.restaurantId) 
       : allRestaurants.find(r => r.id === effectiveBranchId);
 
-    const targetBizId = employee?.businessId || targetRestaurant?.businessId || 'biz_default';
+    const targetBizId = employee?.businessId || targetRestaurant?.businessId || UNIQUE_BUSINESS_ID;
 
     // Auditoría en Firestore
     await registerLoginAttempt({

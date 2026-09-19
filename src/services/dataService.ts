@@ -17,6 +17,7 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import { 
   Business,
   UserAccount,
@@ -93,6 +94,24 @@ export async function getBusiness(businessId: string): Promise<Business | null> 
     return { id: docSnap.id, ...docSnap.data() } as Business;
   }
   return null;
+}
+
+export async function getOrCreateSingleBusiness(businessId: string): Promise<Business> {
+  const biz = await getBusiness(businessId);
+  if (biz) {
+    return biz;
+  }
+  const defaultData: Omit<Business, 'id'> = {
+    nombre: 'Mi Negocio',
+    rif_o_ruc: 'J-00000000-0',
+    plan: 'pro',
+    activo: true,
+    creadoEn: new Date().toISOString(),
+    ownerUid: 'system',
+    email: 'admin@gastrosmart.com'
+  };
+  await createBusiness(defaultData, businessId);
+  return { id: businessId, ...defaultData };
 }
 
 export async function createBusiness(data: Omit<Business, 'id'>, customId?: string): Promise<string> {
@@ -250,7 +269,7 @@ export function subscribeToRestaurants(
 export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?: string) {
   return addDoc(collection(db, 'restaurants'), {
     ...data,
-    businessId: businessId || data.businessId || 'biz_default',
+    businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
@@ -260,7 +279,7 @@ export async function createRestaurantWithTables(
   data: { businessId?: string; nombre: string; direccion: string; telefono: string; numeroMesas: number },
   businessIdParam?: string
 ): Promise<string> {
-  const targetBizId = data.businessId || businessIdParam || 'biz_default';
+  const targetBizId = data.businessId || businessIdParam || UNIQUE_BUSINESS_ID;
   const restRef = doc(collection(db, 'restaurants'));
   const restaurantId = restRef.id;
 
@@ -331,7 +350,7 @@ export async function updateRestaurantTableCount(
       if (!existingNumbers.has(nextNumber)) {
         const tableRef = doc(collection(db, 'tables'));
         batch.set(tableRef, {
-          businessId: businessId || currentTables[0]?.businessId || 'biz_default',
+          businessId: businessId || currentTables[0]?.businessId || UNIQUE_BUSINESS_ID,
           restaurantId,
           numero: nextNumber,
           estado: 'libre',
@@ -527,7 +546,7 @@ export async function openShift(employee: Employee, restaurantNombre: string, bu
 
   const today = new Date().toISOString().split('T')[0];
   const shiftDoc = await addDoc(collection(db, 'shifts'), {
-    businessId: businessId || employee.businessId || 'biz_default',
+    businessId: businessId || employee.businessId || UNIQUE_BUSINESS_ID,
     employeeId: employee.id,
     employeeName: employee.nombre,
     employeePuesto: employee.puesto,
@@ -860,7 +879,7 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
 
   const now = new Date().toISOString();
   const today = now.split('T')[0];
-  const targetBizId = shiftData.businessId || employee.businessId || 'biz_default';
+  const targetBizId = shiftData.businessId || employee.businessId || UNIQUE_BUSINESS_ID;
   const expenseRef = doc(collection(db, 'expenses'));
 
   const batch = writeBatch(db);
@@ -1254,7 +1273,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
     montoCobradoAcumulado: data.montoCobradoAcumulado || (data.estado === 'cobrado' ? totalCalculated : 0),
     saldoPendiente: data.saldoPendiente !== undefined ? data.saldoPendiente : (data.estado === 'cobrado' ? 0 : totalCalculated),
     fuga: null,
-    businessId: targetBusinessId || 'biz_default',
+    businessId: targetBusinessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     empresaDelivery: data.tipo === 'delivery' ? (data.empresaDelivery || 'Propio') : null,
     mesaId: data.tipo === 'local' ? (data.mesaId || null) : null,
@@ -1311,7 +1330,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
   if (data.estado === 'cobrado') {
     try {
       const fechaHoy = formatDateKey(new Date());
-      const bId = sanitizedData.businessId || 'biz_default';
+      const bId = sanitizedData.businessId || UNIQUE_BUSINESS_ID;
       const rId = sanitizedData.restaurantId;
       const statDocId = getDailyStatDocId(bId, rId, fechaHoy);
       const statRef = doc(db, 'dailyStats', statDocId);
@@ -1735,7 +1754,7 @@ export async function registerPartialPayment(
     if (snap.exists()) {
       const orderData = snap.data() as Order;
       const fechaHoy = getOperationalDateString(new Date());
-      const bId = orderData.businessId || 'biz_default';
+      const bId = orderData.businessId || UNIQUE_BUSINESS_ID;
       const rId = orderData.restaurantId;
       const statDocId = getDailyStatDocId(bId, rId, fechaHoy);
       const statRef = doc(db, 'dailyStats', statDocId);
@@ -2000,7 +2019,7 @@ export async function cambiarEstadoPedido(
     // Sincronizar en tiempo real con dailyStats
     try {
       const fechaHoy = getOperationalDateString(new Date());
-      const bId = orderData.businessId || 'biz_default';
+      const bId = orderData.businessId || UNIQUE_BUSINESS_ID;
       const rId = orderData.restaurantId;
       const statDocId = getDailyStatDocId(bId, rId, fechaHoy);
       const statRef = doc(db, 'dailyStats', statDocId);
@@ -2149,7 +2168,7 @@ export async function createOrUpdateClient(data: Omit<Client, 'id'>): Promise<st
   }
   const ref = await addDoc(collection(db, 'clients'), {
     ...data,
-    businessId: data.businessId || 'biz_default',
+    businessId: data.businessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
@@ -2203,7 +2222,7 @@ export function subscribeToCashCloses(
 export async function createCashRegisterClose(data: Omit<CashRegisterClose, 'id'> | Omit<CashRegisterClose, 'id' | 'creadoEn'>) {
   return addDoc(collection(db, 'cashRegisterCloses'), {
     ...data,
-    businessId: (data as any).businessId || 'biz_default',
+    businessId: (data as any).businessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     creadoEn: (data as any).creadoEn || new Date().toISOString()
   });
@@ -2254,7 +2273,7 @@ export function subscribeToExpenses(
 export async function createExpense(data: Omit<Expense, 'id'>) {
   const sanitized = limpiarDatosUndefined({
     ...data,
-    businessId: data.businessId || 'biz_default',
+    businessId: data.businessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     creadoEn: data.creadoEn || new Date().toISOString()
   });
@@ -2264,7 +2283,7 @@ export async function createExpense(data: Omit<Expense, 'id'>) {
   // Sincronizar gasto con dailyStats
   try {
     const fecha = (data.fecha || new Date().toISOString()).split('T')[0];
-    const bId = data.businessId || 'biz_default';
+    const bId = data.businessId || UNIQUE_BUSINESS_ID;
     const rId = data.restaurantId;
     const statDocId = getDailyStatDocId(bId, rId, fecha);
     const statRef = doc(db, 'dailyStats', statDocId);
@@ -2339,7 +2358,7 @@ export async function createExpense(data: Omit<Expense, 'id'>) {
       await createSupplier({
         nombre: data.proveedor.trim(),
         telefono: data.proveedorTelefono || '',
-        businessId: data.businessId || 'biz_default',
+        businessId: data.businessId || UNIQUE_BUSINESS_ID,
         creadoEn: new Date().toISOString()
       });
     } catch (suppErr) {
@@ -2373,7 +2392,7 @@ export async function deleteExpense(expenseId: string, expenseData?: Partial<Exp
   if (exp && exp.restaurantId && exp.monto) {
     try {
       const fecha = (exp.fecha || exp.creadoEn || new Date().toISOString()).split('T')[0];
-      const bId = exp.businessId || 'biz_default';
+      const bId = exp.businessId || UNIQUE_BUSINESS_ID;
       const rId = exp.restaurantId;
       const statDocId = getDailyStatDocId(bId, rId, fecha);
       const statRef = doc(db, 'dailyStats', statDocId);
@@ -2446,7 +2465,7 @@ export async function payFixedSalaryExpense(params: {
     
     // 1. Crear Gasto de Sueldo
     const expenseData: Omit<Expense, 'id'> = {
-      businessId: employee.businessId || 'biz_default',
+      businessId: employee.businessId || UNIQUE_BUSINESS_ID,
       restaurantId: employee.restaurantId,
       tipo: 'sueldo',
       monto: amount,
@@ -2470,7 +2489,7 @@ export async function payFixedSalaryExpense(params: {
 
     // 3. Alerta de seguridad / auditoría
     await createSecurityAlert({
-      businessId: employee.businessId || 'biz_default',
+      businessId: employee.businessId || UNIQUE_BUSINESS_ID,
       restaurantId: employee.restaurantId,
       tipo: 'pago_sueldos_generado',
       mensaje: `Sueldo fijo de ${monthLabel} pagado a ${employee.nombre} ($${amount.toFixed(2)}) por ${userDisplayName}.`,
@@ -2515,7 +2534,7 @@ export async function createSupplier(data: Omit<Supplier, 'id'>): Promise<string
   const cleanName = data.nombre.trim();
   if (!cleanName) throw new Error('El nombre del proveedor es obligatorio');
 
-  const bId = data.businessId || 'biz_default';
+  const bId = data.businessId || UNIQUE_BUSINESS_ID;
   const q = query(
     collection(db, 'suppliers'),
     where('appId', '==', 'gastro_smart'),
@@ -3205,7 +3224,7 @@ export async function recalculateDailyStatsForPeriod(
     for (const docSnap of ordersSnap.docs) {
       const ord = { id: docSnap.id, ...docSnap.data() } as Order;
       if (targetRestIds.includes(ord.restaurantId)) {
-        if (!ord.businessId || (ord.businessId === 'biz_default' && businessId !== 'biz_default')) {
+        if (!ord.businessId || (ord.businessId === UNIQUE_BUSINESS_ID && businessId !== UNIQUE_BUSINESS_ID)) {
           await updateDoc(docSnap.ref, { businessId });
           ord.businessId = businessId;
           fixedOrdersCount++;

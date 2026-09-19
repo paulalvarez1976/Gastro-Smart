@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import { 
   collection, 
   query, 
@@ -106,7 +107,7 @@ export function computeDailyStatFromRawData(
 ): DailyStat {
   // Filtrar pedidos cobrados del restaurante para la fecha operativa (5:00 a.m. a 4:59 a.m.)
   const dayOrders = orders.filter(o => {
-    if (o.businessId && businessId && o.businessId !== businessId && o.businessId !== 'biz_default' && businessId !== 'biz_default') return false;
+    if (o.businessId && businessId && o.businessId !== businessId && o.businessId !== UNIQUE_BUSINESS_ID && businessId !== UNIQUE_BUSINESS_ID) return false;
     if (o.restaurantId !== restaurantId) return false;
     const isPaid = o.estado === 'cobrado' || o.estadoPago === 'cobrado';
     if (!isPaid) return false;

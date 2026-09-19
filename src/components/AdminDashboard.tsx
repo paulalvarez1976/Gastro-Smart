@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType } from '../types';
@@ -94,7 +95,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     currentBusiness 
   } = useAuth();
   
-  const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || 'biz_default';
+  const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   
   // Navigation tabs
   const [activeTab, setActiveTab] = useState<'financiero' | 'conciliacion' | 'asistencia' | 'metricas' | 'costos' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('financiero');

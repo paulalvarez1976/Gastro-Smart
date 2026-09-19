@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   DollarSign, 
@@ -91,7 +92,7 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
     allEmployees 
   } = useAuth();
 
-  const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || currentBusiness?.id || 'biz_default';
+  const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   const userRole = currentUserAccount?.rol || (currentEmployee?.puesto === 'admin' ? 'admin' : 'mesero');
   const isOwner = userRole === 'owner';
 

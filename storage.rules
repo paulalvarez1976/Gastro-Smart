@@ -11,29 +11,18 @@ service firebase.storage {
         && request.resource.contentType.matches('image/(jpeg|png|webp|jpg)');
     }
 
-    function isUserInRestaurant(restaurantId) {
-      return isAuthenticated() && (
-        restaurantId == 'central' ||
-        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get('restaurantId', '') == restaurantId ||
-        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get('businessId', '') == firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.get('businessId', '') ||
-        firestore.get(/databases/(default)/documents/businesses/$(firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.get('businessId', ''))).data.get('ownerUid', '') == request.auth.uid
-      );
-    }
-
     // Carpeta de fotos de menú de platos por restaurante
     match /restaurants/{restaurantId}/menu/{fileName} {
       allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && isUserInRestaurant(restaurantId) && isImageBelow5MB();
-      allow delete: if isAuthenticated() && isUserInRestaurant(restaurantId);
+      allow create, update: if isAuthenticated() && isImageBelow5MB();
+      allow delete: if isAuthenticated();
     }
 
     // Carpeta de comprobantes de gastos por restaurante
     match /restaurants/{restaurantId}/receipts/{fileName} {
-      allow read: if isAuthenticated() && isUserInRestaurant(restaurantId);
-      allow create, update: if isAuthenticated() && isUserInRestaurant(restaurantId) && isImageBelow5MB();
-      allow delete: if isAuthenticated() && isUserInRestaurant(restaurantId);
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isImageBelow5MB();
+      allow delete: if isAuthenticated();
     }
   }
 }
-
-

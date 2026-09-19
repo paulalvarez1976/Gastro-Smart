@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import React, { useState, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Order, CashRegisterClose, MenuItem, Table, Client, OrderDiner, PartialPayment } from '../types';
@@ -528,7 +529,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
     sounds.playCashRegister();
 
     const closePayload: Omit<CashRegisterClose, 'id' | 'creadoEn'> = {
-      businessId: currentRestaurant.businessId || 'biz_default',
+      businessId: currentRestaurant.businessId || UNIQUE_BUSINESS_ID,
       restaurantId: currentRestaurant.id,
       cajeroId: currentEmployee.id,
       cajeroNombre: currentEmployee.nombre,

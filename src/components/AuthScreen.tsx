@@ -60,8 +60,6 @@ export const AuthScreen: React.FC = () => {
   const [adminFeedback, setAdminFeedback] = useState<{ type: 'success' | 'error'; text: string; notRegisteredInApp?: boolean } | null>(null);
 
   // Form states - Register Business & Owner
-  const [regBusinessName, setRegBusinessName] = useState('');
-  const [regRif, setRegRif] = useState('');
   const [regOwnerName, setRegOwnerName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
@@ -160,7 +158,7 @@ export const AuthScreen: React.FC = () => {
 
   const handleRegisterBusiness = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!regBusinessName.trim() || !regOwnerName.trim() || !regEmail.trim() || !regPassword) {
+    if (!regOwnerName.trim() || !regEmail.trim() || !regPassword) {
       setRegFeedback({ type: 'error', text: 'Por favor completa todos los campos obligatorios.' });
       return;
     }
@@ -174,8 +172,6 @@ export const AuthScreen: React.FC = () => {
     try {
       sounds.playKeypadClick();
       const res = await registerOwnerAndBusiness({
-        businessName: regBusinessName,
-        rif_o_ruc: regRif || 'N/A',
         ownerName: regOwnerName,
         email: regEmail,
         pass: regPassword
@@ -524,8 +520,8 @@ export const AuthScreen: React.FC = () => {
                 <div className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-orange-100 text-orange-600 mb-2">
                   <Store className="w-6 h-6" />
                 </div>
-                <h2 className="text-xl font-black text-neutral-900">Registrar Nuevo Negocio</h2>
-                <p className="text-xs text-neutral-500 mt-0.5">Crea tu empresa y activa el panel de control</p>
+                <h2 className="text-xl font-black text-neutral-900">Registro de Administrador</h2>
+                <p className="text-xs text-neutral-500 mt-0.5">Crea tu cuenta de acceso autorizado</p>
               </div>
 
               {regFeedback && (
@@ -581,7 +577,7 @@ export const AuthScreen: React.FC = () => {
                     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
                   </svg>
-                  <span>{googleLoading ? 'Creando con Google...' : 'Registrar con Google en 1 clic'}</span>
+                  <span>{googleLoading ? 'Autenticando...' : 'Registrar con Google en 1 clic'}</span>
                 </button>
                 <div className="relative flex py-3 items-center">
                   <div className="flex-grow border-t border-neutral-200"></div>
@@ -593,48 +589,17 @@ export const AuthScreen: React.FC = () => {
               <form onSubmit={handleRegisterBusiness} className="space-y-3.5">
                 <div>
                   <label className="block text-xs font-bold text-neutral-700 mb-1 flex items-center gap-1.5">
-                    <Store className="w-3.5 h-3.5 text-orange-500" />
-                    Nombre del Negocio / Cadena: *
+                    <User className="w-3.5 h-3.5 text-orange-500" />
+                    Nombre y Apellido: *
                   </label>
                   <input
                     type="text"
                     required
-                    placeholder="Ej: Grupo Gastronómico Don Mario"
-                    value={regBusinessName}
-                    onChange={(e) => setRegBusinessName(e.target.value)}
-                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none transition"
+                    placeholder="Mario Rossi"
+                    value={regOwnerName}
+                    onChange={(e) => setRegOwnerName(e.target.value)}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium focus:border-orange-500 outline-none transition"
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-bold text-neutral-700 mb-1 flex items-center gap-1.5">
-                      <FileText className="w-3.5 h-3.5 text-orange-500" />
-                      RIF / RUC / ID Fiscal:
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="J-12345678-0"
-                      value={regRif}
-                      onChange={(e) => setRegRif(e.target.value)}
-                      className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium focus:border-orange-500 outline-none transition"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-neutral-700 mb-1 flex items-center gap-1.5">
-                      <User className="w-3.5 h-3.5 text-orange-500" />
-                      Nombre del Dueño: *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Mario Rossi"
-                      value={regOwnerName}
-                      onChange={(e) => setRegOwnerName(e.target.value)}
-                      className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium focus:border-orange-500 outline-none transition"
-                    />
-                  </div>
                 </div>
 
                 <div>

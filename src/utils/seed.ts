@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import { collection, getDocs, writeBatch, doc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 
@@ -9,7 +10,7 @@ export async function seedInitialDataIfEmpty(retryCount = 0): Promise<void> {
 
   try {
     const bizSnap = await getDocs(query(collection(db, 'businesses'), where('appId', '==', 'gastro_smart')));
-    let defaultBizId = 'biz_default';
+    let defaultBizId = UNIQUE_BUSINESS_ID;
 
     if (bizSnap.empty) {
       console.log('Seeding initial business and data for Gastro Smart...');

@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from '../config/business';
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { createRestaurantWithTables } from '../services/dataService';
@@ -38,7 +39,7 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [createdRestaurantId, setCreatedRestaurantId] = useState<string | null>(null);
 
-  const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || 'biz_default';
+  const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

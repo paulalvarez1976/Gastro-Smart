@@ -1,3 +1,4 @@
+import { UNIQUE_BUSINESS_ID } from './config/business';
 import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { PinLogin } from './components/PinLogin';
@@ -53,7 +54,7 @@ const MainAppContent: React.FC = () => {
 
   // Subscriptions to Firestore collections
   const activeUser = currentUserAccount || currentEmployee;
-  const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || allRestaurants[0]?.businessId || 'biz_default';
+  const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || allRestaurants[0]?.businessId || UNIQUE_BUSINESS_ID;
 
   useEffect(() => {
     if (!activeUser) return;
