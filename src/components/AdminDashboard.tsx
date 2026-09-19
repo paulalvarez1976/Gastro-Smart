@@ -23,7 +23,7 @@ import {
   OperationalStatsSummary,
   FullRestaurantStatsSummary
 } from '../services/dataService';
-import { uploadDishPhoto } from '../services/storageService';
+import { uploadDishPhoto, migrateBase64MenuItemsToStorage } from '../services/storageService';
 import { sounds } from '../utils/sound';
 import { FinancialDashboard } from './FinancialDashboard';
 import { DeliveryReconciliation } from './DeliveryReconciliation';
@@ -165,6 +165,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [isMigratingPhotos, setIsMigratingPhotos] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Helper para sugerir si la categoría no requiere cocina
@@ -375,6 +376,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handleMigratePhotos = async () => {
+    if (!window.confirm('¿Desea migrar todas las fotos de platos guardadas en formato Base64 a Firebase Storage? Esto mejorará la velocidad y sincronización en todos los dispositivos.')) {
+      return;
+    }
+    setIsMigratingPhotos(true);
+    try {
+      const { migratedCount, errorsCount } = await migrateBase64MenuItemsToStorage();
+      alert(`Migración completada:\n- Platos migrados a Storage: ${migratedCount}\n- Errores: ${errorsCount}`);
+    } catch (err: any) {
+      alert('Error en la migración: ' + (err.message || err));
+    } finally {
+      setIsMigratingPhotos(false);
+    }
+  };
+
   const handleOpenNewDish = () => {
     setEditingMenu(null);
     setSelectedPhotoFile(null);
@@ -468,7 +484,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setPhotoPreviewUrl(null);
     } catch (err: any) {
       console.error('Error guardando plato:', err);
-      alert('Ocurrió un error al procesar la foto o guardar el plato.');
+      alert(err.message || 'No se pudo subir la foto, verificá tu conexión e intentá de nuevo.');
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -1005,6 +1021,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isMigratingPhotos}
+                  onClick={handleMigratePhotos}
+                  className="px-3 py-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-50"
+                  title="Migrar fotos en Base64 a Storage"
+                >
+                  {isMigratingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                  <span>Migrar Fotos a Storage</span>
+                </button>
+
                 {/* Filtro Tipo de Preparación */}
                 <div className="flex bg-neutral-150 p-0.5 rounded-xl border border-neutral-200 text-xs">
                   <button
@@ -1770,9 +1797,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* MODAL: Crear/Editar Plato del Menú con Subida de Foto a Firebase Storage */}
       {showMenuModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-neutral-100 space-y-4 my-8 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-neutral-100 pb-3">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50">
+          <div className="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-neutral-100 space-y-4 max-h-[calc(100vh-2rem)] sm:max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-neutral-100 pb-3 shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
                   <UtensilsCrossed className="w-4 h-4" />
@@ -1790,7 +1817,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
 
-            <div className="space-y-3.5 max-h-[70vh] overflow-y-auto pr-1">
+            <div className="space-y-3.5 overflow-y-auto pr-1 flex-1 min-h-0">
               <div>
                 <label className="block text-xs font-bold text-neutral-700 mb-1">Nombre del Plato *</label>
                 <input

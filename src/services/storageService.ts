@@ -1,5 +1,6 @@
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { storage } from '../firebase';
+import { collection, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { storage, db } from '../firebase';
 import { compressImage } from '../utils/imageCompressor';
 
 /**
@@ -50,9 +51,9 @@ export async function uploadDishPhoto(
       return downloadUrl;
     })();
 
-    // Timeout de 6 segundos para evitar que se quede cargando infinitamente si hay restricciones de red
+    // Timeout de 20 segundos para redes de restaurante
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Storage upload timeout (6s exceeded)')), 6000)
+      setTimeout(() => reject(new Error('Storage upload timeout (20s exceeded)')), 20000)
     );
 
     return await Promise.race([uploadPromise, timeoutPromise]) as string;
@@ -73,18 +74,10 @@ export async function uploadDishPhoto(
     } else if (storageError?.code === 'storage/quota-exceeded') {
       console.warn(`[Storage] ⚠️ Cuota de almacenamiento excedida.`);
     } else if (storageError?.message?.includes('timeout')) {
-      console.warn(`[Storage] ⏱️ La solicitud superó el tiempo límite de red (6s).`);
+      console.warn(`[Storage] ⏱️ La solicitud superó el tiempo límite de red (20s).`);
     }
 
-    console.log(`[Storage] 🔄 Activando respaldo local (Data URL) para garantizar que el plato guarde su imagen.`);
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        console.log(`[Storage] 📌 Respaldo local generado correctamente.`);
-        resolve(reader.result as string);
-      };
-      reader.readAsDataURL(blob);
-    });
+    throw new Error('No se pudo subir la foto, verificá tu conexión e intentá de nuevo');
   }
 }
 
@@ -114,17 +107,13 @@ export async function uploadReceiptPhoto(
     })();
 
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Storage upload timeout')), 6000)
+      setTimeout(() => reject(new Error('Storage upload timeout (20s exceeded)')), 20000)
     );
 
     return await Promise.race([uploadPromise, timeoutPromise]) as string;
   } catch (storageError: any) {
-    console.info('Usando respaldo local para recibo por restricción de red/storage:', storageError);
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(blob);
-    });
+    console.error(`[Storage] ❌ Error detallado al subir recibo:`, storageError);
+    throw new Error('No se pudo subir el comprobante, verificá tu conexión e intentá de nuevo');
   }
 }
 
@@ -137,4 +126,40 @@ export async function deleteDishPhoto(restaurantId: string, menuItemId: string):
     // Ignorar si el archivo no existía previamente
     console.info('No se requirió eliminar archivo previo de storage:', err);
   }
+}
+
+export async function migrateBase64MenuItemsToStorage(): Promise<{ migratedCount: number; errorsCount: number }> {
+  const colRef = collection(db, 'menuItems');
+  const snapshot = await getDocs(colRef);
+  let migratedCount = 0;
+  let errorsCount = 0;
+
+  for (const itemDoc of snapshot.docs) {
+    const data = itemDoc.data();
+    const fotoUrl = data.fotoUrl || data.imagenUrl;
+    
+    if (fotoUrl && typeof fotoUrl === 'string' && fotoUrl.startsWith('data:image')) {
+      try {
+        const res = await fetch(fotoUrl);
+        const blob = await res.blob();
+        const file = new File([blob], `${itemDoc.id}.jpg`, { type: blob.type || 'image/jpeg' });
+        
+        const restaurantId = data.restaurantId || 'central';
+        const downloadUrl = await uploadDishPhoto(restaurantId, itemDoc.id, file);
+        
+        await updateDoc(doc(db, 'menuItems', itemDoc.id), {
+          fotoUrl: downloadUrl,
+          imagenUrl: downloadUrl
+        });
+        
+        migratedCount++;
+        console.log(`[Migration] Plato ${itemDoc.id} (${data.nombre}) migrado a Storage exitosamente.`);
+      } catch (err) {
+        errorsCount++;
+        console.error(`[Migration] Error migrando plato ${itemDoc.id}:`, err);
+      }
+    }
+  }
+
+  return { migratedCount, errorsCount };
 }
