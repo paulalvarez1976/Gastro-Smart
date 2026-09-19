@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { sounds } from '../utils/sound';
+import { PWAInstallButton } from './PWAInstallButton';
+import { DeviceBadge } from './DeviceBadge';
 import { 
   Lock, 
   Mail, 
@@ -300,6 +302,10 @@ export const AuthScreen: React.FC = () => {
         <p className="text-neutral-600 font-medium text-xs sm:text-sm mt-0.5">
           Plataforma Multi-sucursal para Restaurantes & Bares
         </p>
+        <div className="flex items-center justify-center gap-2 mt-2.5">
+          <DeviceBadge />
+          <PWAInstallButton variant="nav" />
+        </div>
       </div>
 
       {/* Selector de Modo: Administrador vs Empleado */}

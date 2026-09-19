@@ -19,6 +19,7 @@ import {
 import { Order, MenuItem, Table, Shift, Client } from './types';
 import { UtensilsCrossed, ShieldAlert, Loader2 } from 'lucide-react';
 import { sounds } from './utils/sound';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 const MainAppContent: React.FC = () => {
   const { 
@@ -115,7 +116,7 @@ const MainAppContent: React.FC = () => {
     }
 
     return (
-      <div className="min-h-screen flex flex-col bg-neutral-100 antialiased selection:bg-orange-500 selection:text-white">
+      <div className="h-full h-dvh max-h-dvh flex flex-col bg-neutral-100 antialiased selection:bg-orange-500 selection:text-white overflow-hidden">
         <TopNav 
           orders={orders} 
           onOrderClick={(ord) => setActiveOrderModal(ord)}
@@ -158,7 +159,7 @@ const MainAppContent: React.FC = () => {
     }
 
     return (
-      <div className="min-h-screen flex flex-col bg-neutral-100 antialiased selection:bg-orange-500 selection:text-white">
+      <div className="h-full h-dvh max-h-dvh flex flex-col bg-neutral-100 antialiased selection:bg-orange-500 selection:text-white overflow-hidden">
         <TopNav 
           orders={orders} 
           onOrderClick={(ord) => setActiveOrderModal(ord)} 
@@ -285,6 +286,7 @@ export default function App() {
   return (
     <AuthProvider>
       <MainAppContent />
+      <OfflineIndicator />
     </AuthProvider>
   );
 }

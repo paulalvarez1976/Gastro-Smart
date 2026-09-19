@@ -29,6 +29,9 @@ import {
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
 import { getShiftSessionSummary, pauseShift, resumeShift } from '../services/dataService';
+import { PWAInstallButton } from './PWAInstallButton';
+import { KioskControls } from './KioskControls';
+import { DeviceBadge } from './DeviceBadge';
 
 interface TopNavProps {
   orders?: Order[];
@@ -427,270 +430,69 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   return (
     <>
-      <header className="bg-white border-b border-neutral-200 sticky top-0 z-40 px-3 sm:px-6 py-2.5 flex items-center justify-between shadow-xs">
+      <header className="bg-white border-b border-neutral-200 sticky top-0 z-40 shadow-xs shrink-0 flex flex-col">
         
-        {/* Left: Brand / Business Name & Restaurant Selector */}
-        <div className="flex items-center gap-2.5 sm:gap-5">
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center font-black shadow-sm shrink-0">
-              <UtensilsCrossed className="w-5 h-5" />
-            </div>
-            <div className="hidden md:block">
-              <div className="font-black text-neutral-900 tracking-tight text-sm flex items-center gap-1.5 leading-tight">
-                <span>{currentBusiness?.nombre || 'Gastro Smart'}</span>
-                {currentUserAccount && (
-                  <span className="text-[10px] font-extrabold bg-orange-100 text-orange-700 px-1.5 py-0.2 rounded">
-                    {currentUserAccount.rol === 'owner' ? 'DUEÑO' : 'ADMIN'}
-                  </span>
-                )}
-              </div>
-              <div className="text-[11px] text-neutral-400 font-medium">
-                {currentBusiness?.rif_o_ruc ? `ID: ${currentBusiness.rif_o_ruc}` : 'Plataforma Gastronómica'}
-              </div>
-            </div>
-          </div>
-
-          {/* Restaurant Selector (Multisede) */}
-          {allRestaurants.length > 0 && (
-            <div className="flex items-center gap-1.5 bg-neutral-50 px-2.5 py-1.5 rounded-xl border border-neutral-200">
-              <Store className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-              <select
-                value={currentRestaurant?.id || ''}
-                onChange={(e) => {
-                  if (e.target.value === '__NEW__') {
-                    if (onOpenNewRestaurantModal) {
-                      onOpenNewRestaurantModal();
-                    } else {
-                      window.dispatchEvent(new CustomEvent('open-new-restaurant-modal'));
-                    }
-                  } else {
-                    selectRestaurant(e.target.value);
-                  }
-                }}
-                className="bg-transparent text-xs sm:text-sm font-bold text-neutral-800 outline-none cursor-pointer pr-1"
-                disabled={!currentUserAccount && currentEmployee?.puesto !== 'admin' && allRestaurants.length <= 1}
-              >
-                {allRestaurants.map((rest, idx) => (
-                  <option key={`${rest.id}-${idx}`} value={rest.id}>
-                    {rest.nombre}
-                  </option>
-                ))}
-                {(currentUserAccount || currentEmployee?.puesto === 'admin') && (
-                  <option value="__NEW__" className="text-orange-600 font-bold">
-                    + Crear otra sucursal...
-                  </option>
-                )}
-              </select>
-            </div>
-          )}
-        </div>
-
-        {/* Right: Audio Control, Security Alerts, Shift Timer, Notifications & Logout */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        {/* FRANJA 1: Identidad del Negocio, Selector Multisede y Perfil/Sesión de Usuario */}
+        <div className="px-3 sm:px-6 py-2 flex items-center justify-between border-b border-neutral-100 gap-3">
           
-          {/* Sound Mute / Unmute / Test Button */}
-          <button
-            type="button"
-            onClick={handleToggleSound}
-            className={`p-2 rounded-xl transition border flex items-center justify-center ${
-              isAudioMuted 
-                ? 'bg-neutral-100 text-neutral-400 border-neutral-200 hover:text-neutral-700 hover:bg-neutral-200' 
-                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-            }`}
-            title={isAudioMuted ? 'Sonidos silenciados (Clic para activar notificaciones sonoras)' : 'Sonidos activos (Clic para silenciar)'}
-          >
-            {isAudioMuted ? (
-              <VolumeX className="w-4 h-4 sm:w-5 sm:h-5" />
-            ) : (
-              <Volume2 className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 animate-pulse" />
-            )}
-          </button>
-
-          {/* Security alerts indicator for Admin/Owner */}
-          {currentUserAccount && (
-            <div className="relative">
-              <button
-                onClick={() => setShowAlertsModal(!showAlertsModal)}
-                className={`relative p-2 rounded-xl transition border ${
-                  unreadAlerts.length > 0
-                    ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
-                    : 'text-neutral-500 hover:text-neutral-800 hover:bg-neutral-50 border-neutral-200'
-                }`}
-                title="Alertas de Seguridad y Auditoría"
-              >
-                <ShieldAlert className="w-4 h-4 sm:w-5 sm:h-5" />
-                {unreadAlerts.length > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
-                    {unreadAlerts.length}
-                  </span>
-                )}
-              </button>
-
-              {showAlertsModal && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-neutral-200 p-4 z-50 animate-in fade-in">
-                  <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
-                    <div className="flex items-center gap-1.5 text-xs font-black text-neutral-900 uppercase">
-                      <Shield className="w-4 h-4 text-orange-500" />
-                      Alertas de Seguridad ({securityAlerts.length})
-                    </div>
-                    <button onClick={() => setShowAlertsModal(false)} className="text-neutral-400 hover:text-neutral-600">
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  <div className="mt-2 space-y-2 max-h-72 overflow-y-auto text-xs">
-                    {securityAlerts.length === 0 ? (
-                      <div className="text-neutral-400 text-center py-6">
-                        No hay incidentes de seguridad registrados.
-                      </div>
-                    ) : (
-                      securityAlerts.map((alert, idx) => (
-                        <div 
-                          key={`${alert.id}-${idx}`}
-                          className={`p-3 rounded-xl border ${
-                            alert.tipo === 'fuerza_bruta_pin' 
-                              ? 'bg-red-50/80 border-red-200 text-red-950' 
-                              : 'bg-amber-50 border-amber-200 text-amber-950'
-                          }`}
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="font-extrabold text-[11px] uppercase tracking-wider text-red-700">
-                              {alert.tipo === 'fuerza_bruta_pin' ? '⚠️ Fuerza Bruta PIN' : 'Alerta'}
-                            </span>
-                            <span className="text-[10px] text-neutral-500">
-                              {new Date(alert.fecha).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                          </div>
-                          <p className="mt-1 text-[11px] leading-relaxed">
-                            {alert.mensaje}
-                          </p>
-                          {!alert.leido && (
-                            <button
-                              onClick={() => {
-                                markAlertRead(alert.id);
-                                sounds.stopRepeatingAlarm('sec-alert-' + alert.id);
-                                sounds.stopRepeatingAlarm('security-alert');
-                              }}
-                              className="mt-2 text-[10px] font-bold text-red-700 hover:underline"
-                            >
-                              Marcar como atendida / leída
-                            </button>
-                          )}
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Shift Active Indicator (for staff) */}
-          {currentShift && (
-            <div className={`hidden sm:flex items-center gap-1.5 px-3 py-1 border rounded-xl text-xs font-semibold ${
-              currentShift.estado === 'en_pausa' 
-                ? 'bg-neutral-100 border-neutral-200 text-neutral-600' 
-                : 'bg-amber-50 border-amber-200/80 text-amber-900'
-            }`}>
-              <span className={`w-2 h-2 rounded-full ${
-                currentShift.estado === 'en_pausa' ? 'bg-amber-500' : 'bg-emerald-500 animate-ping'
-              }`} />
-              <Clock className={`w-3.5 h-3.5 ${currentShift.estado === 'en_pausa' ? 'text-amber-500' : 'text-amber-600'}`} />
-              <span>{shiftDuration}</span>
-              {currentShift.estado === 'en_pausa' && <span className="ml-1 text-[10px] font-black uppercase text-amber-600">PAUSA</span>}
-            </div>
-          )}
-
-          {/* Notifications bell (alerta de cocina a mesero) */}
-          <div className="relative">
-            <button
-              onClick={() => setShowNotifications(!showNotifications)}
-              className="relative p-2 rounded-xl text-neutral-600 hover:text-orange-600 hover:bg-orange-50 transition border border-neutral-200"
-              title="Notificaciones de pedidos"
-            >
-              <Bell className="w-4 h-4 sm:w-5 sm:h-5" />
-              {readyOrdersForServer.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-orange-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-bounce">
-                  {readyOrdersForServer.length}
-                </span>
-              )}
-            </button>
-
-            {showNotifications && (
-              <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-neutral-200 p-3 z-50">
-                <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-                      Avisos en vivo
+          {/* Izquierda: Logo, Nombre de Negocio y Selector Multisede */}
+          <div className="flex items-center gap-2.5 sm:gap-4 min-w-0">
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center font-black shadow-xs shrink-0">
+                <UtensilsCrossed className="w-4 h-4 sm:w-5 sm:h-5" />
+              </div>
+              <div className="hidden md:block">
+                <div className="font-black text-neutral-900 tracking-tight text-xs sm:text-sm flex items-center gap-1.5 leading-tight">
+                  <span className="truncate">{currentBusiness?.nombre || 'Gastro Smart'}</span>
+                  {currentUserAccount && (
+                    <span className="text-[10px] font-extrabold bg-orange-100 text-orange-700 px-1.5 py-0.2 rounded">
+                      {currentUserAccount.rol === 'owner' ? 'DUEÑO' : 'ADMIN'}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => sounds.playNotification()}
-                      className="text-[10px] font-bold text-orange-600 hover:underline flex items-center gap-0.5"
-                      title="Probar sonido de notificación"
-                    >
-                      (🔊 Probar)
-                    </button>
-                  </div>
-                  <button onClick={() => setShowNotifications(false)} className="text-neutral-400 hover:text-neutral-600">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-                <div className="mt-2 space-y-2 max-h-64 overflow-y-auto">
-                  {readyOrdersForServer.length === 0 ? (
-                    <div className="text-xs text-neutral-400 text-center py-4">
-                      No hay pedidos pendientes de retiro
-                    </div>
-                  ) : (
-                    readyOrdersForServer.map((o, idx) => {
-                      const isExpressOrder = o.ruta === 'express' || !(o.items || []).some(it => it.requiereCocina !== false);
-                      return (
-                        <div 
-                          key={`${o.id}-${idx}`}
-                          onClick={() => {
-                            sounds.stopRepeatingAlarm('ord-ready-' + o.id);
-                            sounds.stopRepeatingAlarm('ord-mostrador-' + o.id);
-                            sounds.stopRepeatingAlarm('ord-rej-' + o.id);
-                            onOrderClick?.(o);
-                            setShowNotifications(false);
-                          }}
-                          className={`p-2.5 rounded-xl border text-xs cursor-pointer transition ${
-                            isExpressOrder
-                              ? 'bg-purple-50 border-purple-200 text-purple-900 hover:bg-purple-100'
-                              : o.estado === 'listo' 
-                                ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100' 
-                                : 'bg-red-50 border-red-200 text-red-900 hover:bg-red-100'
-                          }`}
-                        >
-                          <div className="font-bold flex items-center justify-between">
-                            <span>
-                              {o.tipo === 'local' ? `Mesa #${o.mesaNumero}` : `Delivery (${o.empresaDelivery || 'General'})`}
-                            </span>
-                            <span className="uppercase text-[10px] px-1.5 py-0.5 rounded bg-white/80 font-black">
-                              {isExpressOrder 
-                                ? '⚡ MOSTRADOR' 
-                                : (o.estado === 'listo' ? '¡LISTO PARA ENTREGAR!' : 'RECHAZADO')}
-                            </span>
-                          </div>
-                          <div className="text-[11px] mt-1 text-neutral-600 truncate">
-                            {o.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}
-                          </div>
-                          {o.motivoRechazo && (
-                            <div className="text-[10px] text-red-600 mt-1 font-semibold">
-                              Motivo: {o.motivoRechazo}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
                   )}
                 </div>
+                <div className="text-[10px] text-neutral-400 font-medium truncate">
+                  {currentBusiness?.rif_o_ruc ? `ID: ${currentBusiness.rif_o_ruc}` : 'Plataforma Gastronómica'}
+                </div>
+              </div>
+            </div>
+
+            {/* Restaurant Selector (Multisede) */}
+            {allRestaurants.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-neutral-50 hover:bg-neutral-100/80 px-2.5 py-1 rounded-xl border border-neutral-200 transition">
+                <Store className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                <select
+                  value={currentRestaurant?.id || ''}
+                  onChange={(e) => {
+                    if (e.target.value === '__NEW__') {
+                      if (onOpenNewRestaurantModal) {
+                        onOpenNewRestaurantModal();
+                      } else {
+                        window.dispatchEvent(new CustomEvent('open-new-restaurant-modal'));
+                      }
+                    } else {
+                      selectRestaurant(e.target.value);
+                    }
+                  }}
+                  className="bg-transparent text-xs sm:text-sm font-bold text-neutral-800 outline-none cursor-pointer pr-1 truncate max-w-[150px] sm:max-w-[220px]"
+                  disabled={!currentUserAccount && currentEmployee?.puesto !== 'admin' && allRestaurants.length <= 1}
+                >
+                  {allRestaurants.map((rest, idx) => (
+                    <option key={`${rest.id}-${idx}`} value={rest.id}>
+                      {rest.nombre}
+                    </option>
+                  ))}
+                  {(currentUserAccount || currentEmployee?.puesto === 'admin') && (
+                    <option value="__NEW__" className="text-orange-600 font-bold">
+                      + Crear otra sucursal...
+                    </option>
+                  )}
+                </select>
               </div>
             )}
           </div>
 
-          {/* User badge */}
-          <div className="flex items-center gap-2 pl-2 border-l border-neutral-200">
+          {/* Derecha: Usuario y Botones de Salida / Turno */}
+          <div className="flex items-center gap-2 shrink-0">
             <div className="text-right hidden sm:block">
               <div className="text-xs font-black text-neutral-900 leading-tight">
                 {userDisplayName}
@@ -700,18 +502,17 @@ export const TopNav: React.FC<TopNavProps> = ({
               </span>
             </div>
 
-            {/* Logout or End Shift Button */}
             {currentUserAccount ? (
               <button
                 onClick={logoutAdmin}
-                className="px-2.5 sm:px-3 py-2 rounded-xl bg-neutral-100 hover:bg-red-50 text-neutral-700 hover:text-red-700 border border-neutral-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-neutral-100 hover:bg-red-50 text-neutral-700 hover:text-red-700 border border-neutral-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                 title="Cerrar sesión de Administrador"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Cerrar Sesión</span>
               </button>
             ) : (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 {currentShift && (
                   <button
                     onClick={async () => {
@@ -721,27 +522,253 @@ export const TopNav: React.FC<TopNavProps> = ({
                         await pauseShift(currentShift.id);
                       }
                     }}
-                    className={`px-2.5 sm:px-3 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+                    className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer ${
                       currentShift.estado === 'en_pausa' 
                         ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200' 
                         : 'bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200'
                     }`}
                     title={currentShift.estado === 'en_pausa' ? "Reanudar Turno" : "Pausar Turno (descanso)"}
                   >
-                    {currentShift.estado === 'en_pausa' ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+                    {currentShift.estado === 'en_pausa' ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
                     <span className="hidden sm:inline">{currentShift.estado === 'en_pausa' ? 'Reanudar' : 'Pausar'}</span>
                   </button>
                 )}
                 <button
                   onClick={() => setShowEndShiftModal(true)}
-                  className="px-2.5 sm:px-3 py-2 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                  className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
                   title="Cerrar turno y ver balance"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Cerrar Turno</span>
                 </button>
               </div>
             )}
+          </div>
+
+        </div>
+
+        {/* FRANJA 2: Herramientas del Sistema, Reconocimiento de Pantalla, Sonido, Alertas y Notificaciones (Oculta en móviles para dar máximo espacio al TPV) */}
+        <div className="hidden sm:flex bg-neutral-50/90 px-3 sm:px-6 py-1.5 items-center justify-between gap-2 overflow-x-auto border-t border-neutral-100">
+          
+          {/* Izquierda: Dispositivo, Instalador PWA, Modo Kiosko y Sonido */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Reconocimiento Activo del Dispositivo */}
+            <DeviceBadge />
+
+            {/* In-App PWA Install Button */}
+            <PWAInstallButton variant="nav" />
+
+            {/* Kiosk Mode & WakeLock (Pantalla Siempre Encendida) */}
+            <KioskControls variant="nav" />
+
+            {/* Sound Mute / Unmute / Test Button */}
+            <button
+              type="button"
+              onClick={handleToggleSound}
+              className={`px-2 py-1 rounded-lg transition border flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
+                isAudioMuted 
+                  ? 'bg-white text-neutral-400 border-neutral-200 hover:text-neutral-700 hover:bg-neutral-100' 
+                  : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+              }`}
+              title={isAudioMuted ? 'Sonidos silenciados (Clic para activar notificaciones sonoras)' : 'Sonidos activos (Clic para silenciar)'}
+            >
+              {isAudioMuted ? (
+                <VolumeX className="w-3.5 h-3.5" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+              )}
+              <span className="hidden md:inline">{isAudioMuted ? 'Silencio' : 'Sonido'}</span>
+            </button>
+          </div>
+
+          {/* Derecha: Duración de Turno, Alertas de Seguridad y Notificaciones de Pedidos */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+            
+            {/* Shift Active Indicator (for staff) */}
+            {currentShift && (
+              <div className={`flex items-center gap-1.5 px-2.5 py-1 border rounded-lg text-xs font-semibold ${
+                currentShift.estado === 'en_pausa' 
+                  ? 'bg-neutral-200/80 border-neutral-300 text-neutral-700' 
+                  : 'bg-amber-50 border-amber-200/80 text-amber-900'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${
+                  currentShift.estado === 'en_pausa' ? 'bg-amber-500' : 'bg-emerald-500 animate-ping'
+                }`} />
+                <Clock className={`w-3.5 h-3.5 ${currentShift.estado === 'en_pausa' ? 'text-amber-500' : 'text-amber-600'}`} />
+                <span>{shiftDuration}</span>
+                {currentShift.estado === 'en_pausa' && <span className="ml-0.5 text-[10px] font-black uppercase text-amber-600">PAUSA</span>}
+              </div>
+            )}
+
+            {/* Security alerts indicator for Admin/Owner */}
+            {currentUserAccount && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowAlertsModal(!showAlertsModal)}
+                  className={`relative px-2.5 py-1 rounded-lg transition border flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
+                    unreadAlerts.length > 0
+                      ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                      : 'bg-white text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100 border-neutral-200'
+                  }`}
+                  title="Alertas de Seguridad y Auditoría"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5" />
+                  <span className="hidden md:inline">Seguridad</span>
+                  {unreadAlerts.length > 0 && (
+                    <span className="w-4 h-4 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-pulse">
+                      {unreadAlerts.length}
+                    </span>
+                  )}
+                </button>
+
+                {showAlertsModal && (
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-2xl border border-neutral-200 p-4 z-50 animate-in fade-in">
+                    <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                      <div className="flex items-center gap-1.5 text-xs font-black text-neutral-900 uppercase">
+                        <Shield className="w-4 h-4 text-orange-500" />
+                        Alertas de Seguridad ({securityAlerts.length})
+                      </div>
+                      <button onClick={() => setShowAlertsModal(false)} className="text-neutral-400 hover:text-neutral-600">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="mt-2 space-y-2 max-h-72 overflow-y-auto text-xs">
+                      {securityAlerts.length === 0 ? (
+                        <div className="text-neutral-400 text-center py-6">
+                          No hay incidentes de seguridad registrados.
+                        </div>
+                      ) : (
+                        securityAlerts.map((alert, idx) => (
+                          <div 
+                            key={`${alert.id}-${idx}`}
+                            className={`p-3 rounded-xl border ${
+                              alert.tipo === 'fuerza_bruta_pin' 
+                                ? 'bg-red-50/80 border-red-200 text-red-950' 
+                                : 'bg-amber-50 border-amber-200 text-amber-950'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-extrabold text-[11px] uppercase tracking-wider text-red-700">
+                                {alert.tipo === 'fuerza_bruta_pin' ? '⚠️ Fuerza Bruta PIN' : 'Alerta'}
+                              </span>
+                              <span className="text-[10px] text-neutral-500">
+                                {new Date(alert.fecha).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="mt-1 text-[11px] leading-relaxed">
+                              {alert.mensaje}
+                            </p>
+                            {!alert.leido && (
+                              <button
+                                onClick={() => {
+                                  markAlertRead(alert.id);
+                                  sounds.stopRepeatingAlarm('sec-alert-' + alert.id);
+                                  sounds.stopRepeatingAlarm('security-alert');
+                                }}
+                                className="mt-2 text-[10px] font-bold text-red-700 hover:underline"
+                              >
+                                Marcar como atendida / leída
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Notifications bell (alerta de cocina a mesero) */}
+            <div className="relative">
+              <button
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="relative px-2.5 py-1 rounded-lg text-neutral-700 hover:text-orange-600 hover:bg-orange-50 transition border border-neutral-200 bg-white flex items-center gap-1.5 text-xs font-bold cursor-pointer"
+                title="Notificaciones de pedidos"
+              >
+                <Bell className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Avisos</span>
+                {readyOrdersForServer.length > 0 && (
+                  <span className="w-4 h-4 bg-orange-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-bounce">
+                    {readyOrdersForServer.length}
+                  </span>
+                )}
+              </button>
+
+              {showNotifications && (
+                <div className="absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border border-neutral-200 p-3 z-50">
+                  <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold uppercase tracking-wider text-neutral-500">
+                        Avisos en vivo
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => sounds.playNotification()}
+                        className="text-[10px] font-bold text-orange-600 hover:underline flex items-center gap-0.5 cursor-pointer"
+                        title="Probar sonido de notificación"
+                      >
+                        (🔊 Probar)
+                      </button>
+                    </div>
+                    <button onClick={() => setShowNotifications(false)} className="text-neutral-400 hover:text-neutral-600">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="mt-2 space-y-2 max-h-64 overflow-y-auto">
+                    {readyOrdersForServer.length === 0 ? (
+                      <div className="text-xs text-neutral-400 text-center py-4">
+                        No hay pedidos pendientes de retiro
+                      </div>
+                    ) : (
+                      readyOrdersForServer.map((o, idx) => {
+                        const isExpressOrder = o.ruta === 'express' || !(o.items || []).some(it => it.requiereCocina !== false);
+                        return (
+                          <div 
+                            key={`${o.id}-${idx}`}
+                            onClick={() => {
+                              sounds.stopRepeatingAlarm('ord-ready-' + o.id);
+                              sounds.stopRepeatingAlarm('ord-mostrador-' + o.id);
+                              sounds.stopRepeatingAlarm('ord-rej-' + o.id);
+                              onOrderClick?.(o);
+                              setShowNotifications(false);
+                            }}
+                            className={`p-2.5 rounded-xl border text-xs cursor-pointer transition ${
+                              isExpressOrder
+                                ? 'bg-purple-50 border-purple-200 text-purple-900 hover:bg-purple-100'
+                                : o.estado === 'listo' 
+                                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900 hover:bg-emerald-100' 
+                                  : 'bg-red-50 border-red-200 text-red-900 hover:bg-red-100'
+                            }`}
+                          >
+                            <div className="font-bold flex items-center justify-between">
+                              <span>
+                                {o.tipo === 'local' ? `Mesa #${o.mesaNumero}` : `Delivery (${o.empresaDelivery || 'General'})`}
+                              </span>
+                              <span className="uppercase text-[10px] px-1.5 py-0.5 rounded bg-white/80 font-black">
+                                {isExpressOrder 
+                                  ? '⚡ MOSTRADOR' 
+                                  : (o.estado === 'listo' ? '¡LISTO PARA ENTREGAR!' : 'RECHAZADO')}
+                              </span>
+                            </div>
+                            <div className="text-[11px] mt-1 text-neutral-600 truncate">
+                              {o.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')}
+                            </div>
+                            {o.motivoRechazo && (
+                              <div className="text-[10px] text-red-600 mt-1 font-semibold">
+                                Motivo: {o.motivoRechazo}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
 
         </div>

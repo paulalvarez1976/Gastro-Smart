@@ -30,6 +30,7 @@ import { DeliveryReconciliation } from './DeliveryReconciliation';
 import { StaffAttendanceAdminView } from './StaffAttendanceAdminView';
 import { DailySalesExpensesTrendChart } from './DailySalesExpensesTrendChart';
 import { AdminRepairModal } from './AdminRepairModal';
+import { DishCostProfitReport } from './DishCostProfitReport';
 import { 
   ShieldCheck, 
   Store, 
@@ -63,7 +64,10 @@ import {
   Zap,
   Coffee,
   ShoppingBag,
-  Wrench
+  Wrench,
+  Percent,
+  Calculator,
+  PieChart
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -93,7 +97,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || 'biz_default';
   
   // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'financiero' | 'conciliacion' | 'asistencia' | 'metricas' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('financiero');
+  const [activeTab, setActiveTab] = useState<'financiero' | 'conciliacion' | 'asistencia' | 'metricas' | 'costos' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('financiero');
 
   // Modal Reparar Pedidos Atascados
   const [showRepairModal, setShowRepairModal] = useState(false);
@@ -150,6 +154,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     nombre: '',
     descripcion: '',
     precio: 10.0,
+    costoElaboracion: 4.0,
     categoria: 'Platos Fuertes',
     requiereCocina: true,
     disponible: true,
@@ -380,6 +385,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       nombre: '',
       descripcion: '',
       precio: 12.0,
+      costoElaboracion: 4.0,
       categoria: 'Platos Fuertes',
       requiereCocina: true,
       disponible: true,
@@ -402,6 +408,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       nombre: item.nombre,
       descripcion: item.descripcion,
       precio: item.precio,
+      costoElaboracion: item.costoElaboracion || 0,
       categoria: item.categoria,
       requiereCocina: item.requiereCocina === true,
       disponible: item.disponible,
@@ -420,7 +427,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const targetRestaurantId = menuForm.restaurantId && menuForm.restaurantId !== 'all'
         ? menuForm.restaurantId
-        : (currentRestaurant?.id || 'central');
+        : (currentRestaurant?.id || (restaurants.length > 0 ? restaurants[0].id : 'central'));
 
       const dishId = editingMenu ? editingMenu.id : generateMenuItemId();
       let finalFotoUrl: string | null = menuForm.fotoUrl || menuForm.imagenUrl || null;
@@ -440,6 +447,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         nombre: menuForm.nombre.trim(),
         descripcion: menuForm.descripcion.trim(),
         precio: Number(menuForm.precio) || 0,
+        costoElaboracion: Number(menuForm.costoElaboracion) || 0,
         categoria: menuForm.categoria.trim() || 'General',
         requiereCocina: menuForm.requiereCocina === true,
         disponible: menuForm.disponible,
@@ -485,7 +493,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, []);
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-65px)] bg-neutral-100 overflow-hidden">
+    <div className="flex-1 flex flex-col h-[calc(100dvh-65px)] min-h-0 bg-neutral-100 overflow-hidden">
       
       {/* Admin Subheader & Tab Controls */}
       <div className="bg-white border-b border-neutral-200 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -509,6 +517,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             { id: 'restaurantes', label: 'Locales & Mesas', icon: Store },
             { id: 'empleados', label: 'Empleados & PINs', icon: Users },
             { id: 'menu', label: 'Menú & Platos', icon: UtensilsCrossed },
+            { id: 'costos', label: 'Costos & Rentabilidad', icon: PieChart },
             { id: 'turnos', label: 'Turnos & Sueldos', icon: Clock },
             { id: 'peligro', label: 'Zona de Peligro', icon: Flame },
           ].map(tab => {
@@ -1053,9 +1062,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
 
+                {/* Botón Acceso Rápido a Reporte de Costos */}
+                <button
+                  type="button"
+                  onClick={() => { sounds.playKeypadClick(); setActiveTab('costos'); }}
+                  className="h-10 px-3.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                  title="Abrir reporte completo de costos de elaboración y margen de ganancia"
+                >
+                  <PieChart className="w-4 h-4 text-amber-700" />
+                  <span>Reporte de Costos & Margen</span>
+                </button>
+
                 <button
                   onClick={handleOpenNewDish}
-                  className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition"
+                  className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   Nuevo Plato
@@ -1079,7 +1099,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <th className="p-3">Plato</th>
                           <th className="p-3">Categoría</th>
                           <th className="p-3">Preparación</th>
-                          <th className="p-3 text-right">Precio</th>
+                          <th className="p-3 text-right">PVP Venta</th>
+                          <th className="p-3 text-right">Costo Elab.</th>
+                          <th className="p-3 text-right">Margen Bruto</th>
                           <th className="p-3">Sede</th>
                           <th className="p-3 text-center">Disponibilidad</th>
                           <th className="p-3 text-right">Acciones</th>
@@ -1092,6 +1114,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             ? 'Todas' 
                             : (restaurants.find(r => r.id === item.restaurantId)?.nombre || 'Sede');
                           const isKitchen = item.requiereCocina === true;
+                          const cost = item.costoElaboracion || 0;
+                          const hasCost = typeof item.costoElaboracion === 'number' && item.costoElaboracion > 0;
+                          const margin$ = item.precio - cost;
+                          const marginPct = item.precio > 0 ? (margin$ / item.precio) * 100 : 0;
 
                           return (
                             <tr key={item.id} className="hover:bg-neutral-50/50">
@@ -1132,8 +1158,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   {isKitchen ? 'Cocina' : 'Express'}
                                 </span>
                               </td>
-                              <td className="p-3 text-right font-mono font-bold text-orange-600 text-sm">
+                              <td className="p-3 text-right font-mono font-bold text-neutral-900 text-sm">
                                 ${item.precio.toFixed(2)}
+                              </td>
+                              <td className="p-3 text-right font-mono text-xs">
+                                {hasCost ? (
+                                  <span className="font-bold text-amber-700">${cost.toFixed(2)}</span>
+                                ) : (
+                                  <span className="text-neutral-400 italic text-[11px]">Sin fijar</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-right font-mono text-xs">
+                                {hasCost ? (
+                                  <div className="flex flex-col items-end">
+                                    <span className={`font-black ${margin$ < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                      ${margin$.toFixed(2)}
+                                    </span>
+                                    <span className="text-[10px] font-bold text-neutral-500">
+                                      ({marginPct.toFixed(0)}%)
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-neutral-400">-</span>
+                                )}
                               </td>
                               <td className="p-3 text-neutral-600">
                                 {restName}
@@ -1224,6 +1271,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <span className="text-[10px] uppercase font-bold text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded">
                               {item.categoria}
                             </span>
+                            {typeof item.costoElaboracion === 'number' && item.costoElaboracion > 0 ? (
+                              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                                Margen: ${(item.precio - item.costoElaboracion).toFixed(2)} ({(((item.precio - item.costoElaboracion) / item.precio) * 100).toFixed(0)}%)
+                              </span>
+                            ) : null}
                           </div>
                           <p className="text-xs text-neutral-500 mt-2 line-clamp-2">{item.descripcion}</p>
                         </div>
@@ -1263,6 +1315,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* VIEW: Costos de Elaboración & Margen de Rentabilidad */}
+        {activeTab === 'costos' && (
+          <div className="max-w-6xl mx-auto">
+            <DishCostProfitReport
+              menuItems={menuItems}
+              orders={orders}
+              restaurants={restaurants}
+              currentRestaurant={currentRestaurant}
+              onEditDish={handleOpenEditDish}
+            />
           </div>
         )}
 
@@ -1750,7 +1815,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-neutral-700 mb-1">Precio ($) *</label>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">Precio de Venta ($) *</label>
                   <input
                     type="number"
                     step="0.5"
@@ -1761,22 +1826,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-neutral-700 mb-1">Categoría</label>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">Costo de Elaboración ($)</label>
                   <input
-                    type="text"
-                    value={menuForm.categoria}
-                    onChange={(e) => {
-                      const newCat = e.target.value;
-                      setMenuForm(prev => ({
-                        ...prev,
-                        categoria: newCat,
-                        requiereCocina: isManualCocinaTouched ? prev.requiereCocina : !isCategoryNoKitchen(newCat)
-                      }));
-                    }}
-                    placeholder="Ej: Platos Fuertes, Bebidas, Postres..."
-                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
+                    type="number"
+                    step="0.25"
+                    min="0"
+                    placeholder="0.00"
+                    value={menuForm.costoElaboracion}
+                    onChange={(e) => setMenuForm({ ...menuForm, costoElaboracion: parseFloat(e.target.value) || 0 })}
+                    className="w-full h-10 px-3 rounded-xl border border-amber-300 bg-amber-50/40 text-xs font-bold text-amber-900"
                   />
+                  <div className="text-[10px] text-neutral-500 mt-0.5">Materia prima e insumos</div>
                 </div>
+              </div>
+
+              {/* Indicador de Rentabilidad en Tiempo Real */}
+              {(() => {
+                const p = Number(menuForm.precio) || 0;
+                const c = Number(menuForm.costoElaboracion) || 0;
+                const margin$ = p - c;
+                const marginPct = p > 0 ? (margin$ / p) * 100 : 0;
+                const foodCostPct = p > 0 ? (c / p) * 100 : 0;
+                const isLoss = margin$ < 0;
+
+                return (
+                  <div className={`p-3 rounded-2xl border text-xs ${
+                    isLoss ? 'bg-red-50 border-red-200 text-red-900' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                  }`}>
+                    <div className="flex items-center justify-between font-bold pb-1.5 border-b border-neutral-200/60">
+                      <span className="flex items-center gap-1">
+                        <Percent className="w-3.5 h-3.5 text-emerald-700" />
+                        Análisis de Rentabilidad por Plato
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                        isLoss ? 'bg-red-200 text-red-800' : marginPct >= 65 ? 'bg-emerald-200 text-emerald-900' : 'bg-amber-200 text-amber-900'
+                      }`}>
+                        {isLoss ? 'Alerta: Pérdida' : marginPct >= 65 ? 'Margen Óptimo (>65%)' : 'Margen Saludable'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 pt-2 text-center">
+                      <div>
+                        <div className="text-[10px] text-neutral-500 font-medium">Ganancia Bruta</div>
+                        <div className={`font-mono font-black text-sm ${isLoss ? 'text-red-700' : 'text-emerald-800'}`}>
+                          ${margin$.toFixed(2)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-neutral-500 font-medium">Margen Utilidad</div>
+                        <div className="font-mono font-black text-sm text-emerald-700">
+                          {marginPct.toFixed(1)}%
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-neutral-500 font-medium">Food Cost</div>
+                        <div className="font-mono font-black text-sm text-amber-800">
+                          {foodCostPct.toFixed(1)}%
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div>
+                <label className="block text-xs font-bold text-neutral-700 mb-1">Categoría</label>
+                <input
+                  type="text"
+                  value={menuForm.categoria}
+                  onChange={(e) => {
+                    const newCat = e.target.value;
+                    setMenuForm(prev => ({
+                      ...prev,
+                      categoria: newCat,
+                      requiereCocina: isManualCocinaTouched ? prev.requiereCocina : !isCategoryNoKitchen(newCat)
+                    }));
+                  }}
+                  placeholder="Ej: Platos Fuertes, Bebidas, Postres..."
+                  className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
+                />
               </div>
 
               {/* RUTA / DESTINO: ¿Requiere preparación en Cocina? */}

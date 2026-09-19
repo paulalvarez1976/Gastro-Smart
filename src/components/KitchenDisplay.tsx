@@ -21,8 +21,11 @@ import {
   ChevronDown,
   ChevronUp,
   Layers,
-  Check
+  Check,
+  Printer
 } from 'lucide-react';
+import { ThermalReceiptModal } from './ThermalReceiptModal';
+import { haptics } from '../utils/haptics';
 
 interface KitchenDisplayProps {
   orders: Order[];
@@ -53,6 +56,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   const [activeQueueTab, setActiveQueueTab] = useState<'all' | 'nuevos' | 'preparacion' | 'recojo'>('all');
   const [visualNotice, setVisualNotice] = useState<{ id: string; title: string; text: string } | null>(null);
   const [expandedTableOrders, setExpandedTableOrders] = useState<Record<string, boolean>>({});
+  const [comandaToPrint, setComandaToPrint] = useState<{ order: Order; roundNumber: number; items: OrderItem[] } | null>(null);
 
   // Mantener reloj de cocina actualizado cada segundo para cronómetros
   useEffect(() => {
@@ -176,6 +180,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   // 1. ACEPTAR RONDA: pendiente_cocina → aceptado
   const handleAcceptRound = async (card: KitchenRoundCardData) => {
     sounds.playKeypadClick();
+    haptics.impactMedium();
     try {
       if (card.order.rondas && card.order.rondas.length > 0) {
         await updateOrderRoundStatus(
@@ -206,6 +211,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   // Aceptar todas las nuevas rondas
   const handleAcceptAllPending = async () => {
     sounds.playKeypadClick();
+    haptics.impactHeavy();
     for (const card of nuevosCards) {
       try {
         if (card.order.rondas && card.order.rondas.length > 0) {
@@ -217,8 +223,8 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
           );
         } else {
           await cambiarEstadoPedido(
-            card.order.id,
-            'aceptado',
+            card.order.id, 
+            'aceptado', 
             currentEmployee?.nombre || 'Chef de Cocina',
             { timeline: card.order.timeline || [] }
           );
@@ -238,6 +244,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   // 2. COMENZAR PREPARACIÓN: aceptado → en_preparacion
   const handleStartRoundPreparation = async (card: KitchenRoundCardData) => {
     sounds.playKeypadClick();
+    haptics.impactMedium();
     try {
       if (card.order.rondas && card.order.rondas.length > 0) {
         await updateOrderRoundStatus(
@@ -262,6 +269,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   // 3. MARCAR RONDA LISTA: en_preparacion → listo (Alerta sonora simultánea a Mesero y Caja)
   const handleReadyRound = async (card: KitchenRoundCardData) => {
     sounds.playOrderReady();
+    haptics.orderReady();
     try {
       if (card.order.rondas && card.order.rondas.length > 0) {
         await updateOrderRoundStatus(
@@ -292,6 +300,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   // 4. Toggle item individual
   const handleToggleItemStatus = async (card: KitchenRoundCardData, item: OrderItem, itemIdx: number) => {
     sounds.playKeypadClick();
+    haptics.selection();
     const newStatus: ItemStatus = item.estado === 'listo' ? 'en_preparacion' : 'listo';
     try {
       await updateOrderItemStatus(
@@ -420,46 +429,58 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
           </div>
 
           {/* Stopwatch & Badges */}
-          <div className="text-right">
-            {queue === 'recojo' ? (
-              <>
-                <div className="text-xs font-mono font-black flex items-center justify-end gap-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>{formatElapsedTime(listoEn || enviadoEn)}</span>
-                </div>
-                {isUncollectedAlert ? (
-                  <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
-                    <AlertTriangle className="w-3 h-3" /> SIN RECOGER (+10 MIN)
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setComandaToPrint({ order, roundNumber, items: roundItems })}
+              title="Imprimir comanda térmica (58mm/80mm / Bluetooth)"
+              className="px-2 py-1 rounded-lg bg-black/25 hover:bg-black/40 text-white border border-white/20 transition flex items-center gap-1 text-[10px] font-bold"
+            >
+              <Printer className="w-3 h-3" />
+              <span className="hidden sm:inline">Comanda</span>
+            </button>
+
+            <div className="text-right">
+              {queue === 'recojo' ? (
+                <>
+                  <div className="text-xs font-mono font-black flex items-center justify-end gap-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{formatElapsedTime(listoEn || enviadoEn)}</span>
                   </div>
-                ) : (
-                  <div className="text-[10px] uppercase font-bold text-emerald-200">
-                    Listo en espera
+                  {isUncollectedAlert ? (
+                    <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
+                      <AlertTriangle className="w-3 h-3" /> SIN RECOGER (+10 MIN)
+                    </div>
+                  ) : (
+                    <div className="text-[10px] uppercase font-bold text-emerald-200">
+                      Listo en espera
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="text-xs font-mono font-black flex items-center justify-end gap-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>{formatElapsedTime(aceptadoEn || enviadoEn)}</span>
                   </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div className="text-xs font-mono font-black flex items-center justify-end gap-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>{formatElapsedTime(aceptadoEn || enviadoEn)}</span>
-                </div>
-                {isPrepDelayed && (
-                  <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
-                    <AlertTriangle className="w-3 h-3" /> +15 MIN DEMORA
-                  </div>
-                )}
-                {isAccepted && (
-                  <div className="text-[10px] uppercase font-bold text-sky-100">
-                    Aceptado
-                  </div>
-                )}
-                {isCooking && (
-                  <div className="text-[10px] uppercase font-bold text-blue-100 flex items-center gap-1">
-                    <Flame className="w-3 h-3 text-yellow-300 animate-bounce" /> Preparando
-                  </div>
-                )}
-              </>
-            )}
+                  {isPrepDelayed && (
+                    <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
+                      <AlertTriangle className="w-3 h-3" /> +15 MIN DEMORA
+                    </div>
+                  )}
+                  {isAccepted && (
+                    <div className="text-[10px] uppercase font-bold text-sky-100">
+                      Aceptado
+                    </div>
+                  )}
+                  {isCooking && (
+                    <div className="text-[10px] uppercase font-bold text-blue-100 flex items-center gap-1">
+                      <Flame className="w-3 h-3 text-yellow-300 animate-bounce" /> Preparando
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
 
@@ -642,7 +663,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   };
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-65px)] bg-neutral-950 text-neutral-100 overflow-hidden select-none">
+    <div className="flex-1 flex flex-col h-[calc(100dvh-65px)] min-h-0 bg-neutral-950 text-neutral-100 overflow-hidden select-none">
       
       {/* Kitchen Bar Header */}
       <div className="bg-neutral-900 border-b border-neutral-800 px-4 sm:px-6 py-3 flex items-center justify-between shadow-md">
@@ -920,6 +941,20 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
 
           </div>
         </div>
+      )}
+
+      {/* Modal Impresión Térmica Comanda de Cocina (58mm / 80mm / Bluetooth) */}
+      {comandaToPrint && (
+        <ThermalReceiptModal
+          order={comandaToPrint.order}
+          restaurantName={currentRestaurant?.nombre || 'Cocina'}
+          restaurantAddress={currentRestaurant?.direccion}
+          restaurantPhone={currentRestaurant?.telefono}
+          mode="comanda"
+          roundNumber={comandaToPrint.roundNumber}
+          itemsOverride={comandaToPrint.items}
+          onClose={() => setComandaToPrint(null)}
+        />
       )}
 
     </div>

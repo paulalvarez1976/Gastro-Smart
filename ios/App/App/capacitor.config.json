@@ -1,0 +1,13 @@
+{
+	"appId": "com.laboratoriovillar.gastrosmart",
+	"appName": "GastroSmart",
+	"webDir": "dist",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": true
+	},
+	"plugins": {},
+	"packageClassList": [
+		"HapticsPlugin"
+	]
+}

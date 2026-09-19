@@ -78,6 +78,8 @@ export const StaffAttendanceView: React.FC = () => {
   const weekMinutesClosed = weekShifts.reduce((acc, s) => acc + (s.minutosTrabajados || 0), 0);
   const totalWeekHours = ((weekMinutesClosed + currentShiftMinutes) / 60).toFixed(1);
 
+  const [closedShiftDetails, setClosedShiftDetails] = useState<any | null>(null);
+
   const handleStartShift = async () => {
     setIsProcessing(true);
     sounds.playKeypadClick();
@@ -94,8 +96,15 @@ export const StaffAttendanceView: React.FC = () => {
     setIsProcessing(true);
     sounds.playCashRegister();
     try {
-      await endShiftAndLogout(reporteLabores);
+      const res = await endShiftAndLogout(reporteLabores);
       setShowCloseModal(false);
+      setClosedShiftDetails({
+        ...(res || {}),
+        reporteLabores,
+        empleado: currentEmployee.nombre,
+        puesto: currentEmployee.puesto,
+        fecha: new Date().toLocaleDateString()
+      });
     } catch (e) {
       console.error('Error closing shift:', e);
     } finally {
@@ -299,6 +308,64 @@ export const StaffAttendanceView: React.FC = () => {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Reporte Final de Turno y Trabajo Realizado */}
+      {closedShiftDetails && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-neutral-800 rounded-3xl max-w-lg w-full p-6 sm:p-8 border border-neutral-700 shadow-2xl text-left space-y-5">
+            <div className="text-center border-b border-neutral-700 pb-4">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-2">
+                <CheckCircle2 className="w-7 h-7" />
+              </div>
+              <h3 className="font-black text-white text-lg">Resumen de Cierre de Turno</h3>
+              <p className="text-xs text-neutral-400">Detalle del trabajo realizado y métricas de la sesión</p>
+            </div>
+
+            <div className="space-y-3 text-xs font-mono text-neutral-300 bg-neutral-900/80 p-4 rounded-2xl border border-neutral-700">
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Colaborador:</span>
+                <span className="font-bold text-white">{closedShiftDetails.empleado}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Puesto:</span>
+                <span className="font-bold text-white uppercase">{closedShiftDetails.puesto}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Fecha:</span>
+                <span className="font-bold text-white">{closedShiftDetails.fecha}</span>
+              </div>
+              <div className="flex justify-between border-t border-neutral-800 pt-2">
+                <span className="text-neutral-400">Tiempo Trabajado:</span>
+                <span className="font-bold text-emerald-400">{closedShiftDetails.horasTrabajadas || 0} hrs ({closedShiftDetails.minutosTrabajados || 0} mins)</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Pedidos Tomados:</span>
+                <span className="font-bold text-white">{closedShiftDetails.pedidosTomados || 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Ventas Generadas / Cobradas:</span>
+                <span className="font-bold text-orange-400">${(closedShiftDetails.montoCobrado || closedShiftDetails.ventasGeneradas || 0).toFixed(2)}</span>
+              </div>
+              {closedShiftDetails.reporteLabores && (
+                <div className="border-t border-neutral-800 pt-2 mt-2">
+                  <span className="text-neutral-400 block font-sans font-bold mb-1">Reporte de Labores:</span>
+                  <p className="text-white font-sans italic bg-neutral-800 p-2.5 rounded-xl border border-neutral-700">
+                    "{closedShiftDetails.reporteLabores}"
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setClosedShiftDetails(null)}
+              className="w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-lg transition"
+            >
+              Entendido y Salir
+            </button>
           </div>
         </div>
       )}

@@ -2,130 +2,252 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isGastroSmartRead() {
-      return resource == null || resource.data.appId == 'gastro_smart';
+    // ==========================================
+    // HELPER FUNCTIONS & MULTI-TENANCY RBAC
+    // ==========================================
+
+    function isAuthenticated() {
+      return request.auth != null;
     }
 
-    function isGastroSmartCreate() {
-      return request.resource.data.appId == 'gastro_smart';
+    function isGastroSmart(data) {
+      return data != null && data.get('appId', '') == 'gastro_smart';
     }
 
-    function isGastroSmartUpdate() {
-      return (resource == null || resource.data.appId == 'gastro_smart') &&
-             request.resource.data.appId == 'gastro_smart';
+    function userExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
-    function isGastroSmartDelete() {
-      return resource == null || resource.data.appId == 'gastro_smart';
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function getUserBusinessId() {
+      return userExists() ? getUserData().get('businessId', null) : null;
+    }
+
+    function getUserRestaurantId() {
+      return userExists() ? getUserData().get('restaurantId', null) : null;
+    }
+
+    function isBusinessOwner(businessId) {
+      return exists(/databases/$(database)/documents/businesses/$(businessId)) &&
+             get(/databases/$(database)/documents/businesses/$(businessId)).data.get('ownerUid', '') == request.auth.uid;
+    }
+
+    function isUserInBusiness(businessId) {
+      return isAuthenticated() && businessId != null && (
+        getUserBusinessId() == businessId ||
+        isBusinessOwner(businessId)
+      );
+    }
+
+    function isUserInRestaurant(restaurantId) {
+      return isAuthenticated() && restaurantId != null && (
+        getUserRestaurantId() == restaurantId ||
+        (exists(/databases/$(database)/documents/restaurants/$(restaurantId)) &&
+         isUserInBusiness(get(/databases/$(database)/documents/restaurants/$(restaurantId)).data.get('businessId', null)))
+      );
+    }
+
+    function matchesTenant(data) {
+      return data != null && (
+        ('businessId' in data && data.businessId != null && isUserInBusiness(data.businessId)) ||
+        ('restaurantId' in data && data.restaurantId != null && isUserInRestaurant(data.restaurantId))
+      );
+    }
+
+    // ==========================================
+    // 1. USERS COLLECTION
+    // ==========================================
     match /users/{userId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (
+        request.auth.uid == userId ||
+        (resource.data.businessId != null && isUserInBusiness(resource.data.businessId))
+      );
+      allow create: if isAuthenticated() && 
+                    request.auth.uid == userId && 
+                    isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && (
+        request.auth.uid == userId ||
+        (resource.data.businessId != null && isUserInBusiness(resource.data.businessId))
+      ) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && (
+        request.auth.uid == userId ||
+        (resource.data.businessId != null && isUserInBusiness(resource.data.businessId))
+      );
     }
 
+    // ==========================================
+    // 2. BUSINESSES COLLECTION
+    // ==========================================
     match /businesses/{businessId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (
+        resource.data.ownerUid == request.auth.uid ||
+        businessId == getUserBusinessId() ||
+        isUserInBusiness(businessId)
+      );
+      allow create: if isAuthenticated() && 
+                    request.resource.data.ownerUid == request.auth.uid &&
+                    isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && (
+        resource.data.ownerUid == request.auth.uid ||
+        businessId == getUserBusinessId() ||
+        isUserInBusiness(businessId)
+      ) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && resource.data.ownerUid == request.auth.uid;
     }
 
+    // ==========================================
+    // 3. RESTAURANTS COLLECTION (SUCURSALES)
+    // ==========================================
     match /restaurants/{restaurantId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (
+        resource.data.businessId == null ||
+        isUserInBusiness(resource.data.businessId) ||
+        getUserRestaurantId() == restaurantId
+      );
+      allow create: if isAuthenticated() && 
+                    isUserInBusiness(request.resource.data.businessId) &&
+                    isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && 
+                    (resource.data.businessId == null || isUserInBusiness(resource.data.businessId)) &&
+                    isUserInBusiness(request.resource.data.businessId) &&
+                    isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && 
+                    (resource.data.businessId == null || isUserInBusiness(resource.data.businessId));
     }
 
+    // ==========================================
+    // 4. EMPLOYEES COLLECTION
+    // ==========================================
     match /employees/{employeeId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 5. TABLES COLLECTION
+    // ==========================================
     match /tables/{tableId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 6. ORDERS COLLECTION
+    // ==========================================
     match /orders/{orderId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 7. MENU ITEMS COLLECTION
+    // ==========================================
     match /menuItems/{menuItemId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (
+        resource.data.businessId == null ||
+        isUserInBusiness(resource.data.businessId) ||
+        (resource.data.restaurantId != null && resource.data.restaurantId != 'all' && isUserInRestaurant(resource.data.restaurantId))
+      );
+      allow create: if isAuthenticated() && (
+        isUserInBusiness(request.resource.data.businessId) ||
+        (request.resource.data.restaurantId != null && request.resource.data.restaurantId != 'all' && isUserInRestaurant(request.resource.data.restaurantId))
+      ) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && (
+        resource.data.businessId == null ||
+        isUserInBusiness(resource.data.businessId)
+      ) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && (
+        resource.data.businessId == null ||
+        isUserInBusiness(resource.data.businessId)
+      );
     }
 
+    // ==========================================
+    // 8. CLIENTS COLLECTION
+    // ==========================================
     match /clients/{clientId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 9. SHIFTS COLLECTION (TURNOS)
+    // ==========================================
     match /shifts/{shiftId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 10. CASH REGISTER CLOSES (CIERRES DE CAJA)
+    // ==========================================
     match /cashRegisterCloses/{closeId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 11. EXPENSES COLLECTION (GASTOS)
+    // ==========================================
     match /expenses/{expenseId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
 
+    // ==========================================
+    // 12. SUPPLIERS COLLECTION (PROVEEDORES)
+    // ==========================================
     match /suppliers/{supplierId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (resource.data.businessId == null || isUserInBusiness(resource.data.businessId));
+      allow create: if isAuthenticated() && isUserInBusiness(request.resource.data.businessId) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.businessId == null || isUserInBusiness(resource.data.businessId)) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.businessId == null || isUserInBusiness(resource.data.businessId));
     }
 
+    // ==========================================
+    // 13. LOGIN ATTEMPTS (AUDITORÍA DE ACCESOS)
+    // ==========================================
     match /loginAttempts/{attemptId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (resource.data.businessId == null || isUserInBusiness(resource.data.businessId));
+      allow create: if isAuthenticated() && isGastroSmart(request.resource.data);
+      allow update, delete: if false;
     }
 
+    // ==========================================
+    // 14. SECURITY ALERTS (ALERTAS DE SEGURIDAD)
+    // ==========================================
     match /securityAlerts/{alertId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
+      allow read: if isAuthenticated() && (resource.data.businessId == null || isUserInBusiness(resource.data.businessId));
+      allow create: if isAuthenticated() && isUserInBusiness(request.resource.data.businessId) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.businessId == null || isUserInBusiness(resource.data.businessId)) && isGastroSmart(request.resource.data);
+      allow delete: if false;
     }
 
+    // ==========================================
+    // 15. DAILY STATS (ESTADÍSTICAS DIARIAS)
+    // ==========================================
     match /dailyStats/{statId} {
-      allow read: if isGastroSmartRead();
-      allow create: if isGastroSmartCreate();
-      allow update: if isGastroSmartUpdate();
-      allow delete: if isGastroSmartDelete();
-    }
-
-    match /test/{docId} {
-      allow read: if true;
+      allow read: if isAuthenticated() && matchesTenant(resource.data);
+      allow create: if isAuthenticated() && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow update: if isAuthenticated() && matchesTenant(resource.data) && matchesTenant(request.resource.data) && isGastroSmart(request.resource.data);
+      allow delete: if isAuthenticated() && matchesTenant(resource.data);
     }
   }
 }

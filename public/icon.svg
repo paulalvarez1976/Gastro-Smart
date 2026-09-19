@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="gastroGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="50%" stop-color="#ea580c"/>
+      <stop offset="100%" stop-color="#c2410c"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Background with smooth rounded corners -->
+  <rect width="512" height="512" rx="112" fill="url(#gastroGrad)"/>
+
+  <!-- Inner ambient circle -->
+  <circle cx="256" cy="256" r="190" fill="#ffffff" fill-opacity="0.08"/>
+
+  <!-- Cloche / Dome cover -->
+  <g filter="url(#dropShadow)" fill="#ffffff">
+    <!-- Top Handle Knob -->
+    <circle cx="256" cy="148" r="22" fill="#ffffff"/>
+    <rect x="246" y="160" width="20" height="18" rx="4" fill="#ffffff"/>
+
+    <!-- Dome Body -->
+    <path d="M 120 286 C 120 186 180 174 256 174 C 332 174 392 186 392 286 Z" fill="#ffffff"/>
+
+    <!-- Base Tray Platter -->
+    <rect x="96" y="296" width="320" height="24" rx="12" fill="#ffffff"/>
+    <rect x="136" y="328" width="240" height="12" rx="6" fill="#ffffff" fill-opacity="0.85"/>
+  </g>
+
+  <!-- Modern Utensils Accent inside the Dome -->
+  <g fill="#ea580c">
+    <!-- Fork -->
+    <path d="M 204 220 L 204 260 C 204 264 207 268 211 268 L 211 280 L 217 280 L 217 268 C 221 268 224 264 224 260 L 224 220 L 219 220 L 219 248 L 216 248 L 216 220 L 212 220 L 212 248 L 209 248 L 209 220 Z" />
+    <!-- Knife -->
+    <path d="M 288 220 C 298 220 304 235 304 252 L 295 252 L 295 280 L 289 280 L 289 220 Z" />
+    <!-- Center Sparkle / Smart star -->
+    <path d="M 256 226 L 260 236 L 270 240 L 260 244 L 256 254 L 252 244 L 242 240 L 252 236 Z" fill="#f59e0b"/>
+  </g>
+
+  <!-- Modern Gastro Smart text pill -->
+  <g transform="translate(256, 396)">
+    <rect x="-105" y="-18" width="210" height="36" rx="18" fill="#ffffff" fill-opacity="0.2"/>
+    <text x="0" y="6" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="19" fill="#ffffff" letter-spacing="2">GASTRO SMART</text>
+  </g>
+</svg>

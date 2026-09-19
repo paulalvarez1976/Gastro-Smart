@@ -12,6 +12,8 @@ import {
   registerOrderFuga
 } from '../services/dataService';
 import { sounds } from '../utils/sound';
+import { haptics } from '../utils/haptics';
+import { ThermalReceiptModal } from './ThermalReceiptModal';
 import { WaiterPOS } from './WaiterPOS';
 import { 
   DollarSign, 
@@ -38,7 +40,8 @@ import {
   UserCheck,
   Tag,
   Flame,
-  UserX
+  UserX,
+  Lock
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -85,6 +88,25 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
   const [countedTransfer, setCountedTransfer] = useState<string>('');
   const [cierreNotas, setCierreNotas] = useState<string>('');
   const [closedSummary, setClosedSummary] = useState<CashRegisterClose | null>(null);
+  const [isCashShiftClosed, setIsCashShiftClosed] = useState<boolean>(false);
+  const [thermalPrintOrder, setThermalPrintOrder] = useState<Order | null>(null);
+  const [shiftStartTime, setShiftStartTime] = useState<number>(() => {
+    const stored = localStorage.getItem(`cash_shift_start_${currentRestaurant?.id}`);
+    return stored ? new Date(stored).getTime() : 0;
+  });
+
+  const handleStartNewCashShift = () => {
+    setIsCashShiftClosed(false);
+    setClosedSummary(null);
+    setCountedCash('');
+    setCountedCard('');
+    setCountedTransfer('');
+    setCierreNotas('');
+    setInitialCash('100.00');
+    const nowMs = Date.now();
+    setShiftStartTime(nowMs);
+    localStorage.setItem(`cash_shift_start_${currentRestaurant?.id}`, new Date(nowMs).toISOString());
+  };
 
   // Pedidos del restaurante actual
   const restaurantOrders = useMemo(() => {
@@ -108,14 +130,15 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
     );
   }, [restaurantOrders]);
 
-  // Pedidos ya cobrados en el día operativo actual (5:00 a.m. a 4:59 a.m.)
+  // Pedidos ya cobrados en el turno operativo actual
   const todayPaidOrders = useMemo(() => {
     const todayOpStr = getOperationalDateString(new Date());
-    return restaurantOrders.filter(o => 
-      (o.estado === 'cobrado' || o.estadoPago === 'cobrado') && 
-      getOperationalDateString(o.cobradoEn || o.creadoEn) === todayOpStr
-    );
-  }, [restaurantOrders]);
+    return restaurantOrders.filter(o => {
+      const paidTime = new Date(o.cobradoEn || o.creadoEn).getTime();
+      const isToday = getOperationalDateString(o.cobradoEn || o.creadoEn) === todayOpStr;
+      return (o.estado === 'cobrado' || o.estadoPago === 'cobrado') && isToday && paidTime >= shiftStartTime;
+    });
+  }, [restaurantOrders, shiftStartTime]);
 
   // Totales esperados en caja
   const expectedCash = useMemo(() => {
@@ -223,11 +246,16 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
 
   // Confirmar cobro TOTAL (Liquidación Completa de la Comanda)
   const handleConfirmTotalPayment = async () => {
+    if (isCashShiftClosed) {
+      alert('El turno de caja está cerrado. No se pueden procesar cobros hasta iniciar un nuevo turno.');
+      return;
+    }
     if (!selectedOrder || !currentEmployee) return;
     setIsProcessingPayment(true);
 
     try {
       sounds.playCashRegister();
+      haptics.success();
       confetti({
         particleCount: 60,
         spread: 70,
@@ -278,6 +306,20 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         setTimeout(() => setTableReleaseFeedback(null), 6000);
       }
 
+      // Ofrecer comprobante térmico instantáneo
+      const paidOrderSnapshot: Order = {
+        ...selectedOrder,
+        estado: 'cobrado',
+        subtotal: selectedOrder.subtotal || selectedOrder.total,
+        descuento: discountNum,
+        propina: tipNum,
+        total: finalChargeAmount,
+        metodoPago: paymentMethod,
+        cajeroNombre: currentEmployee.nombre,
+        cobradoEn: new Date().toISOString()
+      };
+      setThermalPrintOrder(paidOrderSnapshot);
+
       setSelectedOrder(null);
     } catch (err: any) {
       alert('Error al procesar cobro total: ' + err.message);
@@ -288,11 +330,16 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
 
   // Confirmar cobro PARCIAL POR COMENSAL
   const handleConfirmDinerPayment = async () => {
+    if (isCashShiftClosed) {
+      alert('El turno de caja está cerrado. No se pueden procesar cobros hasta iniciar un nuevo turno.');
+      return;
+    }
     if (!selectedOrder || !currentEmployee || !activeSelectedDiner) return;
     setIsProcessingPayment(true);
 
     try {
       sounds.playCashRegister();
+      haptics.success();
 
       const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
         tipo: 'comensal',
@@ -360,11 +407,16 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
 
   // Confirmar cobro PARCIAL EN PARTES IGUALES
   const handleConfirmEqualSharePayment = async () => {
+    if (isCashShiftClosed) {
+      alert('El turno de caja está cerrado. No se pueden procesar cobros hasta iniciar un nuevo turno.');
+      return;
+    }
     if (!selectedOrder || !currentEmployee) return;
     setIsProcessingPayment(true);
 
     try {
       sounds.playCashRegister();
+      haptics.success();
 
       const shareAmount = finalChargeAmount;
       const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
@@ -422,6 +474,10 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
 
   // Registrar Fuga / Cierre Forzado de Mesa
   const handleConfirmFuga = async () => {
+    if (isCashShiftClosed) {
+      alert('El turno de caja está cerrado. No se pueden procesar operaciones hasta iniciar un nuevo turno.');
+      return;
+    }
     if (!selectedOrder || !currentEmployee) return;
     if (!fugaReason.trim()) {
       alert('Por favor especifica un motivo para registrar el cierre por fuga o forzado.');
@@ -497,104 +553,155 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       ...closePayload,
       creadoEn: new Date().toISOString()
     });
+    setIsCashShiftClosed(true);
 
-    alert('Cierre de caja y arqueo guardado correctamente. Puedes imprimir el comprobante.');
+    alert('Cierre de caja y arqueo guardado correctamente. El turno ha quedado cerrado y bloqueado.');
   };
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-65px)] bg-neutral-100 overflow-hidden">
+    <div className="flex-1 flex flex-col h-[calc(100dvh-65px)] min-h-0 bg-neutral-100 overflow-hidden">
       
-      {/* Top Bar Navigation for Cashier */}
-      <div className="bg-white border-b border-neutral-200 px-4 sm:px-6 py-2.5 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-9 h-9 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center">
-            <Receipt className="w-5 h-5" />
+      {/* Aviso de Turno Cerrado */}
+      {isCashShiftClosed && (
+        <div className="bg-red-600 text-white px-4 py-2.5 flex items-center justify-between text-xs font-bold shadow-md z-20">
+          <div className="flex items-center gap-2">
+            <Lock className="w-4 h-4 text-white animate-pulse" />
+            <span>TURNO DE CAJA CERRADO: Este turno está bloqueado. No se permiten cobros ni modificaciones.</span>
           </div>
-          <div>
-            <h2 className="font-extrabold text-neutral-900 text-base">Módulo de Caja y Facturación</h2>
-            <p className="text-xs text-neutral-500">{currentRestaurant?.nombre}</p>
+          <button
+            onClick={handleStartNewCashShift}
+            className="px-3 py-1.5 rounded-lg bg-white text-red-700 font-black hover:bg-neutral-100 transition shadow-sm cursor-pointer"
+          >
+            🔄 Iniciar Nuevo Turno de Caja (Sin registros anteriores)
+          </button>
+        </div>
+      )}
+
+      {/* Top Navigation in 2 Horizontal Stripes for Cashier */}
+      <div className="bg-white border-b border-neutral-200 shadow-2xs shrink-0 flex flex-col">
+        {/* FRANJA 1: Identificador del Módulo y Pestañas de Operación y Venta en Vivo */}
+        <div className="px-3 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 border-b border-neutral-100">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold shrink-0">
+              <Receipt className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-black text-neutral-900 text-sm sm:text-base leading-tight">Módulo de Caja y Facturación</h2>
+              <p className="text-[11px] text-neutral-500 font-medium">{currentRestaurant?.nombre || 'Sucursal Principal'}</p>
+            </div>
+          </div>
+
+          {/* Grupo de Pestañas de Venta y Cobro Directo */}
+          <div className="flex items-center gap-1.5 p-1 bg-neutral-100/90 rounded-xl border border-neutral-200/80 overflow-x-auto">
+            <button
+              onClick={() => setActiveTab('pos')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                activeTab === 'pos' 
+                  ? 'bg-white text-orange-700 shadow-xs border border-orange-200/60' 
+                  : 'text-neutral-600 hover:text-neutral-900 hover:bg-white/50'
+              }`}
+            >
+              <Utensils className="w-4 h-4 text-orange-600" />
+              <span>Punto de Venta (TPV)</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('pedidos')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                activeTab === 'pedidos' 
+                  ? 'bg-white text-amber-700 shadow-xs border border-amber-200/60' 
+                  : 'text-neutral-600 hover:text-neutral-900 hover:bg-white/50'
+              }`}
+            >
+              <Receipt className="w-4 h-4 text-amber-600" />
+              <span>Por Cobrar</span>
+              {pendingPaymentOrders.length > 0 && (
+                <span className="w-5 h-5 rounded-full bg-amber-600 text-white text-[10px] flex items-center justify-center font-black animate-pulse">
+                  {pendingPaymentOrders.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab('mostrador')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                activeTab === 'mostrador' 
+                  ? 'bg-white text-purple-700 shadow-xs border border-purple-200/60' 
+                  : 'text-neutral-600 hover:text-neutral-900 hover:bg-white/50'
+              }`}
+            >
+              <Store className="w-4 h-4 text-purple-600" />
+              <span>Despacho Mostrador</span>
+              {counterOrders.length > 0 && (
+                <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center font-black">
+                  {counterOrders.length}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
-        {/* Tab switcher */}
-        <div className="flex items-center gap-1.5 p-1 bg-neutral-100 rounded-xl border border-neutral-200">
-          <button
-            onClick={() => setActiveTab('pos')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeTab === 'pos' 
-                ? 'bg-white text-neutral-900 shadow-xs' 
-                : 'text-neutral-600 hover:text-neutral-900'
-            }`}
-          >
-            <Utensils className="w-4 h-4 text-orange-600" />
-            <span>Punto de Venta</span>
-          </button>
+        {/* FRANJA 2: Control Contable, Arqueo de Turno, Historial y Resumen Financiero en Vivo */}
+        <div className="bg-neutral-50/80 px-3 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-2.5 overflow-x-auto">
+          {/* Botones de Control de Caja y Reportes */}
+          <div className="flex items-center gap-1.5 p-1 bg-white rounded-xl border border-neutral-200/80 shadow-2xs">
+            <button
+              onClick={() => setActiveTab('cierre')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                activeTab === 'cierre' 
+                  ? 'bg-emerald-600 text-white shadow-xs' 
+                  : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100'
+              }`}
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Arqueo y Cierre de Caja</span>
+            </button>
 
-          <button
-            onClick={() => setActiveTab('pedidos')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeTab === 'pedidos' 
-                ? 'bg-white text-neutral-900 shadow-xs' 
-                : 'text-neutral-600 hover:text-neutral-900'
-            }`}
-          >
-            <span>Por Cobrar</span>
-            {pendingPaymentOrders.length > 0 && (
-              <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center font-bold">
-                {pendingPaymentOrders.length}
+            <button
+              onClick={() => setActiveTab('historial')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                activeTab === 'historial' 
+                  ? 'bg-blue-600 text-white shadow-xs' 
+                  : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-100'
+              }`}
+            >
+              <History className="w-4 h-4" />
+              <span>Cobrados Hoy</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                activeTab === 'historial' ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'
+              }`}>
+                {todayPaidOrders.length}
               </span>
-            )}
-          </button>
+            </button>
+          </div>
 
-          <button
-            onClick={() => setActiveTab('mostrador')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeTab === 'mostrador' 
-                ? 'bg-white text-neutral-900 shadow-xs' 
-                : 'text-neutral-600 hover:text-neutral-900'
-            }`}
-          >
-            <Store className="w-4 h-4 text-purple-600" />
-            <span>Despacho Mostrador</span>
-            {counterOrders.length > 0 && (
-              <span className="w-5 h-5 rounded-full bg-purple-600 text-white text-[10px] flex items-center justify-center font-bold">
-                {counterOrders.length}
+          {/* Indicadores Financieros Rápidos del Turno */}
+          <div className="flex items-center gap-2 sm:gap-3 text-xs shrink-0">
+            <div className="flex items-center gap-1.5 bg-white px-3 py-1 rounded-xl border border-neutral-200 shadow-2xs">
+              <span className="text-[11px] font-bold text-neutral-500">Recaudado Hoy:</span>
+              <span className="font-black text-emerald-700 text-xs sm:text-sm">
+                ${todayPaidOrders.reduce((acc, o) => acc + (o.total || 0), 0).toFixed(2)}
               </span>
-            )}
-          </button>
+            </div>
 
-          <button
-            onClick={() => setActiveTab('cierre')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeTab === 'cierre' 
-                ? 'bg-white text-neutral-900 shadow-xs' 
-                : 'text-neutral-600 hover:text-neutral-900'
-            }`}
-          >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Arqueo y Cierre</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('historial')}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-              activeTab === 'historial' 
-                ? 'bg-white text-neutral-900 shadow-xs' 
-                : 'text-neutral-600 hover:text-neutral-900'
-            }`}
-          >
-            <History className="w-4 h-4 text-blue-600" />
-            <span>Cobrados Hoy ({todayPaidOrders.length})</span>
-          </button>
+            <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-xs font-bold ${
+              isCashShiftClosed 
+                ? 'bg-red-50 text-red-700 border-red-200' 
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+            }`}>
+              <span className={`w-2 h-2 rounded-full ${isCashShiftClosed ? 'bg-red-500' : 'bg-emerald-500 animate-ping'}`} />
+              <span>{isCashShiftClosed ? 'Turno Cerrado' : 'Caja Activa'}</span>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className={`flex-1 min-h-0 ${activeTab === 'pos' ? 'overflow-hidden p-0 flex flex-col' : 'overflow-y-auto p-4 sm:p-6'}`}>
         
         {/* TAB 0: Punto de Venta / Flujo de Mesero */}
         {activeTab === 'pos' && (
-          <div className="h-full -m-4 sm:-m-6 flex flex-col">
+          <div className="h-full w-full flex-1 min-h-0 flex flex-col overflow-hidden">
             <WaiterPOS 
               menuItems={menuItems} 
               tables={tables} 
@@ -1271,6 +1378,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                       <th className="p-3 text-right">Subtotal</th>
                       <th className="p-3 text-right">Desc / Propina</th>
                       <th className="p-3 text-right">Total Cobrado</th>
+                      <th className="p-3 text-center">Ticket</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100 text-neutral-700">
@@ -1300,6 +1408,16 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                         </td>
                         <td className="p-3 text-right font-bold text-neutral-900 font-mono">
                           ${o.total.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setThermalPrintOrder(o)}
+                            title="Imprimir ticket térmico (58mm/80mm / Bluetooth)"
+                            className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 transition"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -1337,9 +1455,20 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                   </p>
                 </div>
               </div>
-              <button onClick={() => setSelectedOrder(null)} className="text-neutral-400 hover:text-neutral-700 p-1.5 rounded-xl hover:bg-neutral-100">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setThermalPrintOrder(selectedOrder)}
+                  title="Imprimir Pre-cuenta / Ticket Térmico (58mm / 80mm / Bluetooth)"
+                  className="px-2.5 py-1.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs flex items-center gap-1.5 border border-neutral-300 transition active:scale-95"
+                >
+                  <Printer className="w-3.5 h-3.5 text-neutral-600" />
+                  <span className="hidden sm:inline">Pre-cuenta</span>
+                </button>
+                <button onClick={() => setSelectedOrder(null)} className="text-neutral-400 hover:text-neutral-700 p-1.5 rounded-xl hover:bg-neutral-100">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Split Mode Selector Tabs */}
@@ -1754,6 +1883,29 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           </div>
         </div>
       )}
+
+      {/* Modal Impresión Térmica de Ticket / Cuenta */}
+      {thermalPrintOrder && (() => {
+        const matchingClient = clients.find(c => 
+          (thermalPrintOrder.clienteId && c.id === thermalPrintOrder.clienteId) ||
+          (thermalPrintOrder.clienteNombre && c.nombre.toLowerCase().trim() === thermalPrintOrder.clienteNombre.toLowerCase().trim())
+        );
+        const resolvedClientPhone = thermalPrintOrder.clienteTelefono || matchingClient?.telefono;
+        const resolvedClientName = thermalPrintOrder.clienteNombre || matchingClient?.nombre;
+
+        return (
+          <ThermalReceiptModal
+            order={thermalPrintOrder}
+            restaurantName={currentRestaurant?.nombre || 'Restaurante'}
+            restaurantAddress={currentRestaurant?.direccion}
+            restaurantPhone={currentRestaurant?.telefono}
+            clientPhone={resolvedClientPhone || undefined}
+            clientName={resolvedClientName || undefined}
+            mode="cuenta"
+            onClose={() => setThermalPrintOrder(null)}
+          />
+        );
+      })()}
 
     </div>
   );

@@ -929,7 +929,7 @@ export function subscribeToMenuItems(
       ...d.data()
     } as MenuItem));
     if (restaurantId) {
-      list = list.filter(m => m.restaurantId === restaurantId || m.restaurantId === 'all');
+      list = list.filter(m => !m.restaurantId || m.restaurantId === restaurantId || m.restaurantId === 'all');
     }
     callback(list);
   }, (err) => {

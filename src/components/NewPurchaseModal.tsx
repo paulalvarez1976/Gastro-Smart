@@ -198,7 +198,10 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({
 
       const base64Data = await base64Promise;
 
-      const response = await fetch('/api/scan-receipt', {
+      const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+      const endpointUrl = `${apiBaseUrl}/api/scan-receipt`;
+
+      const response = await fetch(endpointUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

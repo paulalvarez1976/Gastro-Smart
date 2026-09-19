@@ -112,6 +112,7 @@ export interface MenuItem {
   nombre: string;
   descripcion: string;
   precio: number;
+  costoElaboracion?: number; // Costo de preparación / elaboración (Food Cost)
   categoria: string;
   disponible: boolean;
   requiereCocina?: boolean; // false para productos sin preparación en cocina (bebidas, postres listos, etc.)

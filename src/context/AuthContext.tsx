@@ -732,11 +732,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       montoCobrado?: number;
     }
   ) => {
+    let res = null;
     if (currentShift) {
-      await closeShift(currentShift.id, reporteLabores, sessionMetrics);
+      res = await closeShift(currentShift.id, reporteLabores, sessionMetrics);
     }
     setCurrentEmployee(null);
     setCurrentShift(null);
+    return res;
   };
 
   const selectRestaurant = (restaurantId: string) => {

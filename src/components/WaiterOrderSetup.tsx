@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Table, Client, Order, OrderType, DeliveryCompany, MenuItem } from '../types';
 import { createClient } from '../services/dataService';
 import { sounds } from '../utils/sound';
+import { haptics } from '../utils/haptics';
 import { 
   Utensils, 
   User, 
@@ -22,7 +23,8 @@ import {
   Users,
   CheckCircle2,
   FilePlus,
-  ArrowRight
+  ArrowRight,
+  Zap
 } from 'lucide-react';
 
 export interface OrderSetupData {
@@ -160,9 +162,19 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
       // Table is occupied: prompt whether to append or open new
       setOccupiedModalTable({ table, order: openOrder });
     } else {
-      // Free table
+      // Free table: immediately advance to dishes menu!
       setSelectedTableId(table.id);
       setTargetExistingOrder(null);
+      onContinue({
+        orderTargetType: 'mesa',
+        selectedTable: table,
+        targetExistingOrder: null,
+        selectedClient: selectedClient,
+        orderType: 'local',
+        deliveryCompany: 'Propio',
+        deliveryAddress: '',
+        recommendedItemName: favoriteItemName || undefined
+      });
     }
   };
 
@@ -257,11 +269,13 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-neutral-100 overflow-y-auto p-4 sm:p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto w-full space-y-6 pb-24">
+    <div className="flex-1 min-h-0 flex flex-col bg-neutral-100 overflow-hidden">
+      {/* Contenido con scroll independiente */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 lg:p-6">
+        <div className="max-w-5xl mx-auto w-full space-y-4 sm:space-y-6 pb-6">
         
         {/* Header de Paso 1 */}
-        <div className="bg-white rounded-3xl p-5 sm:p-6 border border-neutral-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="bg-white rounded-3xl p-4 sm:p-6 border border-neutral-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
               <span className="px-3 py-1 bg-orange-100 text-orange-800 text-[11px] font-black uppercase tracking-wider rounded-full">
@@ -273,13 +287,57 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
               Nuevo Pedido: ¿Dónde va la comanda?
             </h2>
             <p className="text-xs sm:text-sm text-neutral-500 mt-0.5">
-              Elige si el pedido es para consumo en el salón (Mesa) o para llevar/delivery (Cliente).
+              Toca una mesa libre o elige Mostrador/Delivery para abrir de inmediato el catálogo de platos.
             </p>
           </div>
 
-          <div className="hidden sm:flex items-center gap-2 text-xs font-bold text-neutral-500 bg-neutral-50 px-4 py-2 rounded-2xl border border-neutral-200">
-            <Clock className="w-4 h-4 text-orange-500" />
-            <span>Atención táctil rápida</span>
+          {/* Botones de Acceso Ultra-Rápido 1 Toque */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playKeypadClick();
+                // 1-touch direct counter/mostrador
+                const defaultTable = tables.find(t => t.estado === 'libre') || tables[0] || null;
+                onContinue({
+                  orderTargetType: defaultTable ? 'mesa' : 'cliente',
+                  selectedTable: defaultTable,
+                  targetExistingOrder: null,
+                  selectedClient: null,
+                  orderType: defaultTable ? 'local' : 'para_llevar',
+                  deliveryCompany: 'Propio',
+                  deliveryAddress: '',
+                  recommendedItemName: undefined
+                });
+              }}
+              className="px-4 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-md shadow-orange-600/20 active:scale-98 transition cursor-pointer"
+            >
+              <Utensils className="w-4 h-4" />
+              <span>🍽️ Abrir Menú de Platos Directo →</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                sounds.playKeypadClick();
+                setTargetType('cliente');
+                setSubType('para_llevar');
+                onContinue({
+                  orderTargetType: 'cliente',
+                  selectedTable: null,
+                  targetExistingOrder: null,
+                  selectedClient: { id: 'mostrador_rapido', nombre: 'Cliente Mostrador' },
+                  orderType: 'para_llevar',
+                  deliveryCompany: 'Propio',
+                  deliveryAddress: '',
+                  recommendedItemName: undefined
+                });
+              }}
+              className="px-3.5 py-2.5 rounded-2xl bg-neutral-900 hover:bg-black text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-sm active:scale-98 transition cursor-pointer"
+            >
+              <ShoppingBag className="w-4 h-4 text-orange-400" />
+              <span>⚡ Venta Rápida (1 Toque)</span>
+            </button>
           </div>
         </div>
 
@@ -511,16 +569,25 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                   </div>
                 </div>
 
-                {/* Vincular cliente a la mesa (opcional) */}
-                <div className="w-full md:w-auto">
+                {/* Vincular cliente a la mesa (opcional) & Botón rápido de continuar */}
+                <div className="w-full md:w-auto flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleContinue}
+                    className="px-4 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-md shadow-orange-600/20 active:scale-98 transition cursor-pointer"
+                  >
+                    <Utensils className="w-4 h-4" />
+                    <span>Abrir Menú de Platos →</span>
+                  </button>
+
                   {!selectedClient ? (
                     <button
                       type="button"
                       onClick={() => setLinkClientToTable(!linkClientToTable)}
-                      className="text-xs font-bold text-orange-600 hover:text-orange-700 bg-white border border-orange-200 hover:border-orange-300 px-3 py-2 rounded-xl flex items-center gap-1.5 transition"
+                      className="text-xs font-bold text-neutral-600 hover:text-neutral-900 bg-white border border-neutral-200 hover:border-neutral-300 px-3 py-2 rounded-xl flex items-center gap-1.5 transition cursor-pointer"
                     >
-                      <User className="w-3.5 h-3.5" />
-                      <span>{linkClientToTable ? 'Cerrar buscador de cliente' : '＋ Vincular cliente a la mesa (opcional)'}</span>
+                      <User className="w-3.5 h-3.5 text-neutral-500" />
+                      <span>{linkClientToTable ? 'Cerrar buscador' : '＋ Vincular cliente'}</span>
                     </button>
                   ) : (
                     <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-xs text-emerald-900 font-semibold">
@@ -597,10 +664,10 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
               <div>
                 <h3 className="text-base sm:text-lg font-black text-neutral-900 flex items-center gap-2">
                   <User className="w-5 h-5 text-orange-500" />
-                  Gestión de Pedido por Cliente
+                  Gestión de Pedido por Cliente / Mostrador
                 </h3>
                 <p className="text-xs text-neutral-500 mt-0.5">
-                  Busca al cliente por nombre o teléfono, o registra uno nuevo al instante.
+                  Venta rápida en mostrador, para llevar o delivery con dirección.
                 </p>
               </div>
 
@@ -610,9 +677,24 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                   type="button"
                   onClick={() => {
                     sounds.playKeypadClick();
+                    setSubType('para_llevar');
+                  }}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                    subType === 'para_llevar'
+                      ? 'bg-white text-neutral-900 shadow-xs'
+                      : 'text-neutral-500 hover:text-neutral-900'
+                  }`}
+                >
+                  <ShoppingBag className="w-3.5 h-3.5 text-orange-500" />
+                  Para Llevar / Mostrador
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sounds.playKeypadClick();
                     setSubType('delivery');
                   }}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                  className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer ${
                     subType === 'delivery'
                       ? 'bg-white text-neutral-900 shadow-xs'
                       : 'text-neutral-500 hover:text-neutral-900'
@@ -621,23 +703,39 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                   <Bike className="w-3.5 h-3.5 text-orange-500" />
                   Delivery
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    sounds.playKeypadClick();
-                    setSubType('para_llevar');
-                  }}
-                  className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
-                    subType === 'para_llevar'
-                      ? 'bg-white text-neutral-900 shadow-xs'
-                      : 'text-neutral-500 hover:text-neutral-900'
-                  }`}
-                >
-                  <ShoppingBag className="w-3.5 h-3.5 text-orange-500" />
-                  Para Llevar
-                </button>
               </div>
             </div>
+
+            {/* Botón de Venta Rápida Directa para Mostrador (1-Touch) */}
+            {!selectedClient && (
+              <button
+                type="button"
+                onClick={() => {
+                  sounds.playKeypadClick();
+                  haptics.tap();
+                  const fastClient: Client = {
+                    id: `cliente_mostrador_${Date.now().toString(36)}`,
+                    nombre: 'Cliente Mostrador / Venta Rápida',
+                    telefono: '',
+                    direccion: 'En Mostrador',
+                    creadoEn: new Date().toISOString()
+                  };
+                  onContinue({
+                    orderTargetType: 'cliente',
+                    selectedTable: null,
+                    targetExistingOrder: null,
+                    selectedClient: fastClient,
+                    orderType: 'para_llevar',
+                    deliveryCompany: 'General',
+                    deliveryAddress: 'Mostrador'
+                  });
+                }}
+                className="w-full py-3.5 px-4 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2.5 transition active:scale-98 shadow-md shadow-amber-500/20 cursor-pointer"
+              >
+                <Zap className="w-4 h-4 text-amber-100 animate-pulse" />
+                <span>⚡ Venta Rápida Mostrador (Abrir Menú y Tomar Pedido Directo)</span>
+              </button>
+            )}
 
             {/* Empresa de delivery si aplica */}
             {subType === 'delivery' && (
@@ -935,12 +1033,16 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
           </div>
         )}
 
-        {/* ======================================================== */}
-        {/* == BARRA FIJA INFERIOR: BOTÓN CONTINUAR == */}
-        {/* ======================================================== */}
-        <div className="bg-white rounded-3xl p-4 sm:p-5 border border-neutral-200 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4">
+        </div>
+      </div>
+
+      {/* ======================================================== */}
+      {/* == BARRA FIJA INFERIOR: BOTÓN CONTINUAR == */}
+      {/* ======================================================== */}
+      <div className="shrink-0 bg-white border-t border-neutral-200 px-4 py-3 sm:px-6 sm:py-3.5 shadow-lg z-20">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 text-xs sm:text-sm">
-            <span className={`w-3 h-3 rounded-full shrink-0 ${isValid ? 'bg-emerald-500' : 'bg-neutral-300'}`} />
+            <span className={`w-3 h-3 rounded-full shrink-0 ${isValid ? 'bg-emerald-500 animate-pulse' : 'bg-neutral-300'}`} />
             <span className="font-semibold text-neutral-700">
               {validationMessage}
             </span>
@@ -950,13 +1052,12 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
             type="button"
             disabled={!isValid}
             onClick={handleContinue}
-            className="w-full sm:w-auto min-h-[56px] px-8 rounded-2xl bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-extrabold text-base shadow-lg shadow-orange-600/30 flex items-center justify-center gap-3 transition disabled:opacity-40 disabled:pointer-events-none active:scale-98"
+            className="w-full sm:w-auto h-12 sm:h-14 px-8 rounded-2xl bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-extrabold text-sm sm:text-base shadow-lg shadow-orange-600/30 flex items-center justify-center gap-3 transition disabled:opacity-40 disabled:pointer-events-none active:scale-98 cursor-pointer"
           >
             <span>Continuar al Menú</span>
             <ArrowRight className="w-5 h-5 stroke-[2.5]" />
           </button>
         </div>
-
       </div>
 
       {/* ======================================================== */}
@@ -1015,28 +1116,51 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                 type="button"
                 onClick={() => {
                   sounds.playKeypadClick();
-                  setSelectedTableId(occupiedModalTable.table.id);
-                  setTargetExistingOrder(occupiedModalTable.order);
+                  const targetTable = occupiedModalTable.table;
+                  const targetOrder = occupiedModalTable.order;
+                  setSelectedTableId(targetTable.id);
+                  setTargetExistingOrder(targetOrder);
                   setOccupiedModalTable(null);
+                  onContinue({
+                    orderTargetType: 'mesa',
+                    selectedTable: targetTable,
+                    targetExistingOrder: targetOrder,
+                    selectedClient: selectedClient,
+                    orderType: 'local',
+                    deliveryCompany: 'Propio',
+                    deliveryAddress: '',
+                    recommendedItemName: favoriteItemName || undefined
+                  });
                 }}
-                className="w-full min-h-[52px] rounded-2xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-orange-600/20 transition"
+                className="w-full min-h-[52px] rounded-2xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-orange-600/20 transition cursor-pointer"
               >
                 <Plus className="w-4 h-4 stroke-[3]" />
-                <span>Agregar platos al pedido abierto (${occupiedModalTable.order.total.toFixed(2)})</span>
+                <span>Agregar platos al pedido abierto (${occupiedModalTable.order.total.toFixed(2)}) →</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
                   sounds.playKeypadClick();
-                  setSelectedTableId(occupiedModalTable.table.id);
+                  const targetTable = occupiedModalTable.table;
+                  setSelectedTableId(targetTable.id);
                   setTargetExistingOrder(null);
                   setOccupiedModalTable(null);
+                  onContinue({
+                    orderTargetType: 'mesa',
+                    selectedTable: targetTable,
+                    targetExistingOrder: null,
+                    selectedClient: selectedClient,
+                    orderType: 'local',
+                    deliveryCompany: 'Propio',
+                    deliveryAddress: '',
+                    recommendedItemName: favoriteItemName || undefined
+                  });
                 }}
-                className="w-full min-h-[48px] rounded-2xl bg-neutral-100 hover:bg-neutral-200 text-neutral-800 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition"
+                className="w-full min-h-[48px] rounded-2xl bg-neutral-100 hover:bg-neutral-200 text-neutral-800 font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer"
               >
                 <FilePlus className="w-4 h-4" />
-                <span>Abrir cuenta nueva independiente</span>
+                <span>Abrir cuenta nueva independiente →</span>
               </button>
             </div>
 
