@@ -55,7 +55,8 @@ class SoundEffects {
   public startRepeatingAlarm(
     alarmKey: string, 
     type: 'kitchen' | 'ready' | 'security' | 'warning' | 'cash' | 'notification' | 'counter' = 'notification',
-    intervalMs: number = 3800
+    intervalMs: number = 3800,
+    customPlayFn?: () => void
   ) {
     if (this.muted) return;
     
@@ -65,6 +66,10 @@ class SoundEffects {
     }
 
     const playByType = () => {
+      if (customPlayFn) {
+        customPlayFn();
+        return;
+      }
       switch (type) {
         case 'kitchen':
           this.playNewOrderKitchen();
@@ -159,32 +164,86 @@ class SoundEffects {
 
   // Sonido de campana para nuevo pedido en cocina
   playNewOrderKitchen() {
+    this.playKitchenCustom('campana', 0.75);
+  }
+
+  // Sonido de campana personalizable para cocina con tono y volumen regulable
+  playKitchenCustom(tone: 'campana' | 'buzzer' | 'chime' | 'sirena' = 'campana', volume: number = 0.75) {
     if (this.muted) return;
     try {
       this.init();
       if (!this.ctx) return;
       const now = this.ctx.currentTime;
+      const vol = Math.max(0.05, Math.min(1.0, volume));
 
-      // Doble ding de campana tipo restaurante
-      [
-        { freq: 880, start: now, dur: 0.4 },
-        { freq: 1174.66, start: now + 0.15, dur: 0.6 },
-        { freq: 1760, start: now + 0.35, dur: 0.8 },
-      ].forEach(item => {
-        const osc = this.ctx!.createOscillator();
-        const gain = this.ctx!.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(item.freq, item.start);
-
-        gain.gain.setValueAtTime(0.35, item.start);
-        gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
-
+      if (tone === 'buzzer') {
+        // Buzzer industrial penetrante de cocina (doble zumbido con armónicos)
+        [now, now + 0.16].forEach(start => {
+          const osc = this.ctx!.createOscillator();
+          const gain = this.ctx!.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(587.33, start); // D5
+          gain.gain.setValueAtTime(0.4 * vol, start);
+          gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
+          osc.connect(gain);
+          gain.connect(this.ctx!.destination);
+          osc.start(start);
+          osc.stop(start + 0.12);
+        });
+      } else if (tone === 'chime') {
+        // Chime electrónico armónico suave (C6 -> E6 -> G6 -> C7)
+        [
+          { freq: 1046.50, start: now, dur: 0.25 },
+          { freq: 1318.51, start: now + 0.08, dur: 0.3 },
+          { freq: 1567.98, start: now + 0.16, dur: 0.35 },
+          { freq: 2093.00, start: now + 0.24, dur: 0.5 }
+        ].forEach(item => {
+          const osc = this.ctx!.createOscillator();
+          const gain = this.ctx!.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(item.freq, item.start);
+          gain.gain.setValueAtTime(0.35 * vol, item.start);
+          gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
+          osc.connect(gain);
+          gain.connect(this.ctx!.destination);
+          osc.start(item.start);
+          osc.stop(item.start + item.dur);
+        });
+      } else if (tone === 'sirena') {
+        // Sirena de restaurante para momentos de alta demanda (tono oscilante)
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(850, now);
+        osc.frequency.linearRampToValueAtTime(1400, now + 0.14);
+        osc.frequency.linearRampToValueAtTime(850, now + 0.28);
+        osc.frequency.linearRampToValueAtTime(1400, now + 0.42);
+        osc.frequency.linearRampToValueAtTime(850, now + 0.56);
+        gain.gain.setValueAtTime(0.35 * vol, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
         osc.connect(gain);
-        gain.connect(this.ctx!.destination);
-
-        osc.start(item.start);
-        osc.stop(item.start + item.dur);
-      });
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.6);
+      } else {
+        // Campana tradicional de cocina (triple ding metálico armónico)
+        [
+          { freq: 880, start: now, dur: 0.4 },
+          { freq: 1174.66, start: now + 0.14, dur: 0.6 },
+          { freq: 1760, start: now + 0.32, dur: 0.8 },
+        ].forEach(item => {
+          const osc = this.ctx!.createOscillator();
+          const gain = this.ctx!.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(item.freq, item.start);
+          gain.gain.setValueAtTime(0.35 * vol, item.start);
+          gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
+          osc.connect(gain);
+          gain.connect(this.ctx!.destination);
+          osc.start(item.start);
+          osc.stop(item.start + item.dur);
+        });
+      }
     } catch (e) {
       console.warn('Audio play error:', e);
     }

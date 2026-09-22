@@ -173,18 +173,48 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
   // Diners breakdown for selected order
   const orderDinersBreakdown = useMemo(() => {
     if (!selectedOrder) return [];
-    const dinersList: OrderDiner[] = selectedOrder.comensales && selectedOrder.comensales.length > 0
-      ? [...selectedOrder.comensales]
-      : [
+    const items = selectedOrder.items || [];
+    const hasConfiguredDiners = Boolean(selectedOrder.comensales && selectedOrder.comensales.length > 0);
+    const dinersList: OrderDiner[] = hasConfiguredDiners
+      ? [...selectedOrder.comensales!]
+      : [];
+
+    const unassignedItems = items.filter(it => !it.comensalId || it.comensalId === 'general');
+
+    if (!hasConfiguredDiners) {
+      if (unassignedItems.length > 0) {
+        dinersList.push({
+          id: 'general',
+          numero: 1,
+          nombre: 'Cuenta / Mesa General',
+          total: selectedOrder.total || 0
+        });
+      } else {
+        dinersList.push(
           { id: 'c1', numero: 1, nombre: 'Comensal 1', total: 0 },
           { id: 'c2', numero: 2, nombre: 'Comensal 2', total: 0 }
-        ];
+        );
+      }
+    } else if (unassignedItems.length > 0) {
+      dinersList.push({
+        id: 'general',
+        numero: dinersList.length + 1,
+        nombre: 'Consumo Común',
+        total: 0
+      });
+    }
 
     return dinersList.map(diner => {
-      const dinerItems = (selectedOrder.items || []).filter(it => it.comensalId === diner.id);
+      const isGeneral = diner.id === 'general';
+      const dinerItems = isGeneral
+        ? items.filter(it => !it.comensalId || it.comensalId === 'general')
+        : items.filter(it => it.comensalId === diner.id);
+
       const dinerSubtotal = dinerItems.reduce((acc, it) => acc + (it.precio * it.cantidad), 0);
-      const dinerPayments = (selectedOrder.cobros || []).filter(c => c.comensalId === diner.id);
-      const dinerPaid = dinerPayments.reduce((acc, c) => acc + c.monto, 0);
+      const dinerPayments = (selectedOrder.cobros || []).filter(c => 
+        isGeneral ? (!c.comensalId || c.comensalId === 'general') : c.comensalId === diner.id
+      );
+      const dinerPaid = dinerPayments.reduce((acc, c) => acc + (c.monto || c.total || 0), 0);
       const isPaid = dinerPaid >= dinerSubtotal && dinerSubtotal > 0;
 
       return {
@@ -378,6 +408,14 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           setTimeout(() => setTableReleaseFeedback(null), 6000);
         }
 
+        const paidOrderSnapshot: Order = {
+          ...selectedOrder,
+          estado: 'cobrado',
+          metodoPago: paymentMethod,
+          cajeroNombre: currentEmployee.nombre,
+          cobradoEn: new Date().toISOString()
+        };
+        setThermalPrintOrder(paidOrderSnapshot);
         setSelectedOrder(null);
       } else {
         // Update local selectedOrder representation so modal stays open with updated balances
@@ -420,6 +458,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       haptics.success();
 
       const shareAmount = finalChargeAmount;
+      const currentPartNumber = (selectedOrder.cobros?.filter(c => c.tipo === 'partes_iguales').length || 0) + 1;
       const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
         tipo: 'partes_iguales',
         monto: shareAmount,
@@ -430,7 +469,9 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         descuento: discountNum,
         propina: tipNum,
         total: shareAmount,
-        fecha: new Date().toISOString()
+        fecha: new Date().toISOString(),
+        numeroParte: currentPartNumber,
+        totalPartes: sharesCount
       };
 
       const result = await registerPartialPayment(selectedOrder.id, partialPaymentPayload);
@@ -452,6 +493,14 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           setTimeout(() => setTableReleaseFeedback(null), 6000);
         }
 
+        const paidOrderSnapshot: Order = {
+          ...selectedOrder,
+          estado: 'cobrado',
+          metodoPago: paymentMethod,
+          cajeroNombre: currentEmployee.nombre,
+          cobradoEn: new Date().toISOString()
+        };
+        setThermalPrintOrder(paidOrderSnapshot);
         setSelectedOrder(null);
       } else {
         setSelectedOrder(prev => {

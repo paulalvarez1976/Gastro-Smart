@@ -1,21 +1,39 @@
 export type Role = 'owner' | 'admin' | 'caja' | 'mesero' | 'cocina' | 'ayudante_cocina' | 'limpieza' | 'mostrador';
-export type UserRole = 'owner' | 'admin';
+export type UserRole = 'superadmin' | 'owner' | 'admin';
 
 export const GASTRO_SMART_APP_ID = 'gastro_smart' as const;
+
+export interface BusinessSubscription {
+  plan: 'basico' | 'pro' | 'enterprise';
+  estado: 'activo' | 'suspendido' | 'vencido' | 'prueba';
+  fechaInicio: string;
+  fechaVencimiento: string;
+  limiteSucursales: number;
+  limiteMesasPorSucursal: number;
+  limiteUsuarios: number;
+  precioMensualUSD?: number;
+  autoRenovar?: boolean;
+  notasSuscripcion?: string;
+}
 
 export interface Business {
   id: string;
   nombre: string;
   rif_o_ruc: string;
-  plan: 'basico' | 'pro';
+  plan: 'basico' | 'pro' | 'enterprise';
   activo: boolean;
+  suscripcion?: BusinessSubscription;
   creadoEn: string;
   ownerUid: string;
+  ownerEmail?: string;
+  ownerNombre?: string;
+  ownerClave?: string;
   appId?: 'gastro_smart';
   logoUrl?: string | null;
   email?: string;
   telefono?: string;
   direccion?: string;
+  modoPruebas?: boolean;
 }
 
 export interface UserAccount {
@@ -29,6 +47,7 @@ export interface UserAccount {
   creadoEn: string;
   ultimoAcceso?: string;
   avatarUrl?: string | null;
+  claveAsignada?: string;
 }
 
 export interface Restaurant {
@@ -39,11 +58,12 @@ export interface Restaurant {
   telefono: string;
   numeroMesas?: number;
   activo: boolean;
+  usaCocina?: boolean; // true: con pantalla/display cocina KDS; false: sin cocina, pedidos van directo a mostrador
   timeZone?: string;
   creadoEn?: string;
 }
 
-export type EmployeeSalaryType = 'por_horas' | 'por_dia' | 'mes' | 'fijo';
+export type EmployeeSalaryType = 'por_horas' | 'por_dia' | 'mes' | 'fijo' | 'por_hora';
 
 export interface Employee {
   id: string;

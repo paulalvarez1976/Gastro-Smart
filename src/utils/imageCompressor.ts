@@ -9,6 +9,7 @@
 export interface CompressionResult {
   blob: Blob;
   previewUrl: string;
+  dataUrl: string;
   width: number;
   height: number;
   originalSize: number;
@@ -21,8 +22,8 @@ export function compressImage(
   quality = 0.8
 ): Promise<CompressionResult> {
   return new Promise((resolve, reject) => {
-    // Validar tipo de archivo
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    // Validar tipo de archivo si existe
+    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'];
     const fileType = file.type ? file.type.toLowerCase() : 'image/jpeg';
     if (file.type && !validTypes.includes(fileType)) {
       reject(new Error('Formato no soportado. Por favor selecciona una imagen JPG, PNG o WEBP.'));
@@ -36,7 +37,7 @@ export function compressImage(
         let width = img.width;
         let height = img.height;
 
-        // Redimensionar si supera el ancho máximo (800px)
+        // Redimensionar si supera el ancho máximo
         if (width > maxWidth) {
           height = Math.round((height * maxWidth) / width);
           width = maxWidth;
@@ -52,12 +53,14 @@ export function compressImage(
           return;
         }
 
-        // Fondo blanco por si el PNG tiene transparencia
+        // Fondo blanco por si el PNG o WEBP tiene transparencia
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, width, height);
 
         // Dibujar imagen redimensionada
         ctx.drawImage(img, 0, 0, width, height);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
 
         canvas.toBlob(
           (blob) => {
@@ -70,9 +73,10 @@ export function compressImage(
             resolve({
               blob,
               previewUrl,
+              dataUrl,
               width,
               height,
-              originalSize: file.size,
+              originalSize: file.size || blob.size,
               compressedSize: blob.size
             });
           },
@@ -82,7 +86,7 @@ export function compressImage(
       };
 
       img.onerror = () => {
-        reject(new Error('No se pudo leer la imagen seleccionada.'));
+        reject(new Error('No se pudo procesar la imagen seleccionada.'));
       };
 
       img.src = readerEvent.target?.result as string;

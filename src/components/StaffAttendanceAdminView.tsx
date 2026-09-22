@@ -320,6 +320,12 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         : 0;
 
       const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
+      const modalidad = emp.modalidadPago || (emp.tipoSueldo === 'fijo' ? 'mes' : emp.tipoSueldo) || 'por_horas';
+      const rateLabel = modalidad === 'por_dia' 
+        ? `$${(emp.tarifaDiaria || 50).toFixed(2)} / día` 
+        : modalidad === 'mes'
+          ? `$${(emp.sueldoMensual || 1200).toFixed(2)} / mes`
+          : `$${(emp.tarifaHora || 12).toFixed(2)} / h`;
 
       return {
         empleadoId: emp.id,
@@ -327,8 +333,12 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         puesto: emp.puesto,
         sucursal: restName,
         avatarUrl: emp.avatarUrl,
-        tipoSueldo: emp.tipoSueldo || 'por_hora',
+        modalidadPago: modalidad,
+        tipoSueldo: modalidad,
+        tarifaLabel: rateLabel,
         tarifaHora: emp.tarifaHora || 0,
+        tarifaDiaria: emp.tarifaDiaria || 0,
+        sueldoMensual: emp.sueldoMensual || 0,
         diasTrabajados,
         horasTotales,
         promedioHorasDia,
@@ -484,8 +494,16 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
       });
 
       const rateMap: Record<string, number> = {};
+      const empDataMap: Record<string, { modalidad?: string; tarifaHora?: number; tarifaDiaria?: number; sueldoMensual?: number }> = {};
+      
       employees.forEach(e => {
         rateMap[e.id] = e.tarifaHora || 12;
+        empDataMap[e.id] = {
+          modalidad: e.modalidadPago || (e.tipoSueldo === 'fijo' ? 'mes' : e.tipoSueldo) || 'por_horas',
+          tarifaHora: e.tarifaHora || 12,
+          tarifaDiaria: e.tarifaDiaria || 50,
+          sueldoMensual: e.sueldoMensual || 1200
+        };
       });
 
       const targetRestId = selectedBranchId === 'all' 
@@ -499,7 +517,8 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         rateMap,
         dateFilter.label,
         currentUserName,
-        overtimeMultiplier
+        overtimeMultiplier,
+        empDataMap
       );
 
       setSalarySuccessToast(`¡Gastos de sueldo generados exitosamente! Se procesaron ${pendingShiftsToPay.length} turnos.`);

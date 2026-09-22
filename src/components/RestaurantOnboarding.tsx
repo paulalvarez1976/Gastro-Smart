@@ -15,6 +15,7 @@ import {
   Users, 
   MenuSquare, 
   Building2, 
+  ChefHat,
   X 
 } from 'lucide-react';
 
@@ -29,12 +30,13 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   isSecondaryModal = false,
   onCloseModal
 }) => {
-  const { selectRestaurant, currentUserAccount, currentBusiness } = useAuth();
+  const { selectRestaurant, currentUserAccount, currentBusiness, allRestaurants } = useAuth();
 
   const [nombre, setNombre] = useState('');
   const [direccion, setDireccion] = useState('');
   const [telefono, setTelefono] = useState('');
   const [numeroMesas, setNumeroMesas] = useState<number>(10);
+  const [usaCocina, setUsaCocina] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [createdRestaurantId, setCreatedRestaurantId] = useState<string | null>(null);
@@ -52,6 +54,15 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
       return;
     }
 
+    if (isSecondaryModal && currentBusiness) {
+      const limitSucursales = currentBusiness.suscripcion?.limiteSucursales || 
+        (currentBusiness.plan === 'enterprise' ? 10 : currentBusiness.plan === 'pro' ? 3 : 1);
+      if (allRestaurants.length >= limitSucursales) {
+        setErrorMsg(`⚠️ Límite de sucursales alcanzado. Tu plan actual (${currentBusiness.suscripcion?.plan?.toUpperCase() || currentBusiness.plan?.toUpperCase() || 'BÁSICO'}) permite un máximo de ${limitSucursales} sucursal(es). Contacta con el Creador/SuperAdmin para actualizar tu plan.`);
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     setErrorMsg('');
 
@@ -61,7 +72,8 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
         nombre: nombre.trim(),
         direccion: direccion.trim(),
         telefono: telefono.trim(),
-        numeroMesas: Number(numeroMesas)
+        numeroMesas: Number(numeroMesas),
+        usaCocina: usaCocina !== false
       }, activeBizId);
       selectRestaurant(newRestId);
       setCreatedRestaurantId(newRestId);
@@ -255,6 +267,68 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
               onChange={(e) => setNumeroMesas(Math.max(1, parseInt(e.target.value) || 1))}
               className="w-full h-12 px-4 rounded-xl border border-neutral-300 text-base font-black text-neutral-900 focus:border-orange-500 focus:ring-2 focus:ring-orange-200 outline-none transition bg-white"
             />
+          </div>
+
+          {/* Selector de Modo Cocina vs Directo a Mostrador */}
+          <div className="space-y-2 pt-1">
+            <label className="block text-xs font-bold text-neutral-800">
+              Modo Operativo de Pedidos & Cocina:
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setUsaCocina(true)}
+                className={`p-3.5 rounded-2xl border text-left transition flex flex-col justify-between gap-1.5 cursor-pointer ${
+                  usaCocina
+                    ? 'bg-amber-50/90 border-amber-400 text-amber-950 shadow-xs ring-2 ring-amber-400/20'
+                    : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-1.5 font-extrabold text-xs text-amber-900">
+                    <ChefHat className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Con Cocina (KDS)</span>
+                  </div>
+                  <input
+                    type="radio"
+                    name="onboardingUsaCocina"
+                    checked={usaCocina}
+                    onChange={() => setUsaCocina(true)}
+                    className="text-amber-600 focus:ring-amber-500 cursor-pointer"
+                  />
+                </div>
+                <p className="text-[11px] text-neutral-600 leading-tight">
+                  Ideal para restaurantes con área de cocina. Emite alertas y pedidos pasan por pantalla de cocina.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setUsaCocina(false)}
+                className={`p-3.5 rounded-2xl border text-left transition flex flex-col justify-between gap-1.5 cursor-pointer ${
+                  !usaCocina
+                    ? 'bg-purple-50/90 border-purple-400 text-purple-950 shadow-xs ring-2 ring-purple-400/20'
+                    : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                }`}
+              >
+                <div className="flex items-center justify-between w-full">
+                  <div className="flex items-center gap-1.5 font-extrabold text-xs text-purple-900">
+                    <Store className="w-4 h-4 text-purple-600 shrink-0" />
+                    <span>Sin Cocina</span>
+                  </div>
+                  <input
+                    type="radio"
+                    name="onboardingUsaCocina"
+                    checked={!usaCocina}
+                    onChange={() => setUsaCocina(false)}
+                    className="text-purple-600 focus:ring-purple-500 cursor-pointer"
+                  />
+                </div>
+                <p className="text-[11px] text-neutral-600 leading-tight">
+                  Para cafeterías, quioscos o heladerías. Pedidos van directo a mostrador sin alertas de cocina.
+                </p>
+              </button>
+            </div>
           </div>
 
           <button

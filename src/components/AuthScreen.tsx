@@ -30,6 +30,7 @@ export const AuthScreen: React.FC = () => {
     loginAdminWithEmail, 
     loginAdminWithGoogle,
     loginDemoMode,
+    loginSuperAdminDemoMode,
     registerOwnerAndBusiness, 
     resetAdminPassword,
     loginWithPin, 
@@ -45,11 +46,18 @@ export const AuthScreen: React.FC = () => {
     dismissSelfHealingToast
   } = useAuth();
 
-  // Tab de modo: 'admin' | 'employee'
-  const [authMode, setAuthMode] = useState<'admin' | 'employee'>('admin');
+  // Tab de modo: 'admin' | 'creator' | 'employee'
+  const [authMode, setAuthMode] = useState<'admin' | 'creator' | 'employee'>('admin');
 
   // Sub-vista de admin: 'login' | 'register' | 'forgot'
   const [adminView, setAdminView] = useState<'login' | 'register' | 'forgot'>('login');
+
+  // Form states - Creator Login
+  const [creatorEmail, setCreatorEmail] = useState('');
+  const [creatorPassword, setCreatorPassword] = useState('');
+  const [showCreatorPassword, setShowCreatorPassword] = useState(false);
+  const [creatorLoading, setCreatorLoading] = useState(false);
+  const [creatorFeedback, setCreatorFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form states - Admin Login
   const [adminEmail, setAdminEmail] = useState('');
@@ -99,18 +107,21 @@ export const AuthScreen: React.FC = () => {
   const activeBiz = activeRest ? allBusinesses.find(b => b.id === activeRest.businessId) : null;
 
   // ================= ADMIN HANDLERS =================
-  const handleGoogleAuth = async () => {
+  const handleGoogleAuth = async (isCreator = false) => {
     setGoogleLoading(true);
     setAdminFeedback(null);
     setRegFeedback(null);
+    setCreatorFeedback(null);
     try {
       sounds.playKeypadClick();
-      const res = await loginAdminWithGoogle();
+      const res = await loginAdminWithGoogle(isCreator);
       if (res.success) {
         sounds.playCashRegister();
       } else {
         sounds.playAlertWarning();
-        if (adminView === 'register') {
+        if (isCreator) {
+          setCreatorFeedback({ type: 'error', text: res.message });
+        } else if (adminView === 'register') {
           setRegFeedback({ type: 'error', text: res.message });
         } else {
           setAdminFeedback({ type: 'error', text: res.message });
@@ -118,13 +129,39 @@ export const AuthScreen: React.FC = () => {
       }
     } catch (err: any) {
       const msg = err.message || 'Error al autenticar con Google';
-      if (adminView === 'register') {
+      if (isCreator) {
+        setCreatorFeedback({ type: 'error', text: msg });
+      } else if (adminView === 'register') {
         setRegFeedback({ type: 'error', text: msg });
       } else {
         setAdminFeedback({ type: 'error', text: msg });
       }
     } finally {
       setGoogleLoading(false);
+    }
+  };
+
+  const handleCreatorLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!creatorEmail.trim() || !creatorPassword) {
+      setCreatorFeedback({ type: 'error', text: 'Por favor ingresa tu correo y contraseña de Creador.' });
+      return;
+    }
+
+    setCreatorLoading(true);
+    setCreatorFeedback(null);
+    try {
+      const res = await loginAdminWithEmail(creatorEmail, creatorPassword);
+      if (res.success) {
+        sounds.playCashRegister();
+      } else {
+        sounds.playAlertWarning();
+        setCreatorFeedback({ type: 'error', text: res.message });
+      }
+    } catch (err: any) {
+      setCreatorFeedback({ type: 'error', text: err.message || 'Error al iniciar sesión como Creador' });
+    } finally {
+      setCreatorLoading(false);
     }
   };
 
@@ -304,8 +341,8 @@ export const AuthScreen: React.FC = () => {
         </div>
       </div>
 
-      {/* Selector de Modo: Administrador vs Empleado */}
-      <div className="w-full max-w-md mb-4 bg-white/80 p-1.5 rounded-2xl shadow-sm border border-orange-200/60 backdrop-blur-xs grid grid-cols-2 gap-1.5">
+      {/* Selector de Modo: Dueño Restaurante vs Creador SaaS vs Empleado */}
+      <div className="w-full max-w-lg mb-4 bg-white/90 p-1.5 rounded-2xl shadow-sm border border-orange-200/60 backdrop-blur-xs grid grid-cols-3 gap-1">
         <button
           type="button"
           onClick={() => {
@@ -313,14 +350,31 @@ export const AuthScreen: React.FC = () => {
             setAuthMode('admin');
             setAdminFeedback(null);
           }}
-          className={`h-11 rounded-xl font-extrabold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+          className={`h-11 rounded-xl font-extrabold text-xs transition flex items-center justify-center gap-1.5 ${
             authMode === 'admin'
               ? 'bg-orange-600 text-white shadow-md shadow-orange-600/20'
               : 'text-neutral-600 hover:text-neutral-900 hover:bg-white/60'
           }`}
         >
-          <Building2 className="w-4 h-4" />
-          <span>Dueño / Admin</span>
+          <Building2 className="w-3.5 h-3.5" />
+          <span>Restaurante</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            sounds.playKeypadClick();
+            setAuthMode('creator');
+            setCreatorFeedback(null);
+          }}
+          className={`h-11 rounded-xl font-extrabold text-xs transition flex items-center justify-center gap-1.5 ${
+            authMode === 'creator'
+              ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
+              : 'text-neutral-600 hover:text-neutral-900 hover:bg-white/60'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-purple-200" />
+          <span>Creador (SaaS)</span>
         </button>
 
         <button
@@ -330,16 +384,138 @@ export const AuthScreen: React.FC = () => {
             setAuthMode('employee');
             setPinErrorMsg('');
           }}
-          className={`h-11 rounded-xl font-extrabold text-xs sm:text-sm transition flex items-center justify-center gap-2 ${
+          className={`h-11 rounded-xl font-extrabold text-xs transition flex items-center justify-center gap-1.5 ${
             authMode === 'employee'
               ? 'bg-orange-600 text-white shadow-md shadow-orange-600/20'
               : 'text-neutral-600 hover:text-neutral-900 hover:bg-white/60'
           }`}
         >
-          <KeyRound className="w-4 h-4" />
+          <KeyRound className="w-3.5 h-3.5" />
           <span>Personal (PIN)</span>
         </button>
       </div>
+
+      {/* ===================== VISTA CREADOR / SUPERADMIN (SAAS) ===================== */}
+      {authMode === 'creator' && (
+        <div className="w-full max-w-md bg-neutral-900 text-white rounded-3xl shadow-2xl border border-purple-900/60 p-6 sm:p-8 backdrop-blur-sm animate-in fade-in zoom-in-95 duration-150">
+          <div className="text-center mb-5">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-purple-600/20 border border-purple-500/30 text-purple-400 mb-2.5">
+              <ShieldCheck className="w-7 h-7" />
+            </div>
+            <h2 className="text-xl font-black text-white">Panel Creador (Manejo de Base de Datos)</h2>
+            <p className="text-xs text-neutral-400 mt-1">
+              Acceso exclusivo para el Creador de la plataforma. Crea restaurantes, gestiona la base de datos y acredita cuentas y claves a los administradores.
+            </p>
+          </div>
+
+          <div className="p-3 mb-4 rounded-xl bg-purple-950/60 border border-purple-800/60 text-purple-200 text-xs flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0" />
+            <span>El Creador administra los inquilinos (Tenants) y asigna claves de acceso.</span>
+          </div>
+
+          {creatorFeedback && (
+            <div className={`p-3.5 mb-4 rounded-xl text-xs font-semibold flex items-center gap-2 ${
+              creatorFeedback.type === 'success' 
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
+                : 'bg-red-500/20 text-red-300 border border-red-500/40'
+            }`}>
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{creatorFeedback.text}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleCreatorLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-neutral-300 mb-1 flex items-center gap-1.5">
+                <Mail className="w-3.5 h-3.5 text-purple-400" />
+                Correo de Creador
+              </label>
+              <input
+                type="email"
+                required
+                placeholder="superadmin@gastrosmart.com"
+                value={creatorEmail}
+                onChange={(e) => setCreatorEmail(e.target.value)}
+                className="w-full h-11 px-3.5 rounded-xl bg-neutral-800 border border-neutral-700 text-sm text-white focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition placeholder-neutral-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-300 mb-1 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-purple-400" />
+                Contraseña Master
+              </label>
+              <div className="relative">
+                <input
+                  type={showCreatorPassword ? 'text' : 'password'}
+                  required
+                  placeholder="••••••••"
+                  value={creatorPassword}
+                  onChange={(e) => setCreatorPassword(e.target.value)}
+                  className="w-full h-11 pl-3.5 pr-10 rounded-xl bg-neutral-800 border border-neutral-700 text-sm text-white focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 outline-none transition placeholder-neutral-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCreatorPassword(!showCreatorPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-200"
+                >
+                  {showCreatorPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={creatorLoading}
+              className="w-full h-12 rounded-xl bg-purple-600 hover:bg-purple-700 active:bg-purple-800 text-white font-extrabold text-sm shadow-lg shadow-purple-600/30 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            >
+              {creatorLoading ? 'Autenticando Creador...' : 'Iniciar Sesión Creador'}
+            </button>
+          </form>
+
+          <div className="mt-4 space-y-3">
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-neutral-800"></div>
+              <span className="shrink mx-2 text-[11px] font-bold text-neutral-400 uppercase tracking-wider">O accede con Google</span>
+              <div className="flex-grow border-t border-neutral-800"></div>
+            </div>
+
+            <button
+              type="button"
+              disabled={googleLoading}
+              onClick={() => handleGoogleAuth(true)}
+              className="w-full h-11 rounded-xl bg-white hover:bg-neutral-100 text-neutral-900 font-bold text-xs transition flex items-center justify-center gap-2.5 shadow-md cursor-pointer disabled:opacity-50"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+              </svg>
+              <span>{googleLoading ? 'Conectando con Google...' : 'Ingresar con Google (Creador)'}</span>
+            </button>
+          </div>
+
+          <div className="mt-5 pt-4 border-t border-neutral-800 text-center space-y-2">
+            <button
+              type="button"
+              onClick={async () => {
+                sounds.playKeypadClick();
+                const res = await loginSuperAdminDemoMode();
+                if (res.success) {
+                  sounds.playCashRegister();
+                } else {
+                  setCreatorFeedback({ type: 'error', text: res.message });
+                }
+              }}
+              className="w-full py-2.5 px-3 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-700/60 text-purple-200 font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-purple-400" />
+              <span>🚀 Acceso DEMO Instantáneo Creador (SaaS)</span>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ===================== VISTA ADMINISTRADOR / DUEÑO ===================== */}
       {authMode === 'admin' && (
@@ -348,12 +524,17 @@ export const AuthScreen: React.FC = () => {
           {/* Sub-view: Login */}
           {adminView === 'login' && (
             <div>
-              <div className="text-center mb-5">
+              <div className="text-center mb-4">
                 <div className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-orange-100 text-orange-600 mb-2">
                   <ShieldCheck className="w-6 h-6" />
                 </div>
-                <h2 className="text-xl font-black text-neutral-900">Acceso Administrativo</h2>
-                <p className="text-xs text-neutral-500 mt-0.5">Ingresa con tus credenciales de Dueño o Administrador</p>
+                <h2 className="text-xl font-black text-neutral-900">Acceso Administrador de Restaurante</h2>
+                <p className="text-xs text-neutral-500 mt-0.5">Ingresa con el correo y clave acreditada por el Creador</p>
+              </div>
+
+              <div className="p-3 mb-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Las cuentas y claves son creadas y acreditadas directamente por el Creador.</span>
               </div>
 
               {adminFeedback && (
@@ -446,42 +627,8 @@ export const AuthScreen: React.FC = () => {
                 </button>
               </form>
 
-              {/* Enlace para registrar nuevo negocio */}
-              <div className="mt-5 pt-4 border-t border-neutral-100 text-center space-y-3">
-                <button
-                  type="button"
-                  disabled={googleLoading}
-                  onClick={handleGoogleAuth}
-                  className="w-full h-11 rounded-xl bg-white hover:bg-neutral-50 border border-neutral-200 text-neutral-800 font-bold text-xs transition flex items-center justify-center gap-2.5 shadow-sm"
-                >
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                  </svg>
-                  <span>{googleLoading ? 'Conectando con Google...' : 'Continuar con Google'}</span>
-                </button>
-
-                <p className="text-xs text-neutral-600">
-                  ¿Eres nuevo en Gastro Smart?
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    sounds.playKeypadClick();
-                    setAdminView('register');
-                    setRegFeedback(null);
-                  }}
-                  className="w-full h-11 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-extrabold text-xs transition flex items-center justify-center gap-2"
-                >
-                  <Store className="w-4 h-4 text-orange-600" />
-                  <span>Crear Cuenta de Negocio (Gratis)</span>
-                </button>
-              </div>
-
-              {/* Demo Helper Rápido */}
-              <div className="mt-4 pt-3 border-t border-neutral-100 space-y-2">
+              {/* Demostración de Acceso Rápido */}
+              <div className="mt-5 pt-4 border-t border-neutral-100 text-center space-y-2">
                 <button
                   type="button"
                   onClick={async () => {
@@ -493,11 +640,29 @@ export const AuthScreen: React.FC = () => {
                       setAdminFeedback({ type: 'error', text: res.message });
                     }
                   }}
-                  className="w-full py-2.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                  className="w-full py-2.5 px-3 rounded-xl bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-900 font-extrabold text-xs transition flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <Sparkles className="w-4 h-4 text-white" />
-                  <span>🚀 Acceso DEMO Instantáneo (Sin Red / Offline)</span>
+                  <Sparkles className="w-4 h-4 text-orange-600" />
+                  <span>🚀 Acceso DEMO Restaurante Instantáneo</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    sounds.playKeypadClick();
+                    const res = await loginSuperAdminDemoMode();
+                    if (res.success) {
+                      sounds.playCashRegister();
+                    } else {
+                      setAdminFeedback({ type: 'error', text: res.message });
+                    }
+                  }}
+                  className="w-full py-2.5 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4 text-white" />
+                  <span>👑 Acceso Creador / SuperAdmin (SaaS)</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => {

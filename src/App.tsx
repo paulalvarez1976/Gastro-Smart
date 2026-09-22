@@ -7,6 +7,7 @@ import { WaiterPOS } from './components/WaiterPOS';
 import { KitchenDisplay } from './components/KitchenDisplay';
 import { CashierView } from './components/CashierView';
 import { AdminDashboard } from './components/AdminDashboard';
+import { CreatorDashboard } from './components/CreatorDashboard';
 import { RestaurantOnboarding } from './components/RestaurantOnboarding';
 import { StaffAttendanceView } from './components/StaffAttendanceView';
 import { 
@@ -21,10 +22,13 @@ import { Order, MenuItem, Table, Shift, Client } from './types';
 import { UtensilsCrossed, ShieldAlert, Loader2 } from 'lucide-react';
 import { sounds } from './utils/sound';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { TestModeBanner } from './components/TestModeBanner';
 
 const MainAppContent: React.FC = () => {
   const { 
     currentUserAccount,
+    currentBusiness,
+    allBusinesses,
     currentEmployee, 
     currentRestaurant, 
     allRestaurants, 
@@ -38,6 +42,17 @@ const MainAppContent: React.FC = () => {
   const [tables, setTables] = useState<Table[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+
+  // Vista SaaS (Panel Creador vs Panel Restaurante)
+  const [saasView, setSaasView] = useState<'restaurant' | 'superadmin'>('restaurant');
+
+  useEffect(() => {
+    if (currentUserAccount?.rol === 'superadmin') {
+      setSaasView('superadmin');
+    } else {
+      setSaasView('restaurant');
+    }
+  }, [currentUserAccount]);
 
   // Modal para ver detalle de pedido seleccionado desde notificaciones
   const [activeOrderModal, setActiveOrderModal] = useState<Order | null>(null);
@@ -111,26 +126,39 @@ const MainAppContent: React.FC = () => {
 
   // Si el usuario es Dueño o Administrador (Firebase Auth):
   if (currentUserAccount) {
-    // Si no tiene ningún restaurante creado aún -> Onboarding inicial de bienvenida
-    if (allRestaurants.length === 0) {
+    // La pantalla de Creador (CreatorDashboard) es EXCLUSIVA para el Creador (superadmin)
+    const isSuperAdminView = currentUserAccount.rol === 'superadmin' && saasView === 'superadmin';
+
+    // Si no tiene ningún restaurante creado aún y no es superadmin -> Onboarding inicial de bienvenida
+    if (allRestaurants.length === 0 && !isSuperAdminView) {
       return <RestaurantOnboarding />;
     }
 
     return (
       <div className="h-full h-dvh max-h-dvh flex flex-col bg-neutral-100 antialiased selection:bg-orange-500 selection:text-white overflow-hidden">
+        <TestModeBanner />
         <TopNav 
           orders={orders} 
           onOrderClick={(ord) => setActiveOrderModal(ord)}
           onOpenNewRestaurantModal={() => setShowNewBranchModal(true)}
+          saasView={saasView}
+          onToggleSaasView={(v) => setSaasView(v)}
         />
 
-        <AdminDashboard 
-          restaurants={allRestaurants}
-          employees={allEmployees}
-          menuItems={menuItems}
-          shifts={shifts}
-          orders={orders}
-        />
+        {isSuperAdminView ? (
+          <CreatorDashboard 
+            businesses={allBusinesses}
+            allRestaurants={allRestaurants}
+          />
+        ) : (
+          <AdminDashboard 
+            restaurants={allRestaurants}
+            employees={allEmployees}
+            menuItems={menuItems}
+            shifts={shifts}
+            orders={orders}
+          />
+        )}
 
         {/* Modal Secundario de Onboarding para nueva sucursal */}
         {showNewBranchModal && (
@@ -161,6 +189,7 @@ const MainAppContent: React.FC = () => {
 
     return (
       <div className="h-full h-dvh max-h-dvh flex flex-col bg-neutral-100 antialiased selection:bg-orange-500 selection:text-white overflow-hidden">
+        <TestModeBanner />
         <TopNav 
           orders={orders} 
           onOrderClick={(ord) => setActiveOrderModal(ord)} 

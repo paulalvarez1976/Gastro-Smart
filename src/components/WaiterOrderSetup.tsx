@@ -313,7 +313,7 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
               className="px-4 py-2.5 rounded-2xl bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-md shadow-orange-600/20 active:scale-98 transition cursor-pointer"
             >
               <Utensils className="w-4 h-4" />
-              <span>🍽️ Abrir Menú de Platos Directo →</span>
+              <span>🍽️ Elegir platos / Menú →</span>
             </button>
 
             <button
@@ -1054,7 +1054,8 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
             onClick={handleContinue}
             className="w-full sm:w-auto h-12 sm:h-14 px-8 rounded-2xl bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white font-extrabold text-sm sm:text-base shadow-lg shadow-orange-600/30 flex items-center justify-center gap-3 transition disabled:opacity-40 disabled:pointer-events-none active:scale-98 cursor-pointer"
           >
-            <span>Continuar al Menú</span>
+            <Utensils className="w-5 h-5 stroke-[2.5]" />
+            <span>Elegir platos / Menú</span>
             <ArrowRight className="w-5 h-5 stroke-[2.5]" />
           </button>
         </div>

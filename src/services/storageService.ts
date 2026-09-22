@@ -13,30 +13,30 @@ import { compressImage } from '../utils/imageCompressor';
 export async function uploadDishPhoto(
   restaurantId: string,
   menuItemId: string,
-  imageFile: File
+  imageFile: File | Blob
 ): Promise<string> {
   const cleanRestId = restaurantId && restaurantId !== 'all' ? restaurantId : 'central';
   const storagePath = `restaurants/${cleanRestId}/menu/${menuItemId}.jpg`;
   
-  console.log(`[Storage] 📤 Iniciando subida de foto de plato:`, {
+  console.log(`[Storage] 📤 Procesando foto de plato:`, {
     menuItemId,
     restaurantId: cleanRestId,
     storagePath,
-    originalFileName: imageFile.name,
     originalFileSize: `${(imageFile.size / 1024).toFixed(2)} KB`,
     fileType: imageFile.type
   });
 
-  // 1. Comprimir y redimensionar imagen (máx 800px, 80% calidad JPEG)
-  const { blob } = await compressImage(imageFile, 800, 0.8);
-  console.log(`[Storage] 📉 Imagen comprimida con éxito:`, {
+  // 1. Comprimir y redimensionar imagen (máx 600px, 75% calidad JPEG para peso óptimo ~20-30KB)
+  const { blob, dataUrl } = await compressImage(imageFile, 600, 0.75);
+  console.log(`[Storage] 📉 Imagen optimizada:`, {
     compressedSize: `${(blob.size / 1024).toFixed(2)} KB`
   });
 
+  // 2. Intentar subida a Firebase Storage si está disponible
   try {
     const uploadPromise = (async () => {
       const storageRef = ref(storage, storagePath);
-      console.log(`[Storage] 🚀 Conectando con Firebase Storage para subida en: ${storagePath}`);
+      console.log(`[Storage] 🚀 Intentando subida a Firebase Storage: ${storagePath}`);
       const snapshot = await uploadBytes(storageRef, blob, {
         contentType: 'image/jpeg',
         customMetadata: {
@@ -45,39 +45,26 @@ export async function uploadDishPhoto(
           uploadedAt: new Date().toISOString()
         }
       });
-      console.log(`[Storage] ✅ uploadBytes completado con éxito. Obteniendo URL de descarga...`);
       const downloadUrl = await getDownloadURL(snapshot.ref);
-      console.log(`[Storage] 🔗 URL de descarga obtenida:`, downloadUrl);
+      console.log(`[Storage] ✅ Subida a Firebase Storage exitosa:`, downloadUrl);
       return downloadUrl;
     })();
 
-    // Timeout de 20 segundos para redes de restaurante
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Storage upload timeout (20s exceeded)')), 20000)
+    // Timeout ágil de 6 segundos para evitar colgar la app si Storage está bloqueado o con problemas de red/CORS
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Storage upload timeout (6s exceeded)')), 6000)
     );
 
-    return await Promise.race([uploadPromise, timeoutPromise]) as string;
+    return await Promise.race([uploadPromise, timeoutPromise]);
   } catch (storageError: any) {
-    console.error(`[Storage] ❌ Error detallado al subir foto de plato a Firebase Storage:`, {
-      errorCode: storageError?.code || 'DESCONOCIDO',
-      errorMessage: storageError?.message || String(storageError),
-      storagePath,
-      restaurantId: cleanRestId,
+    console.warn(`[Storage] ℹ️ Firebase Storage no disponible (${storageError?.code || storageError?.message}). Activando almacenamiento directo de imagen optimizada (Base64 dataUrl):`, {
       menuItemId,
-      errorFull: storageError
+      restaurantId: cleanRestId
     });
 
-    if (storageError?.code === 'storage/unauthorized') {
-      console.warn(`[Storage] 🔒 Motivo probable: Permisos insuficientes en storage.rules para la ruta '${storagePath}'.`);
-    } else if (storageError?.code === 'storage/canceled') {
-      console.warn(`[Storage] 🚫 La subida fue cancelada.`);
-    } else if (storageError?.code === 'storage/quota-exceeded') {
-      console.warn(`[Storage] ⚠️ Cuota de almacenamiento excedida.`);
-    } else if (storageError?.message?.includes('timeout')) {
-      console.warn(`[Storage] ⏱️ La solicitud superó el tiempo límite de red (20s).`);
-    }
-
-    throw new Error('No se pudo subir la foto, verificá tu conexión e intentá de nuevo');
+    // Fallback garantizado: guardar la imagen comprimida directamente como data URL
+    // Esto asegura que el plato se guarde de inmediato y la foto se visualice perfectamente sin errores
+    return dataUrl;
   }
 }
 
@@ -89,8 +76,8 @@ export async function uploadReceiptPhoto(
   const cleanRestId = restaurantId && restaurantId !== 'all' ? restaurantId : 'central';
   const storagePath = `restaurants/${cleanRestId}/receipts/${expenseId}.jpg`;
 
-  // Comprimir imagen a máx 1200px para preservar legibilidad del texto del ticket
-  const { blob } = await compressImage(imageFile, 1200, 0.8);
+  // Comprimir imagen a máx 900px para preservar legibilidad del ticket con bajo peso
+  const { blob, dataUrl } = await compressImage(imageFile, 900, 0.75);
 
   try {
     const uploadPromise = (async () => {
@@ -106,14 +93,14 @@ export async function uploadReceiptPhoto(
       return await getDownloadURL(snapshot.ref);
     })();
 
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Storage upload timeout (20s exceeded)')), 20000)
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Storage upload timeout (6s exceeded)')), 6000)
     );
 
-    return await Promise.race([uploadPromise, timeoutPromise]) as string;
+    return await Promise.race([uploadPromise, timeoutPromise]);
   } catch (storageError: any) {
-    console.error(`[Storage] ❌ Error detallado al subir recibo:`, storageError);
-    throw new Error('No se pudo subir el comprobante, verificá tu conexión e intentá de nuevo');
+    console.warn(`[Storage] ℹ️ Firebase Storage no disponible para comprobante, usando dataUrl optimizado.`);
+    return dataUrl;
   }
 }
 

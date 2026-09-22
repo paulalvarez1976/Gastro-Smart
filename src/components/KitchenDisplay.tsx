@@ -22,10 +22,26 @@ import {
   ChevronUp,
   Layers,
   Check,
-  Printer
+  Printer,
+  Sliders
 } from 'lucide-react';
 import { ThermalReceiptModal } from './ThermalReceiptModal';
+import { KitchenNotificationModal, KitchenNotificationConfig, DEFAULT_KITCHEN_NOTIFICATIONS } from './KitchenNotificationModal';
 import { haptics } from '../utils/haptics';
+
+const KITCHEN_NOTIF_STORAGE_KEY = 'gastro_kitchen_notifications_config';
+
+const getInitialKitchenConfig = (): KitchenNotificationConfig => {
+  try {
+    const saved = localStorage.getItem(KITCHEN_NOTIF_STORAGE_KEY);
+    if (saved) {
+      return { ...DEFAULT_KITCHEN_NOTIFICATIONS, ...JSON.parse(saved) };
+    }
+  } catch (err) {
+    console.warn('Error loading kitchen notification settings:', err);
+  }
+  return DEFAULT_KITCHEN_NOTIFICATIONS;
+};
 
 interface KitchenDisplayProps {
   orders: Order[];
@@ -48,15 +64,43 @@ interface KitchenRoundCardData {
 export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   const { currentEmployee, currentRestaurant } = useAuth();
   
-  // Kitchen state
+  // Kitchen state & Notification settings
   const [rejectModalOrder, setRejectModalOrder] = useState<Order | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
-  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [notifConfig, setNotifConfig] = useState<KitchenNotificationConfig>(getInitialKitchenConfig);
+  const [showNotifModal, setShowNotifModal] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [activeQueueTab, setActiveQueueTab] = useState<'all' | 'nuevos' | 'preparacion' | 'recojo'>('all');
   const [visualNotice, setVisualNotice] = useState<{ id: string; title: string; text: string } | null>(null);
   const [expandedTableOrders, setExpandedTableOrders] = useState<Record<string, boolean>>({});
   const [comandaToPrint, setComandaToPrint] = useState<{ order: Order; roundNumber: number; items: OrderItem[] } | null>(null);
+
+  const audioEnabled = notifConfig.soundEnabled;
+
+  const handleToggleAudio = () => {
+    const updated = { ...notifConfig, soundEnabled: !notifConfig.soundEnabled };
+    setNotifConfig(updated);
+    try {
+      localStorage.setItem(KITCHEN_NOTIF_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+  };
+
+  const handleSaveNotifConfig = (updated: KitchenNotificationConfig) => {
+    setNotifConfig(updated);
+    try {
+      localStorage.setItem(KITCHEN_NOTIF_STORAGE_KEY, JSON.stringify(updated));
+    } catch (e) {}
+    setVisualNotice({
+      id: 'settings-saved',
+      title: 'Configuración guardada',
+      text: 'Las preferencias de alertas sonoras y visuales se aplicaron correctamente.'
+    });
+    setTimeout(() => setVisualNotice(null), 3000);
+  };
+
+  const handleTestSound = (tone: 'campana' | 'buzzer' | 'chime' | 'sirena', volume: number) => {
+    sounds.playKitchenCustom(tone, volume);
+  };
 
   // Mantener reloj de cocina actualizado cada segundo para cronómetros
   useEffect(() => {
@@ -76,6 +120,11 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
 
   // Descomponer comandas en RONDAS activas para la cocina del restaurante actual
   const kitchenRoundCards = useMemo<KitchenRoundCardData[]>(() => {
+    // Si el restaurante está configurado sin cocina, no genera tarjetas para el KDS
+    if (currentRestaurant?.usaCocina === false) {
+      return [];
+    }
+
     const cards: KitchenRoundCardData[] = [];
 
     const activeOrders = orders.filter(
@@ -164,10 +213,28 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
   const prepCards = useMemo(() => kitchenRoundCards.filter(c => c.roundStatus === 'aceptado' || c.roundStatus === 'en_preparacion'), [kitchenRoundCards]);
   const recojoCards = useMemo(() => kitchenRoundCards.filter(c => c.roundStatus === 'listo'), [kitchenRoundCards]);
 
-  // Alarma sonora continua para pedidos/rondas entrantes pendientes de recibir (pendiente_cocina)
+  // Alarma sonora y háptica para pedidos/rondas entrantes pendientes de recibir (pendiente_cocina)
   useEffect(() => {
-    if (nuevosCards.length > 0 && audioEnabled) {
-      sounds.startRepeatingAlarm('kitchen-pending-orders', 'kitchen', 3600);
+    if (nuevosCards.length > 0 && notifConfig.soundEnabled) {
+      // Vibración háptica en dispositivos táctiles si está activada
+      if (notifConfig.vibration && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        try {
+          navigator.vibrate([160, 90, 160]);
+        } catch (e) {}
+      }
+
+      if (notifConfig.alarmMode === 'continuous') {
+        const intervalMs = Math.max(2000, (notifConfig.repeatIntervalSeconds || 4) * 1000);
+        sounds.startRepeatingAlarm(
+          'kitchen-pending-orders',
+          'kitchen',
+          intervalMs,
+          () => sounds.playKitchenCustom(notifConfig.tone, notifConfig.volume)
+        );
+      } else {
+        // Modo 'once': suena una sola vez al entrar nuevos pedidos
+        sounds.playKitchenCustom(notifConfig.tone, notifConfig.volume);
+      }
     } else {
       sounds.stopRepeatingAlarm('kitchen-pending-orders');
     }
@@ -175,7 +242,15 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
     return () => {
       sounds.stopRepeatingAlarm('kitchen-pending-orders');
     };
-  }, [nuevosCards.length, audioEnabled]);
+  }, [
+    nuevosCards.length, 
+    notifConfig.soundEnabled, 
+    notifConfig.alarmMode, 
+    notifConfig.tone, 
+    notifConfig.volume, 
+    notifConfig.repeatIntervalSeconds,
+    notifConfig.vibration
+  ]);
 
   // 1. ACEPTAR RONDA: pendiente_cocina → aceptado
   const handleAcceptRound = async (card: KitchenRoundCardData) => {
@@ -268,7 +343,9 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
 
   // 3. MARCAR RONDA LISTA: en_preparacion → listo (Alerta sonora simultánea a Mesero y Caja)
   const handleReadyRound = async (card: KitchenRoundCardData) => {
-    sounds.playOrderReady();
+    if (notifConfig.soundEnabled && notifConfig.soundOnReady) {
+      sounds.playOrderReady();
+    }
     haptics.orderReady();
     try {
       if (card.order.rondas && card.order.rondas.length > 0) {
@@ -366,18 +443,28 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
 
     // Cronómetros específicos de esta ronda:
     const prepElapsedMins = getElapsedMinutes(aceptadoEn || enviadoEn);
-    const isPrepDelayed = prepElapsedMins >= 15 && (isAccepted || isCooking);
+    const overdueThreshold = notifConfig.overdueMinutes || 15;
+    const isPrepDelayed = prepElapsedMins >= overdueThreshold && (isAccepted || isCooking);
 
     // Esperando recojo: tiempo desde que esta ronda se marcó lista
     const readyElapsedMins = getElapsedMinutes(listoEn || enviadoEn);
     const isUncollectedAlert = isReady && readyElapsedMins >= 10;
 
+    const isFlashing = isPending && notifConfig.visualFlashing;
+    const pendingBorderClass = isFlashing
+      ? (notifConfig.flashSpeed === 'fast' 
+          ? 'bg-neutral-900 border-2 border-orange-500 shadow-orange-500/30 ring-2 ring-orange-500/60 animate-pulse'
+          : 'bg-neutral-900 border-2 border-orange-500 shadow-orange-500/20 ring-1 ring-orange-500/40 animate-pulse')
+      : 'bg-neutral-900 border-orange-500 shadow-orange-500/10 ring-1 ring-orange-500/30';
+
+    const highContrastClass = notifConfig.highContrast ? 'border-2 border-neutral-600' : 'border';
+
     return (
       <div
         key={cardKey}
-        className={`w-full rounded-2xl flex flex-col overflow-hidden shadow-xl transition-all border shrink-0 ${
+        className={`w-full rounded-2xl flex flex-col overflow-hidden shadow-xl transition-all shrink-0 ${highContrastClass} ${
           isPending 
-            ? 'bg-neutral-900 border-orange-500 shadow-orange-500/10 ring-1 ring-orange-500/30' 
+            ? pendingBorderClass
             : isAccepted || isCooking
               ? isPrepDelayed 
                 ? 'bg-neutral-900 border-red-500 shadow-red-500/20 animate-pulse' 
@@ -465,7 +552,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
                   </div>
                   {isPrepDelayed && (
                     <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
-                      <AlertTriangle className="w-3 h-3" /> +15 MIN DEMORA
+                      <AlertTriangle className="w-3 h-3" /> +{overdueThreshold} MIN DEMORA
                     </div>
                   )}
                   {isAccepted && (
@@ -484,65 +571,52 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
           </div>
         </div>
 
-        {/* Lista de Platos de ESTA RONDA */}
-        <div className="p-3.5 space-y-2.5 bg-neutral-900/95 divide-y divide-neutral-800/80 max-h-72 overflow-y-auto">
-          <div className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center justify-between pb-1">
+        {/* Lista de Platos de ESTA RONDA (Doble Columna para Maximizar Espacio) */}
+        <div className="p-3 bg-neutral-900/95 max-h-80 overflow-y-auto">
+          <div className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider flex items-center justify-between pb-1.5 mb-2 border-b border-neutral-800/80">
             <span>Platos a preparar (Ronda {roundNumber})</span>
             <span className="text-neutral-500 font-mono text-[10px]">Envío: {new Date(enviadoEn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           </div>
 
-          {roundItems.map((item, idx) => {
-            const isItemReady = item.estado === 'listo';
-            return (
-              <div key={item.id || idx} className="pt-2 first:pt-0">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2.5 flex-1">
+          <div className={roundItems.length >= 2 ? "grid grid-cols-1 sm:grid-cols-2 gap-2" : "space-y-2"}>
+            {roundItems.map((item, idx) => {
+              const isItemReady = item.estado === 'listo';
+              return (
+                <div key={item.id || idx} className="p-2.5 rounded-xl bg-neutral-950 border border-neutral-800/90 flex flex-col justify-between">
+                  <div className="flex items-start gap-2">
                     <button
                       type="button"
                       onClick={() => handleToggleItemStatus(card, item, idx)}
                       title="Marcar plato individual como listo/pendiente"
-                      className={`w-7 h-7 rounded-lg font-black text-sm flex items-center justify-center border transition shrink-0 ${
+                      className={`w-7 h-7 rounded-lg font-black text-xs sm:text-sm flex items-center justify-center border transition shrink-0 ${
                         isItemReady 
                           ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm' 
                           : 'bg-neutral-800 text-amber-400 border-neutral-700 hover:border-amber-400'
                       }`}
                     >
-                      {isItemReady ? <Check className="w-4 h-4 stroke-[3]" /> : item.cantidad}
+                      {isItemReady ? <Check className="w-4 h-4 stroke-[3]" /> : `${item.cantidad}x`}
                     </button>
-                    {(item.fotoUrl || item.imagenUrl) ? (
-                      <img
-                        src={item.fotoUrl || item.imagenUrl || ''}
-                        alt={item.nombre}
-                        referrerPolicy="no-referrer"
-                        className="w-10 h-10 rounded-lg object-cover border border-neutral-700 shrink-0 shadow-xs"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-10 h-10 rounded-lg bg-neutral-800 border border-neutral-700 flex items-center justify-center text-neutral-500 shrink-0">
-                        <Utensils className="w-4 h-4" />
-                      </div>
-                    )}
                     <div className="flex-1 min-w-0">
-                      <div className={`font-bold text-sm leading-snug ${isItemReady ? 'line-through text-neutral-500' : 'text-neutral-100'}`}>
+                      <div className={`font-extrabold text-xs sm:text-sm leading-tight ${isItemReady ? 'line-through text-neutral-500' : 'text-neutral-100'}`}>
                         {item.nombre}
                       </div>
                       {item.comensalNombre && (
-                        <span className="inline-block text-[10px] font-bold text-purple-300 bg-purple-950/60 px-2 py-0.5 rounded-md border border-purple-800/40 mt-0.5">
+                        <span className="inline-block text-[10px] font-bold text-purple-300 bg-purple-950/60 px-1.5 py-0.2 rounded border border-purple-800/40 mt-1">
                           Para: {item.comensalNombre} {item.comensalNumero ? `(C${item.comensalNumero})` : ''}
                         </span>
                       )}
                     </div>
                   </div>
-                </div>
 
-                {item.notas && (
-                  <div className="mt-1.5 ml-9 text-xs font-semibold text-orange-400 bg-orange-950/40 px-2.5 py-1 rounded-lg border border-orange-900/50">
-                    ⚠️ Nota: {item.notas}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  {item.notas && (
+                    <div className="mt-1.5 text-[11px] font-semibold text-orange-400 bg-orange-950/40 px-2 py-1 rounded-lg border border-orange-900/50">
+                      ⚠️ {item.notas}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {/* Desplegable: Ver mesa completa (Rondas anteriores) */}
@@ -701,9 +775,11 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
             </span>
           </div>
 
+          {/* Control rápido de Mute/Unmute */}
           <button
+            id="toggle-kitchen-audio-quick-btn"
             type="button"
-            onClick={() => setAudioEnabled(!audioEnabled)}
+            onClick={handleToggleAudio}
             className={`p-2 rounded-xl border transition flex items-center gap-1.5 text-xs font-bold ${
               audioEnabled 
                 ? 'bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white' 
@@ -712,6 +788,18 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
           >
             {audioEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-red-400" />}
             <span className="hidden sm:inline">{audioEnabled ? 'Alarma ON' : 'Silencio'}</span>
+          </button>
+
+          {/* Botón para Configuración Completa de Alertas Sonoras y Visuales */}
+          <button
+            id="open-kitchen-alerts-settings-btn"
+            type="button"
+            onClick={() => setShowNotifModal(true)}
+            className="p-2 sm:px-3 rounded-xl border border-neutral-700 bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white transition flex items-center gap-1.5 text-xs font-bold shadow-xs active:scale-95"
+            title="Ajustar alertas sonoras y visuales"
+          >
+            <Sliders className="w-4 h-4 text-orange-400" />
+            <span className="hidden md:inline">Alertas Cocina</span>
           </button>
         </div>
       </div>
@@ -729,8 +817,8 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
         </div>
       )}
 
-      {/* Alerta de Nuevos Pedidos / Aceptar Todos */}
-      {nuevosCards.length > 0 && (
+      {/* Alerta de Nuevos Pedidos / Aceptar Todos (Si está habilitado en configuración) */}
+      {nuevosCards.length > 0 && notifConfig.showTopBanner && (
         <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-700 text-white px-4 py-2.5 flex items-center justify-between shadow-lg">
           <div className="flex items-center gap-2 sm:gap-3">
             <div className="w-7 h-7 rounded-lg bg-white/20 flex items-center justify-center animate-bounce">
@@ -741,14 +829,14 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
                 ¡{nuevosCards.length} ronda(s) nueva(s) por aceptar!
               </span>
               <span className="text-xs text-orange-100 ml-2 hidden sm:inline">
-                (Emite alerta sonora continua hasta confirmar "Aceptar")
+                ({notifConfig.alarmMode === 'continuous' ? 'Alarma continua activa' : 'Notificación única'})
               </span>
             </div>
           </div>
           <button
             type="button"
             onClick={handleAcceptAllPending}
-            className="px-4 py-1.5 bg-white text-orange-900 hover:bg-orange-50 rounded-xl font-black text-xs transition shadow-md flex items-center gap-1.5"
+            className="px-4 py-1.5 bg-white text-orange-900 hover:bg-orange-50 rounded-xl font-black text-xs transition shadow-md flex items-center gap-1.5 active:scale-95"
           >
             <CheckCircle2 className="w-4 h-4 text-orange-600" />
             <span>ACEPTAR TODAS LAS RONDAS</span>
@@ -788,7 +876,25 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
 
       {/* Main KDS 3-Queue Columns */}
       <div className="flex-1 overflow-hidden p-4">
-        {kitchenRoundCards.length === 0 ? (
+        {currentRestaurant?.usaCocina === false ? (
+          <div className="w-full h-full flex flex-col items-center justify-center text-center p-6 max-w-lg mx-auto">
+            <div className="w-20 h-20 rounded-3xl bg-purple-950/80 border border-purple-800 text-purple-400 flex items-center justify-center mb-4 shadow-xl">
+              <Utensils className="w-10 h-10" />
+            </div>
+            <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-purple-900/60 text-purple-300 border border-purple-700/60 mb-2">
+              Modo Sin Cocina Activo
+            </span>
+            <h3 className="text-xl font-extrabold text-neutral-200">
+              {currentRestaurant?.nombre || 'Este local'} opera directo a mostrador
+            </h3>
+            <p className="text-xs text-neutral-400 mt-2 leading-relaxed">
+              Las comandas no requieren preparación en cocina ni emiten alarmas de KDS. Los pedidos pasan automáticamente a estado <strong>Listo</strong> para despacho y cobro en el Mostrador / POS.
+            </p>
+            <div className="mt-5 p-3.5 rounded-2xl bg-neutral-900 border border-neutral-800 text-neutral-400 text-xs">
+              💡 Puedes cambiar esta preferencia en cualquier momento desde <strong>Admin &gt; Restaurantes &gt; Editar Local</strong>.
+            </div>
+          </div>
+        ) : kitchenRoundCards.length === 0 ? (
           <div className="w-full h-full flex flex-col items-center justify-center text-center text-neutral-600">
             <ChefHat className="w-16 h-16 stroke-1 text-neutral-700 mb-3 animate-pulse" />
             <p className="text-base font-bold text-neutral-400">Cocina al día. No hay rondas activas.</p>
@@ -956,6 +1062,15 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
           onClose={() => setComandaToPrint(null)}
         />
       )}
+
+      {/* Modal de Configuración de Notificaciones y Alertas Sonoras/Visuales */}
+      <KitchenNotificationModal
+        isOpen={showNotifModal}
+        onClose={() => setShowNotifModal(false)}
+        config={notifConfig}
+        onSaveConfig={handleSaveNotifConfig}
+        onTestSound={handleTestSound}
+      />
 
     </div>
   );

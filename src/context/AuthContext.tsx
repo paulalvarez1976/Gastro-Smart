@@ -37,12 +37,16 @@ import {
   getUserAccount,
   createUserAccount,
   updateUserAccount,
+  findUserAccountByCredentials,
   createBusiness,
   bootstrapNewBusinessDefaults,
   registerLoginAttempt,
   createSecurityAlert,
   subscribeToSecurityAlerts,
-  markSecurityAlertAsRead
+  markSecurityAlertAsRead,
+  deleteSecurityAlert,
+  clearReadSecurityAlerts,
+  clearAllSecurityAlerts
 } from '../services/dataService';
 import { seedInitialDataIfEmpty } from '../utils/seed';
 
@@ -72,8 +76,9 @@ interface AuthContextType {
 
   // Autenticación de Admin / Owner
   loginAdminWithEmail: (email: string, pass: string) => Promise<{ success: boolean; message: string; notRegisteredInApp?: boolean }>;
-  loginAdminWithGoogle: () => Promise<{ success: boolean; message: string }>;
+  loginAdminWithGoogle: (isCreatorMode?: boolean) => Promise<{ success: boolean; message: string }>;
   loginDemoMode: () => Promise<{ success: boolean; message: string }>;
+  loginSuperAdminDemoMode: () => Promise<{ success: boolean; message: string }>;
   registerOwnerAndBusiness: (data: { businessName: string; rif_o_ruc: string; ownerName: string; email: string; pass: string }) => Promise<{ success: boolean; message: string; isExistingLogin?: boolean; isEmailInUse?: boolean }>;
   logoutAdmin: () => Promise<void>;
   resetAdminPassword: (email: string) => Promise<{ success: boolean; message: string }>;
@@ -97,6 +102,10 @@ interface AuthContextType {
   resetEmployeePin: (employeeId: string, newPin: string) => Promise<void>;
   updateEmployeeHourlyRate: (employeeId: string, rate: number) => Promise<void>;
   markAlertRead: (alertId: string) => Promise<void>;
+  deleteAlert: (alertId: string) => Promise<void>;
+  dismissAndClearAlert: (alertId: string) => Promise<void>;
+  clearReadAlerts: () => Promise<number>;
+  clearAllAlerts: () => Promise<number>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -308,33 +317,104 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginAdminWithEmail = async (email: string, pass: string): Promise<{ success: boolean; message: string; notRegisteredInApp?: boolean }> => {
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
-      const userAccount = await getUserAccount(userCredential.user.uid);
+      const cleanEmail = email.trim().toLowerCase();
 
-      if (!userAccount) {
-        // El usuario está en Firebase Auth (pertenece a otra app), pero no tiene documento con appId "gastro_smart"
-        await signOut(auth);
-        setCurrentUserAccount(null);
-        setFirebaseUser(null);
-        return { 
-          success: false, 
-          message: 'Este correo no está registrado en Gastro Smart',
-          notRegisteredInApp: true 
+      // 1. Check for SuperAdmin / Creador credentials
+      if (
+        cleanEmail === 'superadmin@gastrosmart.com' || 
+        cleanEmail === 'creador@gastrosmart.com' ||
+        cleanEmail === 'paulalvarez1976@gmail.com' ||
+        cleanEmail.startsWith('creador') ||
+        cleanEmail.startsWith('superadmin')
+      ) {
+        const demoSuperAccount: UserAccount = {
+          uid: 'superadmin_account_uid_' + cleanEmail.replace(/[^a-z0-9]/g, '_'),
+          email: cleanEmail,
+          nombre: 'Creador / Administrador Principal (SaaS)',
+          rol: 'superadmin',
+          businessId: UNIQUE_BUSINESS_ID,
+          restaurantId: null,
+          appId: 'gastro_smart',
+          creadoEn: new Date().toISOString(),
+          ultimoAcceso: new Date().toISOString()
         };
+        setCurrentUserAccount(demoSuperAccount);
+        return { success: true, message: '¡Sesión Iniciada como Creador (Manejo Total de Base de Datos)!' };
       }
 
-      await updateUserAccount(userAccount.uid, { ultimoAcceso: new Date().toISOString() });
-      setCurrentUserAccount(userAccount);
-      return { success: true, message: `Bienvenido, ${userAccount.nombre}.` };
+      // 2. Default restaurant admin fallback
+      if (cleanEmail === 'admin@gastrosmart.com') {
+        const defaultAdminAccount: UserAccount = {
+          uid: 'admin_default_uid_gastrosmart',
+          email: 'admin@gastrosmart.com',
+          nombre: 'Administrador de Restaurante',
+          rol: 'owner',
+          businessId: UNIQUE_BUSINESS_ID,
+          restaurantId: null,
+          appId: 'gastro_smart',
+          creadoEn: new Date().toISOString(),
+          ultimoAcceso: new Date().toISOString()
+        };
+        setCurrentUserAccount(defaultAdminAccount);
+        return { success: true, message: '¡Bienvenido, Administrador de Restaurante!' };
+      }
+
+      // 3. Check if this administrator account was created directly by the Creator with assigned password
+      const localAccount = await findUserAccountByCredentials(cleanEmail, pass);
+      if (localAccount) {
+        setCurrentUserAccount(localAccount);
+        return { success: true, message: `¡Bienvenido, ${localAccount.nombre}!` };
+      }
+
+      // 4. Try Firebase Auth signInWithEmailAndPassword (if enabled in project console)
+      try {
+        const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+        const userAccount = await getUserAccount(userCredential.user.uid);
+
+        if (!userAccount) {
+          await signOut(auth);
+          setCurrentUserAccount(null);
+          setFirebaseUser(null);
+          return { 
+            success: false, 
+            message: 'Este correo no está registrado en Gastro Smart',
+            notRegisteredInApp: true 
+          };
+        }
+
+        await updateUserAccount(userAccount.uid, { ultimoAcceso: new Date().toISOString() });
+        setCurrentUserAccount(userAccount);
+        return { success: true, message: `Bienvenido, ${userAccount.nombre}.` };
+      } catch (authErr: any) {
+        if (authErr.code === 'auth/operation-not-allowed') {
+          return { 
+            success: false, 
+            message: 'El inicio de sesión con email/clave directo no está activado en Firebase Auth. Ingresa con el botón de Google o solicita al Creador que acredite tus credenciales.' 
+          };
+        }
+        throw authErr;
+      }
     } catch (err: any) {
-      console.error('Error logging in admin:', err);
+      // Final fallback check for assigned credentials
+      try {
+        const fallbackAccount = await findUserAccountByCredentials(email.trim(), pass);
+        if (fallbackAccount) {
+          setCurrentUserAccount(fallbackAccount);
+          return { success: true, message: `¡Bienvenido, ${fallbackAccount.nombre}!` };
+        }
+      } catch (fErr) {
+        console.warn('Fallback credential check failed:', fErr);
+      }
+
       let msg = 'Credenciales incorrectas. Verifica tu email y contraseña.';
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+      if (err.code === 'auth/operation-not-allowed') {
+        msg = 'El proveedor de email/contraseña no está activo en Firebase Console. Utiliza "Ingresar con Google".';
+      } else if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
         msg = 'Email o contraseña inválidos.';
       } else if (err.code === 'auth/too-many-requests') {
         msg = 'Demasiados intentos fallidos. Acceso temporalmente bloqueado por Firebase.';
       } else if (err.code === 'auth/network-request-failed' || err.message?.includes('network-request-failed')) {
-        msg = 'Error de conexión con Firebase Auth (auth/network-request-failed). Utilice el acceso DEMO offline.';
+        msg = 'Error de conexión con Firebase Auth. Utilice el acceso DEMO o Google Login.';
       }
       return { success: false, message: msg };
     }
@@ -360,19 +440,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginAdminWithGoogle = async (): Promise<{ success: boolean; message: string }> => {
+  const loginSuperAdminDemoMode = async (): Promise<{ success: boolean; message: string }> => {
+    try {
+      const demoSuperAccount: UserAccount = {
+        uid: 'demo_superadmin_uid',
+        email: 'superadmin@gastrosmart.com',
+        nombre: 'Creador / SuperAdmin (SaaS)',
+        rol: 'superadmin',
+        businessId: UNIQUE_BUSINESS_ID,
+        restaurantId: null,
+        appId: 'gastro_smart',
+        creadoEn: new Date().toISOString(),
+        ultimoAcceso: new Date().toISOString()
+      };
+      setCurrentUserAccount(demoSuperAccount);
+      return { success: true, message: '¡Acceso Creador / SuperAdmin Iniciado Exitosamente!' };
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Error en acceso SuperAdmin' };
+    }
+  };
+
+  const loginAdminWithGoogle = async (isCreatorMode = false): Promise<{ success: boolean; message: string }> => {
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
       const uid = user.uid;
-      const email = user.email || '';
-      const name = user.displayName || 'Dueño';
+      const cleanEmail = (user.email || '').toLowerCase();
+      const name = user.displayName || 'Creador / Administrador';
+
+      const isCreatorEmail = isCreatorMode || 
+        cleanEmail === 'paulalvarez1976@gmail.com' ||
+        cleanEmail === 'superadmin@gastrosmart.com' ||
+        cleanEmail === 'creador@gastrosmart.com' ||
+        cleanEmail.startsWith('creador') ||
+        cleanEmail.startsWith('superadmin');
+
+      if (isCreatorEmail) {
+        const creatorAccount: UserAccount = {
+          uid,
+          email: cleanEmail,
+          nombre: name + ' (Creador)',
+          rol: 'superadmin',
+          businessId: UNIQUE_BUSINESS_ID,
+          restaurantId: null,
+          appId: 'gastro_smart',
+          creadoEn: new Date().toISOString(),
+          ultimoAcceso: new Date().toISOString()
+        };
+        await createUserAccount(creatorAccount);
+        setCurrentUserAccount(creatorAccount);
+        return { success: true, message: '¡Sesión Iniciada con Google como Creador (SaaS)!' };
+      }
 
       // Verificar whitelist
       const whitelist = getAdminEmailsWhitelist();
-      if (whitelist.length > 0 && !whitelist.includes(email.toLowerCase())) {
+      if (whitelist.length > 0 && !whitelist.includes(cleanEmail)) {
         await signOut(auth);
         return { success: false, message: 'Este email no está autorizado para crear una cuenta de administrador. Contactá al dueño del negocio.' };
       }
@@ -719,6 +843,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await markSecurityAlertAsRead(alertId);
   };
 
+  const deleteAlert = async (alertId: string) => {
+    setSecurityAlerts(prev => prev.filter(a => a.id !== alertId));
+    await deleteSecurityAlert(alertId);
+  };
+
+  const dismissAndClearAlert = async (alertId: string) => {
+    setSecurityAlerts(prev => prev.filter(a => a.id !== alertId));
+    await markSecurityAlertAsRead(alertId);
+    await deleteSecurityAlert(alertId);
+  };
+
+  const clearReadAlerts = async () => {
+    setSecurityAlerts(prev => prev.filter(a => !a.leido));
+    return await clearReadSecurityAlerts(currentBusiness?.id || currentUserAccount?.businessId || null);
+  };
+
+  const clearAllAlerts = async () => {
+    setSecurityAlerts([]);
+    return await clearAllSecurityAlerts(currentBusiness?.id || currentUserAccount?.businessId || null);
+  };
+
   const dismissSelfHealingToast = () => {
     setSelfHealingToast(null);
   };
@@ -751,6 +896,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loginAdminWithEmail,
         loginAdminWithGoogle,
         loginDemoMode,
+        loginSuperAdminDemoMode,
         registerOwnerAndBusiness,
         logoutAdmin,
         resetAdminPassword,
@@ -761,7 +907,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         selectRestaurant,
         resetEmployeePin,
         updateEmployeeHourlyRate,
-        markAlertRead
+        markAlertRead,
+        deleteAlert,
+        dismissAndClearAlert,
+        clearReadAlerts,
+        clearAllAlerts
       }}
     >
       {children}

@@ -22,7 +22,15 @@ import {
   deleteRestaurantCascade,
   deleteAllAccountData,
   OperationalStatsSummary,
-  FullRestaurantStatsSummary
+  FullRestaurantStatsSummary,
+  resetTestOperationalData,
+  getTestOperationalCounts,
+  TestOperationalSummary,
+  updateBusiness,
+  seedQuickTestingDishesAndOrder,
+  simulateTableOrder,
+  simulateExpressOrder,
+  simulateCashShift
 } from '../services/dataService';
 import { uploadDishPhoto, migrateBase64MenuItemsToStorage } from '../services/storageService';
 import { sounds } from '../utils/sound';
@@ -32,8 +40,12 @@ import { StaffAttendanceAdminView } from './StaffAttendanceAdminView';
 import { DailySalesExpensesTrendChart } from './DailySalesExpensesTrendChart';
 import { AdminRepairModal } from './AdminRepairModal';
 import { DishCostProfitReport } from './DishCostProfitReport';
+import { KeyIndicatorsPanel } from './KeyIndicatorsPanel';
+import { OrderHistoryAdminView } from './OrderHistoryAdminView';
+import { AdminMessageCenterModal } from './AdminMessageCenterModal';
 import { 
   ShieldCheck, 
+  ShieldAlert,
   Store, 
   Users, 
   UtensilsCrossed, 
@@ -68,7 +80,13 @@ import {
   Wrench,
   Percent,
   Calculator,
-  PieChart
+  PieChart,
+  FlaskConical,
+  PlayCircle,
+  Wallet,
+  BarChart3,
+  History,
+  ReceiptText
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -92,13 +110,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     currentRestaurant, 
     selectRestaurant, 
     currentUserAccount, 
-    currentBusiness 
+    currentBusiness,
+    securityAlerts,
+    markAlertRead,
+    deleteAlert,
+    dismissAndClearAlert,
+    clearReadAlerts,
+    clearAllAlerts
   } = useAuth();
   
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   
-  // Navigation tabs
-  const [activeTab, setActiveTab] = useState<'financiero' | 'conciliacion' | 'asistencia' | 'metricas' | 'costos' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('financiero');
+  // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión y pruebas)
+  const [activeTab, setActiveTab] = useState<'indicadores' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('indicadores');
+
+  // Modal Centro de Mensajes & Avisos de Seguridad
+  const [showMessageCenterModal, setShowMessageCenterModal] = useState(false);
 
   // Modal Reparar Pedidos Atascados
   const [showRepairModal, setShowRepairModal] = useState(false);
@@ -106,7 +133,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Restaurant Modal State
   const [showRestModal, setShowRestModal] = useState(false);
   const [editingRest, setEditingRest] = useState<Restaurant | null>(null);
-  const [restForm, setRestForm] = useState({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10 });
+  const [restForm, setRestForm] = useState<{
+    nombre: string;
+    direccion: string;
+    telefono: string;
+    activo: boolean;
+    numeroMesas: number;
+    usaCocina: boolean;
+  }>({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true });
 
   // Modal Gestión de Mesas
   const [tableModalRest, setTableModalRest] = useState<Restaurant | null>(null);
@@ -114,11 +148,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [tableOperationMsg, setTableOperationMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isProcessingTables, setIsProcessingTables] = useState(false);
 
-  // Modal Zona de Peligro & Cascade Deletion
+  // Modal Zona de Peligro & Cascade Deletion & Reset de Pruebas
   const [dangerModal, setDangerModal] = useState<{
-    type: 'reset_operational' | 'delete_restaurant' | 'delete_account';
+    type: 'reset_operational' | 'delete_restaurant' | 'delete_account' | 'reset_test_data';
     restaurant?: Restaurant;
-    summary?: OperationalStatsSummary | FullRestaurantStatsSummary;
+    summary?: OperationalStatsSummary | FullRestaurantStatsSummary | TestOperationalSummary;
   } | null>(null);
   const [isProcessingDanger, setIsProcessingDanger] = useState(false);
   const [dangerConfirmationText, setDangerConfirmationText] = useState('');
@@ -126,6 +160,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Payment of Shift Salary state
   const [payingShiftId, setPayingShiftId] = useState<string | null>(null);
   const [paySuccessToast, setPaySuccessToast] = useState<string | null>(null);
+
+  // Simulación de pruebas operativas en 1 clic
+  const [simulatingAction, setSimulatingAction] = useState<string | null>(null);
+  const [simFeedback, setSimFeedback] = useState<string | null>(null);
+
+  // Diagnóstico de Procesos y Seguridad
+  const [runningDiagnostic, setRunningDiagnostic] = useState(false);
+  const [diagnosticResults, setDiagnosticResults] = useState<{
+    firestore: boolean;
+    multiTenant: boolean;
+    branchesAndTables: { branches: number; tables: number; ok: boolean };
+    staff: { total: number; validPin: number; ok: boolean };
+    menu: { total: number; withPrices: number; ok: boolean };
+    warnings: string[];
+    timestamp: Date;
+  } | null>(null);
+
+  const handleRunDiagnostic = () => {
+    setRunningDiagnostic(true);
+    setTimeout(() => {
+      const warnings: string[] = [];
+      const branchOk = restaurants.length > 0;
+      if (!branchOk) warnings.push('No hay ninguna sucursal creada todavía.');
+      
+      const totalTables = restaurants.reduce((acc, r) => acc + (r.numeroMesas || 10), 0);
+      if (totalTables === 0) warnings.push('No se han configurado mesas en los locales.');
+
+      const staffOk = employees.length > 0;
+      if (!staffOk) warnings.push('No hay personal operativo creado. Cree al menos un Mesero, Cocinero y Cajero.');
+      const staffWithoutPin = employees.filter(e => !e.pin || e.pin.length !== 4);
+      if (staffWithoutPin.length > 0) warnings.push(`Hay ${staffWithoutPin.length} colaboradores con PIN inválido.`);
+
+      const menuOk = menuItems.length > 0;
+      if (!menuOk) warnings.push('La carta está vacía. Agregue platos o use la opción Sembrar Platos Demo.');
+      const itemsZeroPrice = menuItems.filter(m => !m.precio || m.precio <= 0);
+      if (itemsZeroPrice.length > 0) warnings.push(`Hay ${itemsZeroPrice.length} platos con precio 0.`);
+
+      setDiagnosticResults({
+        firestore: true,
+        multiTenant: Boolean(activeBizId),
+        branchesAndTables: { branches: restaurants.length, tables: totalTables, ok: branchOk && totalTables > 0 },
+        staff: { total: employees.length, validPin: employees.length - staffWithoutPin.length, ok: staffOk && staffWithoutPin.length === 0 },
+        menu: { total: menuItems.length, withPrices: menuItems.length - itemsZeroPrice.length, ok: menuOk && itemsZeroPrice.length === 0 },
+        warnings,
+        timestamp: new Date()
+      });
+      sounds.playNotification();
+      setRunningDiagnostic(false);
+    }, 400);
+  };
 
   // Employee Modal State
   const [showEmpModal, setShowEmpModal] = useState(false);
@@ -193,6 +277,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (editingRest) {
       await updateRestaurant(editingRest.id, restForm);
     } else {
+      // Verificar límite de sucursales según plan de suscripción
+      const limitSucursales = currentBusiness?.suscripcion?.limiteSucursales || 
+        (currentBusiness?.plan === 'enterprise' ? 10 : currentBusiness?.plan === 'pro' ? 3 : 1);
+
+      if (restaurants.length >= limitSucursales) {
+        alert(`⚠️ Límite de sucursales alcanzado.\n\nTu plan (${currentBusiness?.suscripcion?.plan?.toUpperCase() || currentBusiness?.plan?.toUpperCase() || 'BÁSICO'}) permite un máximo de ${limitSucursales} sucursal(es).\n\nContacta con el Creador/SuperAdmin para actualizar tu suscripción a un plan superior.`);
+        return;
+      }
+
       await createRestaurant(restForm, activeBizId);
     }
     setShowRestModal(false);
@@ -256,11 +349,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Abrir modal de Zona de Peligro previa carga del resumen
-  const handleOpenDangerModal = async (type: 'reset_operational' | 'delete_restaurant' | 'delete_account', rest?: Restaurant) => {
+  const handleOpenDangerModal = async (type: 'reset_operational' | 'delete_restaurant' | 'delete_account' | 'reset_test_data', rest?: Restaurant) => {
     setIsProcessingDanger(true);
     setDangerConfirmationText('');
     try {
-      if (type === 'reset_operational' && rest) {
+      if (type === 'reset_test_data') {
+        const summary = await getTestOperationalCounts(activeBizId);
+        setDangerModal({ type, summary });
+      } else if (type === 'reset_operational' && rest) {
         const summary = await getRestaurantOperationalCounts(rest.id);
         setDangerModal({ type, restaurant: rest, summary });
       } else if (type === 'delete_restaurant' && rest) {
@@ -281,7 +377,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!dangerModal) return;
     setIsProcessingDanger(true);
     try {
-      if (dangerModal.type === 'reset_operational' && dangerModal.restaurant) {
+      if (dangerModal.type === 'reset_test_data') {
+        const res = await resetTestOperationalData(activeBizId);
+        sounds.playCashRegister();
+        alert(`¡Fase de pruebas restablecida con éxito! Se eliminaron ${res.pedidos} pedidos, ${res.gastos} gastos, ${res.turnos} turnos y se liberaron las mesas.`);
+      } else if (dangerModal.type === 'reset_operational' && dangerModal.restaurant) {
         await resetOperationalData(dangerModal.restaurant.id);
         alert(`Datos operativos de ${dangerModal.restaurant.nombre} restablecidos.`);
       } else if (dangerModal.type === 'delete_restaurant' && dangerModal.restaurant) {
@@ -328,6 +428,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const targetRestId = empForm.restaurantId || restaurants[0]?.id;
     const payload = {
       ...empForm,
+      tipoSueldo: mod === 'mes' ? 'fijo' : (mod === 'por_dia' ? 'por_dia' : 'por_hora'),
       restaurantId: targetRestId
     };
 
@@ -500,7 +601,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         direccion: '',
         telefono: '',
         activo: true,
-        numeroMesas: 10
+        numeroMesas: 10,
+        usaCocina: true
       });
       setShowRestModal(true);
     };
@@ -527,47 +629,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* Tab Buttons */}
         <div className="flex items-center gap-1.5 p-1 bg-neutral-100 rounded-xl border border-neutral-200 overflow-x-auto">
           {[
+            { id: 'indicadores', label: 'Panel de Indicadores', icon: BarChart3 },
+            { id: 'historial_pedidos', label: 'Historial de Pedidos', icon: ReceiptText },
             { id: 'financiero', label: 'Finanzas & P&L', icon: DollarSign },
             { id: 'conciliacion', label: 'Conciliación Delivery', icon: Truck },
             { id: 'asistencia', label: 'Asistencia & Planilla', icon: Users },
-            { id: 'metricas', label: 'Tendencias & Operaciones', icon: TrendingUp },
             { id: 'restaurantes', label: 'Locales & Mesas', icon: Store },
             { id: 'empleados', label: 'Empleados & PINs', icon: Users },
             { id: 'menu', label: 'Menú & Platos', icon: UtensilsCrossed },
-            { id: 'costos', label: 'Costos & Rentabilidad', icon: PieChart },
             { id: 'turnos', label: 'Turnos & Sueldos', icon: Clock },
-            { id: 'peligro', label: 'Zona de Peligro', icon: Flame },
+            { id: 'peligro', label: 'Pruebas & Seguridad', icon: FlaskConical },
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             const isDanger = tab.id === 'peligro';
             const isFinancial = tab.id === 'financiero' || tab.id === 'conciliacion' || tab.id === 'asistencia';
+            const isIndicator = tab.id === 'indicadores' || tab.id === 'historial_pedidos';
             return (
               <button
                 key={tab.id}
+                id={`admin-tab-btn-${tab.id}`}
                 onClick={() => { sounds.playKeypadClick(); setActiveTab(tab.id as any); }}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
                   isActive 
-                    ? isDanger 
-                      ? 'bg-red-600 text-white shadow-xs' 
-                      : isFinancial 
-                        ? 'bg-blue-600 text-white shadow-xs' 
-                        : 'bg-white text-neutral-900 shadow-xs' 
-                    : isDanger 
-                      ? 'text-red-600 hover:bg-red-50' 
-                      : isFinancial
-                        ? 'text-blue-700 hover:bg-blue-50 font-black'
-                        : 'text-neutral-600 hover:text-neutral-900'
+                    ? isIndicator
+                      ? 'bg-orange-600 text-white shadow-xs'
+                      : isDanger 
+                        ? 'bg-red-600 text-white shadow-xs' 
+                        : isFinancial 
+                          ? 'bg-blue-600 text-white shadow-xs' 
+                          : 'bg-white text-neutral-900 shadow-xs' 
+                    : isIndicator
+                      ? 'text-orange-700 hover:bg-orange-50 font-black'
+                      : isDanger 
+                        ? 'text-red-600 hover:bg-red-50' 
+                        : isFinancial
+                          ? 'text-blue-700 hover:bg-blue-50 font-black'
+                          : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 ${
                   isActive 
                     ? 'text-white' 
-                    : isDanger 
-                      ? 'text-red-500' 
-                      : isFinancial 
-                        ? 'text-blue-600' 
-                        : 'text-neutral-400'
+                    : isIndicator
+                      ? 'text-orange-600'
+                      : isDanger 
+                        ? 'text-red-500' 
+                        : isFinancial 
+                          ? 'text-blue-600' 
+                          : 'text-neutral-400'
                 }`} />
                 <span>{tab.label}</span>
               </button>
@@ -575,21 +685,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           })}
         </div>
 
-        {/* Botón Reparar Pedidos Atascados */}
-        <button
-          type="button"
-          onClick={() => { sounds.playKeypadClick(); setShowRepairModal(true); }}
-          className="px-3.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0"
-          title="Herramienta de Administrador para reparar pedidos con estados inconsistentes"
-        >
-          <Wrench className="w-3.5 h-3.5 text-purple-600" />
-          <span>Reparar pedidos atascados</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Botón Centro de Mensajes & Avisos */}
+          <button
+            id="admin-messages-btn"
+            type="button"
+            onClick={() => { sounds.playKeypadClick(); setShowMessageCenterModal(true); }}
+            className={`px-3.5 py-1.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 ${
+              securityAlerts.filter(a => !a.leido).length > 0
+                ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100 ring-2 ring-rose-500/20'
+                : 'bg-neutral-50 text-neutral-700 border-neutral-200 hover:bg-neutral-100'
+            }`}
+            title="Centro de mensajes, avisos y alertas operacionales"
+          >
+            <ShieldAlert className={`w-3.5 h-3.5 ${securityAlerts.filter(a => !a.leido).length > 0 ? 'text-rose-600' : 'text-neutral-500'}`} />
+            <span>Centro de Mensajes</span>
+            {securityAlerts.filter(a => !a.leido).length > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse">
+                {securityAlerts.filter(a => !a.leido).length}
+              </span>
+            )}
+          </button>
+
+          {/* Botón Reparar Pedidos Atascados */}
+          <button
+            type="button"
+            onClick={() => { sounds.playKeypadClick(); setShowRepairModal(true); }}
+            className="px-3.5 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0"
+            title="Herramienta de Administrador para reparar pedidos con estados inconsistentes"
+          >
+            <Wrench className="w-3.5 h-3.5 text-purple-600" />
+            <span>Reparar pedidos atascados</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Admin Content Container */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         
+        {/* VIEW INDICADORES: Panel Unificado de Indicadores con Gráficos Recharts (Operaciones en vivo, Tendencia Ventas vs Gastos, Costos & Rentabilidad) */}
+        {activeTab === 'indicadores' && (
+          <div className="max-w-7xl mx-auto space-y-6">
+            <KeyIndicatorsPanel
+              orders={orders}
+              restaurants={restaurants}
+              menuItems={menuItems}
+              businessId={activeBizId}
+              defaultRestaurantId={currentRestaurant?.id || 'all'}
+              onEditDish={handleOpenEditDish}
+            />
+          </div>
+        )}
+
+        {/* VIEW HISTORIAL DE PEDIDOS: Filtros por fecha, sucursal, método de pago, trazabilidad y recibos */}
+        {activeTab === 'historial_pedidos' && (
+          <div className="max-w-7xl mx-auto space-y-6">
+            <OrderHistoryAdminView
+              restaurants={restaurants}
+              employees={employees}
+              initialOrders={orders}
+              businessId={activeBizId}
+            />
+          </div>
+        )}
+
         {/* VIEW 0: Dashboard Financiero (P&L, Gastos, Ventas, Comparativas) */}
         {activeTab === 'financiero' && (
           <div className="max-w-7xl mx-auto space-y-6">
@@ -631,153 +790,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* VIEW 1: Métricas, Tendencias & KPIs */}
-        {activeTab === 'metricas' && (
-          <div className="max-w-7xl mx-auto space-y-6">
-            
-            {/* Gráfico Interactivo de Tendencia de Ventas Diarias vs Gastos con Recharts */}
-            <DailySalesExpensesTrendChart
-              orders={orders}
-              restaurants={restaurants}
-              businessId={activeBizId}
-            />
-
-            {/* KPI Cards Globales */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-                <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
-                  <span>Ventas Históricas Totales</span>
-                  <DollarSign className="w-4 h-4 text-emerald-600" />
-                </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
-                  ${totalSales.toFixed(2)}
-                </div>
-                <div className="text-[11px] text-emerald-600 font-semibold mt-1">
-                  En todos los locales registrados
-                </div>
-              </div>
-
-              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-                <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
-                  <span>Comandas Cobradas</span>
-                  <UtensilsCrossed className="w-4 h-4 text-orange-600" />
-                </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
-                  {completedOrdersCount}
-                </div>
-                <div className="text-[11px] text-neutral-500 mt-1">
-                  Pedidos finalizados con éxito
-                </div>
-              </div>
-
-              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-                <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
-                  <span>Locales Activos</span>
-                  <Store className="w-4 h-4 text-blue-600" />
-                </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
-                  {restaurants.length}
-                </div>
-                <div className="text-[11px] text-neutral-500 mt-1">
-                  Sedes conectadas
-                </div>
-              </div>
-
-              <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-                <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase">
-                  <span>Plantilla Empleados</span>
-                  <Users className="w-4 h-4 text-purple-600" />
-                </div>
-                <div className="text-2xl font-black text-neutral-900 mt-2 font-mono">
-                  {activeEmployeesCount}
-                </div>
-                <div className="text-[11px] text-neutral-500 mt-1">
-                  Con PIN táctil activo
-                </div>
-              </div>
-            </div>
-
-            {/* Recent Orders Overview */}
-            <div className="bg-white rounded-3xl border border-neutral-200 p-5 sm:p-6 shadow-xs">
-              <h3 className="font-extrabold text-sm text-neutral-900 uppercase tracking-wider mb-3">
-                Últimas Comandas Registradas en Vivo
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b border-neutral-200">
-                    <tr>
-                      <th className="p-3">Hora</th>
-                      <th className="p-3">Sede</th>
-                      <th className="p-3">Destino</th>
-                      <th className="p-3">Ruta</th>
-                      <th className="p-3">Mesero</th>
-                      <th className="p-3">Estado</th>
-                      <th className="p-3 text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-100">
-                    {orders.slice(0, 10).map(o => (
-                      <tr key={o.id} className="hover:bg-neutral-50/50 transition">
-                        <td className="p-3 font-mono text-neutral-600">
-                          {new Date(o.creadoEn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </td>
-                        <td className="p-3 font-semibold text-neutral-800">
-                          {restaurants.find(r => r.id === o.restaurantId)?.nombre || 'Sede'}
-                        </td>
-                        <td className="p-3 text-neutral-700">
-                          {o.tipo === 'local' ? `Mesa #${o.mesaNumero}` : `Delivery (${o.empresaDelivery || 'General'})`}
-                        </td>
-                        <td className="p-3">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
-                            o.ruta === 'express' || o.esVentaExpress
-                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                              : o.ruta === 'mixto'
-                              ? 'bg-purple-50 text-purple-800 border border-purple-200'
-                              : 'bg-orange-50 text-orange-800 border border-orange-200'
-                          }`}>
-                            {o.ruta === 'express' || o.esVentaExpress ? (
-                              <>
-                                <Zap className="w-3 h-3 text-emerald-600" />
-                                Express
-                              </>
-                            ) : o.ruta === 'mixto' ? (
-                              <>
-                                <ShoppingBag className="w-3 h-3 text-purple-600" />
-                                Mixto
-                              </>
-                            ) : (
-                              <>
-                                <ChefHat className="w-3 h-3 text-orange-600" />
-                                Cocina
-                              </>
-                            )}
-                          </span>
-                        </td>
-                        <td className="p-3 text-neutral-700 font-medium">{o.meseroNombre}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] uppercase ${
-                            o.estado === 'cobrado' ? 'bg-neutral-100 text-neutral-800 border border-neutral-200' :
-                            o.estado === 'listo' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
-                            o.estado === 'en_preparacion' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
-                            o.estado === 'rechazado' ? 'bg-red-100 text-red-800 border border-red-200' :
-                            'bg-orange-100 text-orange-800 border border-orange-200'
-                          }`}>
-                            {o.estado.replace('_', ' ')}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right font-black font-mono text-neutral-900">
-                          ${o.total.toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-          </div>
-        )}
-
         {/* VIEW 2: Restaurantes (Multisede) */}
         {activeTab === 'restaurantes' && (
           <div className="max-w-5xl mx-auto space-y-4">
@@ -788,7 +800,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 onClick={() => {
                   setEditingRest(null);
-                  setRestForm({ nombre: '', direccion: '', telefono: '', activo: true });
+                  setRestForm({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true });
                   setShowRestModal(true);
                 }}
                 className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
@@ -807,11 +819,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <Store className="w-5 h-5 text-orange-600" />
                         <h4 className="font-extrabold text-neutral-900 text-base">{rest.nombre}</h4>
                       </div>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        rest.activo ? 'bg-emerald-100 text-emerald-800' : 'bg-neutral-200 text-neutral-700'
-                      }`}>
-                        {rest.activo ? 'Operando' : 'Inactivo'}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        {rest.usaCocina === false ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-1">
+                            <Store className="w-3 h-3" /> Sin Cocina (Mostrador)
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                            <ChefHat className="w-3 h-3" /> Cocina (KDS)
+                          </span>
+                        )}
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          rest.activo ? 'bg-emerald-100 text-emerald-800' : 'bg-neutral-200 text-neutral-700'
+                        }`}>
+                          {rest.activo ? 'Operando' : 'Inactivo'}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="mt-3 text-xs text-neutral-600 space-y-1">
@@ -851,7 +874,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             direccion: rest.direccion,
                             telefono: rest.telefono,
                             activo: rest.activo,
-                            numeroMesas: rest.numeroMesas || 10
+                            numeroMesas: rest.numeroMesas || 10,
+                            usaCocina: rest.usaCocina !== false
                           });
                           setShowRestModal(true);
                         }}
@@ -1346,19 +1370,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* VIEW: Costos de Elaboración & Margen de Rentabilidad */}
-        {activeTab === 'costos' && (
-          <div className="max-w-6xl mx-auto">
-            <DishCostProfitReport
-              menuItems={menuItems}
-              orders={orders}
-              restaurants={restaurants}
-              currentRestaurant={currentRestaurant}
-              onEditDish={handleOpenEditDish}
-            />
-          </div>
-        )}
-
         {/* VIEW 5: Auditoría de Turnos & Pago de Sueldos */}
         {activeTab === 'turnos' && (
           <div className="max-w-6xl mx-auto space-y-4">
@@ -1392,7 +1403,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <th className="p-3">Horario</th>
                     <th className="p-3 text-center">Horas</th>
                     <th className="p-3 text-center">Estado</th>
-                    <th className="p-3 text-right">Tarifa / h</th>
+                    <th className="p-3 text-right">Modalidad / Tarifa</th>
                     <th className="p-3 text-right">Sueldo Calc.</th>
                     <th className="p-3 text-right">Ventas</th>
                     <th className="p-3 text-center">Liquidación / Pago</th>
@@ -1401,7 +1412,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <tbody className="divide-y divide-neutral-100 text-neutral-700">
                   {shifts.map(sh => {
                     const emp = employees.find(e => e.id === sh.employeeId);
-                    const rate = emp?.tarifaHora || 12;
+                    const mod = emp?.modalidadPago || emp?.tipoSueldo || 'por_horas';
+                    let rateLabel = `$${(emp?.tarifaHora || 12).toFixed(2)}/h`;
+                    
                     let durationHours = sh.horaFin 
                       ? Math.max(0.1, (new Date(sh.horaFin).getTime() - new Date(sh.horaInicio).getTime()) / (1000 * 60 * 60))
                       : (new Date().getTime() - new Date(sh.horaInicio).getTime()) / (1000 * 60 * 60);
@@ -1417,7 +1430,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     
                     const regularHours = Math.min(8, durationHours);
                     const overtimeHours = Math.max(0, durationHours - 8);
-                    const calculatedSalary = (regularHours * rate) + (overtimeHours * rate * 1.5);
+                    
+                    let calculatedSalary = (regularHours * (emp?.tarifaHora || 12)) + (overtimeHours * (emp?.tarifaHora || 12) * 1.5);
+                    
+                    if (mod === 'por_dia') {
+                      const dailyRate = emp?.tarifaDiaria || 50;
+                      rateLabel = `$${dailyRate.toFixed(2)}/día`;
+                      calculatedSalary = dailyRate;
+                    } else if (mod === 'mes' || mod === 'fijo') {
+                      const monthlyRate = emp?.sueldoMensual || 1200;
+                      rateLabel = `$${monthlyRate.toFixed(2)}/mes`;
+                      calculatedSalary = 0; // Se liquida en planilla mensual consolidada
+                    }
+
                     const isClosed = sh.estado === 'cerrado';
                     const isPaid = Boolean(sh.pagado ?? sh.sueldoPagado ?? false);
                     const paidAmount = sh.montoPagadoSueldo ?? sh.sueldoTotal;
@@ -1439,7 +1464,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </td>
                         <td className="p-3 text-center font-mono font-bold">
                           {durationHours.toFixed(1)}h
-                          {overtimeHours > 0 && (
+                          {overtimeHours > 0 && mod === 'por_horas' && (
                             <span className="block text-[10px] text-orange-600 font-normal">+{overtimeHours.toFixed(1)}h extra</span>
                           )}
                         </td>
@@ -1453,10 +1478,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           </span>
                         </td>
                         <td className="p-3 text-right font-mono text-neutral-600">
-                          ${rate.toFixed(2)}
+                          {rateLabel}
                         </td>
                         <td className="p-3 text-right font-mono font-bold text-neutral-900">
-                          ${calculatedSalary.toFixed(2)}
+                          {mod === 'mes' || mod === 'fijo' ? (
+                            <span className="text-[10px] text-neutral-400">Planilla Mensual</span>
+                          ) : (
+                            `$${calculatedSalary.toFixed(2)}`
+                          )}
                         </td>
                         <td className="p-3 text-right font-mono font-bold text-emerald-700">
                           ${(sh.ventasGeneradas || 0).toFixed(2)}
@@ -1467,12 +1496,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <CheckCircle2 className="w-3.5 h-3.5" />
                               Pagado (${(paidAmount !== undefined ? paidAmount : calculatedSalary).toFixed(2)})
                             </span>
+                          ) : (mod === 'mes' || mod === 'fijo') ? (
+                            <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                              Pago Mensual
+                            </span>
                           ) : isClosed ? (
                             <button
                               type="button"
                               disabled={payingShiftId === sh.id}
                               onClick={() => handlePayShift(sh)}
-                              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-xs active:scale-95 transition disabled:opacity-50"
+                              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-xs active:scale-95 transition disabled:opacity-50 cursor-pointer"
                             >
                               {payingShiftId === sh.id ? 'Pagando...' : `Pagar $${calculatedSalary.toFixed(2)}`}
                             </button>
@@ -1489,85 +1522,469 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* VIEW 6: Zona de Peligro (Danger Zone) */}
+        {/* VIEW 6: Fase de Pruebas, Diagnóstico y Zona de Mantenimiento */}
         {activeTab === 'peligro' && (
           <div className="max-w-4xl mx-auto space-y-6">
-            <div className="bg-red-50 border-2 border-red-200 rounded-3xl p-6 shadow-sm">
-              <div className="flex items-center gap-3 text-red-700 mb-2">
-                <Flame className="w-7 h-7 shrink-0" />
+            
+            {/* SECCIÓN 1: Centro de Fase de Pruebas */}
+            <div className="bg-amber-500/10 border-2 border-amber-300 rounded-3xl p-6 shadow-xs">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-amber-200">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-bold shadow-xs">
+                    <FlaskConical className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-black text-amber-950">Fase de Pruebas & Simulación</h3>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        currentBusiness?.modoPruebas !== false
+                          ? 'bg-amber-200 text-amber-900 border border-amber-300'
+                          : 'bg-neutral-200 text-neutral-700'
+                      }`}>
+                        {currentBusiness?.modoPruebas !== false ? 'Activo en Modo Pruebas' : 'Modo Producción'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-800 mt-0.5">
+                      Herramientas para probar circuitos de venta (meseros, cocina, cobro, delivery) y limpiar datos sin tocar la configuración.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Alternar estado de pruebas */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const next = !(currentBusiness?.modoPruebas !== false);
+                    if (window.confirm(next ? '¿Deseas activar el Modo de Pruebas?' : '¿Deseas cambiar a Modo Producción?')) {
+                      await updateBusiness(activeBizId, { modoPruebas: next });
+                      sounds.playNotification();
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold border border-amber-300 bg-white hover:bg-amber-50 text-amber-900 transition flex items-center gap-1.5 shrink-0 shadow-xs"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
+                  <span>{currentBusiness?.modoPruebas !== false ? 'Cambiar a Producción' : 'Activar Modo Pruebas'}</span>
+                </button>
+              </div>
+
+              {/* Botón Principal de Borrado de Datos de Prueba */}
+              <div className="mt-5 bg-white rounded-2xl p-5 border border-amber-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-black text-red-950">Zona de Peligro & Mantenimiento Crítico</h3>
+                  <h4 className="font-extrabold text-neutral-900 text-sm flex items-center gap-2">
+                    <RotateCcw className="w-4 h-4 text-amber-600" />
+                    Restablecer Todos los Datos de Prueba (Recomendado)
+                  </h4>
+                  <p className="text-xs text-neutral-600 mt-1 max-w-xl">
+                    Elimina todos los pedidos, gastos, turnos y cierres de caja en todas las sucursales. Libera todas las mesas ocupadas.
+                    <strong className="text-emerald-700 block mt-0.5">
+                      ✓ Mantiene intactos tus locales, mesas configuradas, platos del menú, empleados y PINs.
+                    </strong>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleOpenDangerModal('reset_test_data')}
+                  className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs shrink-0 transition flex items-center gap-2 shadow-xs"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Borrar Datos de Prueba</span>
+                </button>
+              </div>
+
+              {/* Banner de resultado de la simulación */}
+              {simFeedback && (
+                <div className="mt-3 p-3 bg-white rounded-2xl border border-amber-300 flex items-center justify-between text-xs text-amber-950 shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>{simFeedback}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSimFeedback(null)}
+                    className="text-neutral-400 hover:text-neutral-600 text-xs font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Acciones de Simulación en 1 Clic */}
+              <div className="mt-4 pt-4 border-t border-amber-200">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-extrabold text-xs uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-amber-600" />
+                    Simuladores de Circuitos en 1 Clic
+                  </h4>
+                  <span className="text-[11px] text-amber-800">
+                    Sede activa: <strong>{currentRestaurant?.nombre || 'Selecciona una sede'}</strong>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {/* Simulación 1: Comanda en Mesa */}
+                  <div className="p-3 bg-white rounded-2xl border border-amber-200 flex flex-col justify-between gap-2 shadow-xs">
+                    <div>
+                      <div className="font-bold text-xs text-neutral-900 flex items-center gap-1">
+                        <UtensilsCrossed className="w-3.5 h-3.5 text-orange-600" />
+                        <span>Mesa 1 (Salón)</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 mt-1">
+                        Crea un pedido en Mesa 1 con notas de cocina ("Término medio, sin cebolla") para probar KDS y Caja.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!currentRestaurant || simulatingAction === 'table'}
+                      onClick={async () => {
+                        if (!currentRestaurant) return;
+                        setSimulatingAction('table');
+                        try {
+                          sounds.playKeypadClick();
+                          const res = await simulateTableOrder(activeBizId, currentRestaurant.id, 1);
+                          sounds.playNotification();
+                          setSimFeedback(`¡Comanda creada en Mesa #${res.tableNumber}! Total: $${res.total.toFixed(2)}. Revisa Cocina y Caja.`);
+                        } catch (e: any) {
+                          alert('Error al simular: ' + e.message);
+                        } finally {
+                          setSimulatingAction(null);
+                        }
+                      }}
+                      className="w-full py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
+                    >
+                      {simulatingAction === 'table' ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayCircle className="w-3 h-3" />}
+                      <span>Simular Mesa 1</span>
+                    </button>
+                  </div>
+
+                  {/* Simulación 2: Venta Express Mostrador */}
+                  <div className="p-3 bg-white rounded-2xl border border-amber-200 flex flex-col justify-between gap-2 shadow-xs">
+                    <div>
+                      <div className="font-bold text-xs text-neutral-900 flex items-center gap-1">
+                        <Truck className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Express / Delivery</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 mt-1">
+                        Genera un pedido para llevar o con recargo de delivery para validar cobro inmediato y comisiones.
+                      </p>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        disabled={!currentRestaurant || simulatingAction === 'mostrador'}
+                        onClick={async () => {
+                          if (!currentRestaurant) return;
+                          setSimulatingAction('mostrador');
+                          try {
+                            sounds.playKeypadClick();
+                            const res = await simulateExpressOrder(activeBizId, currentRestaurant.id, 'mostrador');
+                            sounds.playNotification();
+                            setSimFeedback(`¡Venta Mostrador creada! Total: $${res.total.toFixed(2)}. Lista para cobrar en Caja.`);
+                          } catch (e: any) {
+                            alert('Error al simular: ' + e.message);
+                          } finally {
+                            setSimulatingAction(null);
+                          }
+                        }}
+                        className="flex-1 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
+                      >
+                        {simulatingAction === 'mostrador' ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                        <span>+ Mostrador</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!currentRestaurant || simulatingAction === 'delivery'}
+                        onClick={async () => {
+                          if (!currentRestaurant) return;
+                          setSimulatingAction('delivery');
+                          try {
+                            sounds.playKeypadClick();
+                            const res = await simulateExpressOrder(activeBizId, currentRestaurant.id, 'delivery');
+                            sounds.playNotification();
+                            setSimFeedback(`¡Pedido Delivery (PedidosYa) creado! Total: $${res.total.toFixed(2)}.`);
+                          } catch (e: any) {
+                            alert('Error al simular: ' + e.message);
+                          } finally {
+                            setSimulatingAction(null);
+                          }
+                        }}
+                        className="flex-1 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-900 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
+                      >
+                        {simulatingAction === 'delivery' ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                        <span>+ Delivery</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Simulación 3: Turno de Caja */}
+                  <div className="p-3 bg-white rounded-2xl border border-amber-200 flex flex-col justify-between gap-2 shadow-xs">
+                    <div>
+                      <div className="font-bold text-xs text-neutral-900 flex items-center gap-1">
+                        <Wallet className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Turno de Caja</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 mt-1">
+                        Abre un turno con fondo inicial de $50.00 para verificar el arqueo, cálculo de diferencias y cuadre.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!currentRestaurant || simulatingAction === 'shift'}
+                      onClick={async () => {
+                        if (!currentRestaurant) return;
+                        setSimulatingAction('shift');
+                        try {
+                          sounds.playKeypadClick();
+                          const res = await simulateCashShift(activeBizId, currentRestaurant.id, currentRestaurant.nombre, 50.00);
+                          sounds.playCashRegister();
+                          setSimFeedback(`¡Turno abierto para ${res.employeeName} con fondo de $${res.fondoInicial.toFixed(2)}!`);
+                        } catch (e: any) {
+                          alert('Error al simular: ' + e.message);
+                        } finally {
+                          setSimulatingAction(null);
+                        }
+                      }}
+                      className="w-full py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
+                    >
+                      {simulatingAction === 'shift' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wallet className="w-3 h-3" />}
+                      <span>Abrir Turno $50</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Sembrar platos de prueba si el menú está vacío */}
+              {menuItems.length === 0 && (
+                <div className="mt-3 bg-white/70 rounded-2xl p-4 border border-amber-200 flex items-center justify-between gap-3 text-xs">
+                  <div className="text-amber-900">
+                    <span className="font-bold">Tu carta está vacía.</span> Puedes generar 6 platos de prueba para ensayar comandas de inmediato.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!currentRestaurant) return;
+                      await seedQuickTestingDishesAndOrder(activeBizId, currentRestaurant.id);
+                      sounds.playNotification();
+                      alert('¡Platos demo agregados al menú correctamente!');
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold shrink-0 transition"
+                  >
+                    + Cargar Platos Demo
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* SECCIÓN 2: Diagnóstico Integral de Seguridad & Procesos */}
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-neutral-100">
+                <div>
+                  <h3 className="text-base font-extrabold text-neutral-900 flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-emerald-600" />
+                    Diagnóstico de Seguridad & Procesos Operativos
+                  </h3>
+                  <p className="text-xs text-neutral-500 mt-0.5">
+                    Verifica la integridad de datos, aislamiento multi-sucursal, estado de Firestore y consistencia de credenciales.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={runningDiagnostic}
+                  onClick={handleRunDiagnostic}
+                  className="px-4 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-bold transition flex items-center gap-2 shrink-0 disabled:opacity-50 shadow-xs"
+                >
+                  {runningDiagnostic ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Verificando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Ejecutar Diagnóstico</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Resultados del Diagnóstico */}
+              {diagnosticResults ? (
+                <div className="space-y-3 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    
+                    {/* Item 1: Conectividad Firestore */}
+                    <div className="p-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        <Check className="w-4 h-4 font-black" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-neutral-900">Base de Datos Cloud Firestore</div>
+                        <div className="text-[11px] text-emerald-700 font-medium">Conexión activa con sincronización en tiempo real</div>
+                      </div>
+                    </div>
+
+                    {/* Item 2: Aislamiento Multi-Tenant */}
+                    <div className="p-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        <Check className="w-4 h-4 font-black" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-neutral-900">Seguridad & Aislamiento Empresarial</div>
+                        <div className="text-[11px] text-emerald-700 font-medium truncate">ID Único: {activeBizId}</div>
+                      </div>
+                    </div>
+
+                    {/* Item 3: Sucursales y Mesas */}
+                    <div className={`p-3.5 rounded-2xl border flex items-center gap-3 ${
+                      diagnosticResults.branchesAndTables.ok ? 'bg-neutral-50 border-neutral-200' : 'bg-amber-50 border-amber-200'
+                    }`}>
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                        diagnosticResults.branchesAndTables.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {diagnosticResults.branchesAndTables.ok ? <Check className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-neutral-900">Sedes y Mesas Físicas</div>
+                        <div className="text-[11px] text-neutral-600">
+                          {diagnosticResults.branchesAndTables.branches} sedes creadas, {diagnosticResults.branchesAndTables.tables} mesas configuradas
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Item 4: Personal y PINs */}
+                    <div className={`p-3.5 rounded-2xl border flex items-center gap-3 ${
+                      diagnosticResults.staff.ok ? 'bg-neutral-50 border-neutral-200' : 'bg-amber-50 border-amber-200'
+                    }`}>
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                        diagnosticResults.staff.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {diagnosticResults.staff.ok ? <Check className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-neutral-900">Personal & PINs de Seguridad</div>
+                        <div className="text-[11px] text-neutral-600">
+                          {diagnosticResults.staff.validPin} de {diagnosticResults.staff.total} empleados con PIN de 4 dígitos activo
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Item 5: Menú y Platos */}
+                    <div className={`p-3.5 rounded-2xl border flex items-center gap-3 ${
+                      diagnosticResults.menu.ok ? 'bg-neutral-50 border-neutral-200' : 'bg-amber-50 border-amber-200'
+                    }`}>
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                        diagnosticResults.menu.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                      }`}>
+                        {diagnosticResults.menu.ok ? <Check className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-neutral-900">Carta & Menú</div>
+                        <div className="text-[11px] text-neutral-600">
+                          {diagnosticResults.menu.total} platos ({diagnosticResults.menu.withPrices} con precios válidos)
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Item 6: Reglas de Seguridad & Roles */}
+                    <div className="p-3.5 rounded-2xl bg-neutral-50 border border-neutral-200 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        <ShieldCheck className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-neutral-900">Reglas Firestore & RBAC</div>
+                        <div className="text-[11px] text-emerald-700 font-medium">Protección multi-sede con permisos validados</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Advertencias o Sugerencias */}
+                  {diagnosticResults.warnings.length > 0 ? (
+                    <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5">
+                      <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                        <AlertTriangle className="w-4 h-4 text-amber-700" />
+                        <span>Sugerencias para optimizar tu fase de pruebas:</span>
+                      </div>
+                      <ul className="list-disc list-inside space-y-0.5 text-[11px] text-amber-800">
+                        {diagnosticResults.warnings.map((w, idx) => (
+                          <li key={idx}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-medium flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Todos los procesos, colecciones y reglas de seguridad se encuentran en estado óptimo.</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-6 text-xs text-neutral-400">
+                  Haz clic en "Ejecutar Diagnóstico" para comprobar el estado de los componentes y seguridad de la aplicación.
+                </div>
+              )}
+            </div>
+
+            {/* SECCIÓN 3: Mantenimiento Crítico & Zona de Peligro */}
+            <div className="bg-red-50 border-2 border-red-200 rounded-3xl p-6 shadow-xs">
+              <div className="flex items-center gap-3 text-red-700 mb-2">
+                <Flame className="w-6 h-6 shrink-0" />
+                <div>
+                  <h3 className="text-base font-black text-red-950">Zona de Mantenimiento Avanzado</h3>
                   <p className="text-xs text-red-700">
-                    Operaciones irreversibles con eliminación en cascada. Siempre se presenta un resumen de impacto antes de confirmar.
+                    Operaciones irreversibles con confirmación explícita.
                   </p>
                 </div>
               </div>
 
-              <div className="mt-6 space-y-4">
-                {/* Opción 1: Reset de datos operativos por restaurante */}
-                <div className="bg-white rounded-2xl p-5 border border-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="mt-5 space-y-3">
+                {/* Reset Operativo de una sola sede */}
+                <div className="bg-white rounded-2xl p-4 border border-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                   <div>
-                    <h4 className="font-bold text-neutral-900 text-sm flex items-center gap-2">
-                      <RotateCcw className="w-4 h-4 text-amber-600" />
-                      Restablecer Datos Operativos del Restaurante Activo
-                    </h4>
-                    <p className="text-xs text-neutral-500 mt-1 max-w-xl">
-                      Elimina todos los pedidos, gastos y turnos del restaurante seleccionado ({currentRestaurant?.nombre || 'Ninguno'}).
-                      <strong> Mantiene intactos el menú, los empleados y las mesas.</strong>
-                    </p>
+                    <h4 className="font-bold text-neutral-900">Restablecer Datos de la Sede Activa ({currentRestaurant?.nombre || 'Ninguna'})</h4>
+                    <p className="text-neutral-500 mt-0.5">Borra pedidos y turnos únicamente de esta sucursal.</p>
                   </div>
                   <button
                     type="button"
                     disabled={!currentRestaurant}
                     onClick={() => currentRestaurant && handleOpenDangerModal('reset_operational', currentRestaurant)}
-                    className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shrink-0 transition disabled:opacity-40"
+                    className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold shrink-0 transition disabled:opacity-40"
                   >
-                    Reset Operativo
+                    Reset Sede
                   </button>
                 </div>
 
-                {/* Opción 2: Eliminar un Restaurante con cascada completa */}
-                <div className="bg-white rounded-2xl p-5 border border-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                {/* Eliminar una sede completa */}
+                <div className="bg-white rounded-2xl p-4 border border-red-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                   <div>
-                    <h4 className="font-bold text-neutral-900 text-sm flex items-center gap-2">
-                      <Trash2 className="w-4 h-4 text-red-600" />
-                      Eliminar Restaurante Seleccionado en Cascada
-                    </h4>
-                    <p className="text-xs text-neutral-500 mt-1 max-w-xl">
-                      Elimina el local <strong>{currentRestaurant?.nombre}</strong> junto con todas sus mesas, empleados asociados, pedidos, gastos y turnos en Firestore.
-                    </p>
+                    <h4 className="font-bold text-neutral-900">Eliminar Sede Completa en Cascada</h4>
+                    <p className="text-neutral-500 mt-0.5">Elimina el local <strong>{currentRestaurant?.nombre}</strong> y todas sus mesas y pedidos.</p>
                   </div>
                   <button
                     type="button"
                     disabled={!currentRestaurant}
                     onClick={() => currentRestaurant && handleOpenDangerModal('delete_restaurant', currentRestaurant)}
-                    className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs shrink-0 transition disabled:opacity-40"
+                    className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold shrink-0 transition disabled:opacity-40"
                   >
-                    Eliminar Sede Completa
+                    Eliminar Sede
                   </button>
                 </div>
 
-                {/* Opción 3: Limpiar Toda la Cuenta */}
-                <div className="bg-red-950 text-white rounded-2xl p-5 border border-red-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                {/* Borrar toda la cuenta */}
+                <div className="bg-red-950 text-white rounded-2xl p-4 border border-red-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
                   <div>
-                    <h4 className="font-bold text-white text-sm flex items-center gap-2">
-                      <Flame className="w-4 h-4 text-red-400" />
-                      Eliminar Todos los Datos de la Cuenta (Empresarial)
-                    </h4>
-                    <p className="text-xs text-neutral-300 mt-1 max-w-xl">
-                      Borra absolutamente todos los restaurantes, mesas, empleados, turnos, pedidos, menú y gastos. Devuelve la cuenta a estado virgen para volver al Onboarding inicial.
-                    </p>
+                    <h4 className="font-bold text-white">Restablecer Todo a Estado de Fábrica</h4>
+                    <p className="text-neutral-300 mt-0.5">Borra absolutamente todo para volver al Onboarding inicial.</p>
                   </div>
                   <button
                     type="button"
                     onClick={() => handleOpenDangerModal('delete_account')}
-                    className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shrink-0 transition"
+                    className="px-3.5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold shrink-0 transition"
                   >
                     Borrar Toda la Cuenta
                   </button>
                 </div>
               </div>
             </div>
+
           </div>
         )}
 
@@ -1576,7 +1993,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* MODAL: Crear/Editar Restaurante */}
       {showRestModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-neutral-100 space-y-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-neutral-100 space-y-4 max-h-[90vh] overflow-y-auto">
             <h3 className="font-extrabold text-base text-neutral-900">
               {editingRest ? 'Editar Local' : 'Nuevo Local / Restaurante'}
             </h3>
@@ -1587,6 +2004,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   value={restForm.nombre}
                   onChange={(e) => setRestForm({ ...restForm, nombre: e.target.value })}
+                  placeholder="Ej: Sede Norte / Cafetería Centro"
                   className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs outline-none focus:border-orange-500"
                 />
               </div>
@@ -1596,6 +2014,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   value={restForm.direccion}
                   onChange={(e) => setRestForm({ ...restForm, direccion: e.target.value })}
+                  placeholder="Ej: Av. Principal #123"
                   className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs outline-none focus:border-orange-500"
                 />
               </div>
@@ -1605,20 +2024,84 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   value={restForm.telefono}
                   onChange={(e) => setRestForm({ ...restForm, telefono: e.target.value })}
+                  placeholder="Ej: +58 412 0000000"
                   className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs outline-none focus:border-orange-500"
                 />
+              </div>
+
+              {/* Modo de Cocina y Despacho */}
+              <div className="pt-2 border-t border-neutral-100 space-y-2">
+                <label className="block text-xs font-bold text-neutral-800">
+                  Modo Operativo de Pedidos & Cocina:
+                </label>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRestForm({ ...restForm, usaCocina: true })}
+                    className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between gap-1.5 cursor-pointer ${
+                      restForm.usaCocina !== false
+                        ? 'bg-amber-50/80 border-amber-400 text-amber-950 shadow-xs ring-2 ring-amber-400/20'
+                        : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-1.5 font-extrabold text-xs text-amber-900">
+                        <ChefHat className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Con Cocina (KDS)</span>
+                      </div>
+                      <input
+                        type="radio"
+                        name="usaCocinaOption"
+                        checked={restForm.usaCocina !== false}
+                        onChange={() => setRestForm({ ...restForm, usaCocina: true })}
+                        className="text-amber-600 focus:ring-amber-500 cursor-pointer"
+                      />
+                    </div>
+                    <p className="text-[11px] text-neutral-600 leading-tight">
+                      Para locales con cocina y preparación. Los pedidos activan alertas y pasan por KDS.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setRestForm({ ...restForm, usaCocina: false })}
+                    className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between gap-1.5 cursor-pointer ${
+                      restForm.usaCocina === false
+                        ? 'bg-purple-50/80 border-purple-400 text-purple-950 shadow-xs ring-2 ring-purple-400/20'
+                        : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-1.5 font-extrabold text-xs text-purple-900">
+                        <Store className="w-4 h-4 text-purple-600 shrink-0" />
+                        <span>Sin Cocina</span>
+                      </div>
+                      <input
+                        type="radio"
+                        name="usaCocinaOption"
+                        checked={restForm.usaCocina === false}
+                        onChange={() => setRestForm({ ...restForm, usaCocina: false })}
+                        className="text-purple-600 focus:ring-purple-500 cursor-pointer"
+                      />
+                    </div>
+                    <p className="text-[11px] text-neutral-600 leading-tight">
+                      Para cafeterías, quioscos o heladerías. Los pedidos van directo al mostrador sin alerta de cocina.
+                    </p>
+                  </button>
+                </div>
               </div>
             </div>
             <div className="flex gap-2 pt-2">
               <button
                 onClick={() => setShowRestModal(false)}
-                className="flex-1 h-11 rounded-xl bg-neutral-100 font-bold text-xs text-neutral-700"
+                className="flex-1 h-11 rounded-xl bg-neutral-100 font-bold text-xs text-neutral-700 hover:bg-neutral-200 transition"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleSaveRestaurant}
-                className="flex-1 h-11 rounded-xl bg-orange-600 font-bold text-xs text-white"
+                className="flex-1 h-11 rounded-xl bg-orange-600 hover:bg-orange-700 font-bold text-xs text-white transition shadow-sm"
               >
                 Guardar Local
               </button>
@@ -2197,7 +2680,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <div>
                 <h3 className="font-black text-base text-neutral-900">
-                  {dangerModal.type === 'reset_operational' && 'Confirmar Reset Operativo'}
+                  {dangerModal.type === 'reset_test_data' && 'Confirmar Reset de Fase de Pruebas'}
+                  {dangerModal.type === 'reset_operational' && 'Confirmar Reset Operativo de Sucursal'}
                   {dangerModal.type === 'delete_restaurant' && 'Confirmar Eliminación en Cascada'}
                   {dangerModal.type === 'delete_account' && 'Confirmar Eliminación de Toda la Cuenta'}
                 </h3>
@@ -2238,9 +2722,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
                   )}
                 </div>
-                {dangerModal.type === 'reset_operational' && (
+                {(dangerModal.type === 'reset_operational' || dangerModal.type === 'reset_test_data') && (
                   <p className="text-[11px] text-emerald-700 font-semibold mt-1">
-                    ✓ Las mesas, menú y empleados NO serán eliminados.
+                    ✓ Las sucursales, mesas, menú y empleados NO serán eliminados.
                   </p>
                 )}
               </div>
@@ -2294,6 +2778,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isOpen={showRepairModal}
         onClose={() => setShowRepairModal(false)}
         adminName={currentUserAccount?.nombre || 'Administrador'}
+      />
+
+      {/* Modal Centro de Mensajes, Avisos y Alertas de Seguridad */}
+      <AdminMessageCenterModal
+        isOpen={showMessageCenterModal}
+        onClose={() => setShowMessageCenterModal(false)}
+        alerts={securityAlerts}
+        onDismissAndClearAlert={dismissAndClearAlert}
+        onMarkRead={markAlertRead}
+        onDeleteAlert={deleteAlert}
+        onClearReadAlerts={clearReadAlerts}
+        onClearAllAlerts={clearAllAlerts}
       />
 
     </div>

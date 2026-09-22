@@ -32,11 +32,14 @@ import { getShiftSessionSummary, pauseShift, resumeShift } from '../services/dat
 import { PWAInstallButton } from './PWAInstallButton';
 import { KioskControls } from './KioskControls';
 import { DeviceBadge } from './DeviceBadge';
+import { AdminMessageCenterModal } from './AdminMessageCenterModal';
 
 interface TopNavProps {
   orders?: Order[];
   onOrderClick?: (order: Order) => void;
   onOpenNewRestaurantModal?: () => void;
+  saasView?: 'restaurant' | 'superadmin';
+  onToggleSaasView?: (view: 'restaurant' | 'superadmin') => void;
 }
 
 interface NotificationToast {
@@ -50,7 +53,9 @@ interface NotificationToast {
 export const TopNav: React.FC<TopNavProps> = ({ 
   orders = [], 
   onOrderClick,
-  onOpenNewRestaurantModal 
+  onOpenNewRestaurantModal,
+  saasView = 'restaurant',
+  onToggleSaasView
 }) => {
   const { 
     currentUserAccount,
@@ -64,11 +69,16 @@ export const TopNav: React.FC<TopNavProps> = ({
     endShiftAndLogout, 
     logoutEmployee,
     logoutAdmin,
-    markAlertRead
+    markAlertRead,
+    deleteAlert,
+    dismissAndClearAlert,
+    clearReadAlerts,
+    clearAllAlerts
   } = useAuth();
 
   const [shiftDuration, setShiftDuration] = useState<string>('00:00:00');
   const [showEndShiftModal, setShowEndShiftModal] = useState(false);
+  const [showMessageCenterModal, setShowMessageCenterModal] = useState(false);
   const [reporteLabores, setReporteLabores] = useState('');
   const [efectivoContado, setEfectivoContado] = useState<number>(0);
   const [fondoInicial, setFondoInicial] = useState<number>(100);
@@ -158,7 +168,8 @@ export const TopNav: React.FC<TopNavProps> = ({
     return orders.filter(o => {
       if (o.restaurantId !== currentRestaurant?.id) return false;
 
-      const hasKitchen = o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
+      const restUsesKitchen = currentRestaurant?.usaCocina !== false;
+      const hasKitchen = restUsesKitchen && o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
       const is100Mostrador = !hasKitchen || o.ruta === 'express';
 
       if (isMesero) {
@@ -201,7 +212,8 @@ export const TopNav: React.FC<TopNavProps> = ({
       if (o.restaurantId !== currentRestaurant?.id) return;
       currentMap.set(o.id, o.estado);
 
-      const hasKitchen = o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
+      const restUsesKitchen = currentRestaurant?.usaCocina !== false;
+      const hasKitchen = restUsesKitchen && o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
       const is100Mostrador = !hasKitchen || o.ruta === 'express';
 
       const readyAlarmId = 'ord-ready-' + o.id;
@@ -265,7 +277,8 @@ export const TopNav: React.FC<TopNavProps> = ({
     orders.forEach(ord => {
       if (ord.restaurantId !== currentRestaurant?.id) return;
       const prevStatus = prevReadyOrdersMapRef.current.get(ord.id);
-      const hasKitchen = ord.ruta !== 'express' && (ord.items || []).some(it => it.requiereCocina !== false);
+      const restUsesKitchen = currentRestaurant?.usaCocina !== false;
+      const hasKitchen = restUsesKitchen && ord.ruta !== 'express' && (ord.items || []).some(it => it.requiereCocina !== false);
       const is100Mostrador = !hasKitchen || ord.ruta === 'express';
       const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
 
@@ -493,12 +506,33 @@ export const TopNav: React.FC<TopNavProps> = ({
 
           {/* Derecha: Usuario y Botones de Salida / Turno */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Toggle de Panel Creador vs Restaurante (EXCLUSIVO CREADOR / SUPERADMIN) */}
+            {currentUserAccount?.rol === 'superadmin' && onToggleSaasView && (
+              <button
+                onClick={() => {
+                  sounds.playKeypadClick();
+                  onToggleSaasView(saasView === 'superadmin' ? 'restaurant' : 'superadmin');
+                }}
+                className={`px-3 py-1.5 rounded-xl font-black text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer border ${
+                  saasView === 'superadmin'
+                    ? 'bg-purple-600 text-white border-purple-700 hover:bg-purple-700'
+                    : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-800 border-neutral-300'
+                }`}
+                title="Cambiar entre Panel Creador (SuperAdmin) y Panel Restaurante"
+              >
+                <ShieldCheck className={`w-3.5 h-3.5 ${saasView === 'superadmin' ? 'text-white' : 'text-purple-600'}`} />
+                <span className="hidden md:inline">
+                  {saasView === 'superadmin' ? 'Ver Panel Creador' : 'Ver Panel Restaurante'}
+                </span>
+              </button>
+            )}
+
             <div className="text-right hidden sm:block">
               <div className="text-xs font-black text-neutral-900 leading-tight">
                 {userDisplayName}
               </div>
               <span className={`text-[10px] uppercase font-extrabold px-1.5 py-0.2 rounded border ${roleColors[userRole] || 'bg-neutral-100'}`}>
-                {userRole === 'owner' ? 'DUEÑO (OWNER)' : userRole}
+                {userRole === 'superadmin' ? 'SUPERADMIN' : userRole === 'owner' ? 'DUEÑO' : userRole}
               </span>
             </div>
 
@@ -626,11 +660,22 @@ export const TopNav: React.FC<TopNavProps> = ({
                     <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
                       <div className="flex items-center gap-1.5 text-xs font-black text-neutral-900 uppercase">
                         <Shield className="w-4 h-4 text-orange-500" />
-                        Alertas de Seguridad ({securityAlerts.length})
+                        Alertas y Avisos ({securityAlerts.length})
                       </div>
-                      <button onClick={() => setShowAlertsModal(false)} className="text-neutral-400 hover:text-neutral-600">
-                        <X className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => {
+                            setShowAlertsModal(false);
+                            setShowMessageCenterModal(true);
+                          }}
+                          className="text-[10px] font-bold text-orange-600 hover:text-orange-700 underline"
+                        >
+                          Ver Todo
+                        </button>
+                        <button onClick={() => setShowAlertsModal(false)} className="text-neutral-400 hover:text-neutral-600">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="mt-2 space-y-2 max-h-72 overflow-y-auto text-xs">
@@ -659,18 +704,27 @@ export const TopNav: React.FC<TopNavProps> = ({
                             <p className="mt-1 text-[11px] leading-relaxed">
                               {alert.mensaje}
                             </p>
-                            {!alert.leido && (
+                            <div className="flex items-center justify-between mt-2 pt-1 border-t border-red-200/40">
                               <button
-                                onClick={() => {
-                                  markAlertRead(alert.id);
+                                onClick={async () => {
+                                  await dismissAndClearAlert(alert.id);
                                   sounds.stopRepeatingAlarm('sec-alert-' + alert.id);
                                   sounds.stopRepeatingAlarm('security-alert');
                                 }}
-                                className="mt-2 text-[10px] font-bold text-red-700 hover:underline"
+                                className="text-[10px] font-bold text-red-700 hover:text-red-900 underline"
                               >
-                                Marcar como atendida / leída
+                                Leer y borrar alerta
                               </button>
-                            )}
+                              <button
+                                onClick={async () => {
+                                  await deleteAlert(alert.id);
+                                  sounds.stopRepeatingAlarm('sec-alert-' + alert.id);
+                                }}
+                                className="text-[10px] font-semibold text-neutral-500 hover:text-red-600"
+                              >
+                                Eliminar
+                              </button>
+                            </div>
                           </div>
                         ))
                       )}
@@ -966,6 +1020,18 @@ export const TopNav: React.FC<TopNavProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal Centro de Mensajes & Avisos */}
+      <AdminMessageCenterModal
+        isOpen={showMessageCenterModal}
+        onClose={() => setShowMessageCenterModal(false)}
+        alerts={securityAlerts}
+        onDismissAndClearAlert={dismissAndClearAlert}
+        onMarkRead={markAlertRead}
+        onDeleteAlert={deleteAlert}
+        onClearReadAlerts={clearReadAlerts}
+        onClearAllAlerts={clearAllAlerts}
+      />
     </>
   );
 };

@@ -28,6 +28,7 @@ import {
   Client, 
   Table, 
   Order, 
+  Role,
   OrderStatus, 
   OrderRoute,
   OrderItem,
@@ -162,6 +163,56 @@ export async function updateUserAccount(uid: string, data: Partial<UserAccount>)
   });
 }
 
+export async function findUserAccountByCredentials(email: string, pass: string): Promise<UserAccount | null> {
+  const cleanEmail = email.trim().toLowerCase();
+  
+  try {
+    // 1. Buscar en colección users
+    const qUsers = query(
+      collection(db, 'users'), 
+      where('appId', '==', 'gastro_smart')
+    );
+    const snapUsers = await getDocs(qUsers);
+    for (const docSnap of snapUsers.docs) {
+      const data = docSnap.data() as UserAccount;
+      if (data.email && data.email.toLowerCase() === cleanEmail && data.claveAsignada === pass) {
+        return data;
+      }
+    }
+
+    // 2. Buscar en colección businesses por ownerEmail / ownerClave
+    const qBiz = query(
+      collection(db, 'businesses'), 
+      where('appId', '==', 'gastro_smart')
+    );
+    const snapBiz = await getDocs(qBiz);
+    for (const docSnap of snapBiz.docs) {
+      const biz = { id: docSnap.id, ...docSnap.data() } as Business;
+      if (
+        (biz.ownerEmail && biz.ownerEmail.toLowerCase() === cleanEmail && biz.ownerClave === pass) ||
+        (biz.email && biz.email.toLowerCase() === cleanEmail && biz.ownerClave === pass)
+      ) {
+        return {
+          uid: biz.ownerUid || ('owner_' + biz.id),
+          email: biz.ownerEmail || biz.email || cleanEmail,
+          nombre: biz.ownerNombre || 'Administrador (' + biz.nombre + ')',
+          rol: 'owner',
+          businessId: biz.id,
+          restaurantId: null,
+          appId: 'gastro_smart',
+          creadoEn: biz.creadoEn || new Date().toISOString(),
+          ultimoAcceso: new Date().toISOString(),
+          claveAsignada: biz.ownerClave
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Warning checking credentials in Firestore:', err);
+  }
+
+  return null;
+}
+
 /**
  * Self-healing: al autenticarse con Firebase Auth, si el usuario tiene documento en "users"
  * con appId "gastro_smart", actualiza su último acceso.
@@ -234,6 +285,53 @@ export async function markSecurityAlertAsRead(alertId: string): Promise<void> {
   }
 }
 
+export async function deleteSecurityAlert(alertId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'securityAlerts', alertId));
+  } catch (err) {
+    console.warn('Error eliminando alerta de seguridad:', err);
+  }
+}
+
+export async function clearReadSecurityAlerts(businessId: string | null): Promise<number> {
+  if (!businessId) return 0;
+  try {
+    const q = query(
+      collection(db, 'securityAlerts'),
+      where('appId', '==', 'gastro_smart'),
+      where('businessId', '==', businessId),
+      where('leido', '==', true)
+    );
+    const snap = await getDocs(q);
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+    return snap.size;
+  } catch (err) {
+    console.warn('Error limpiando alertas leídas:', err);
+    return 0;
+  }
+}
+
+export async function clearAllSecurityAlerts(businessId: string | null): Promise<number> {
+  if (!businessId) return 0;
+  try {
+    const q = query(
+      collection(db, 'securityAlerts'),
+      where('appId', '==', 'gastro_smart'),
+      where('businessId', '==', businessId)
+    );
+    const snap = await getDocs(q);
+    const batch = writeBatch(db);
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+    return snap.size;
+  } catch (err) {
+    console.warn('Error eliminando todas las alertas:', err);
+    return 0;
+  }
+}
+
 // ======================= RESTAURANTS (SUCURSALES) =======================
 
 export function subscribeToRestaurants(
@@ -269,6 +367,7 @@ export function subscribeToRestaurants(
 export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?: string) {
   return addDoc(collection(db, 'restaurants'), {
     ...data,
+    usaCocina: data.usaCocina !== false,
     businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
@@ -276,7 +375,7 @@ export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?
 }
 
 export async function createRestaurantWithTables(
-  data: { businessId?: string; nombre: string; direccion: string; telefono: string; numeroMesas: number },
+  data: { businessId?: string; nombre: string; direccion: string; telefono: string; numeroMesas: number; usaCocina?: boolean },
   businessIdParam?: string
 ): Promise<string> {
   const targetBizId = data.businessId || businessIdParam || UNIQUE_BUSINESS_ID;
@@ -290,6 +389,7 @@ export async function createRestaurantWithTables(
     direccion: data.direccion.trim(),
     telefono: data.telefono.trim(),
     numeroMesas: data.numeroMesas,
+    usaCocina: data.usaCocina !== false,
     activo: true,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
@@ -1170,7 +1270,16 @@ export interface OrderRoutingDecision {
  *   - initialState: 'listo' (listo para despacho en mostrador).
  *   - SOLO Mostrador recibe la alerta sonora indicando qué productos debe entregar.
  */
-export function determineOrderRouting(items: OrderItem[]): OrderRoutingDecision {
+export function determineOrderRouting(items: OrderItem[], restaurantUsaCocina: boolean = true): OrderRoutingDecision {
+  if (!restaurantUsaCocina) {
+    return {
+      ruta: 'express',
+      requiresKitchen: false,
+      is100Mostrador: true,
+      initialState: 'listo',
+      esVentaExpress: true
+    };
+  }
   const safeItems = items || [];
   // Un producto requiere cocina si su flag requiereCocina no es explícitamente false
   const hasKitchenItem = safeItems.some(i => i.requiereCocina !== false);
@@ -1196,13 +1305,21 @@ export function determineOrderRouting(items: OrderItem[]): OrderRoutingDecision 
   }
 }
 
-export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { creadoEn?: string }) {
+export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { creadoEn?: string; usaCocina?: boolean }) {
   let targetBusinessId = data.businessId;
-  if (!targetBusinessId && data.restaurantId) {
+  let restaurantUsaCocina = data.usaCocina !== undefined ? data.usaCocina !== false : true;
+
+  if (data.restaurantId) {
     try {
       const rSnap = await getDoc(doc(db, 'restaurants', data.restaurantId));
-      if (rSnap.exists() && rSnap.data()?.businessId) {
-        targetBusinessId = rSnap.data().businessId;
+      if (rSnap.exists()) {
+        const rData = rSnap.data();
+        if (!targetBusinessId && rData?.businessId) {
+          targetBusinessId = rData.businessId;
+        }
+        if (rData?.usaCocina === false) {
+          restaurantUsaCocina = false;
+        }
       }
     } catch {
       // fallback
@@ -1212,7 +1329,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
   // Sanitizar items primero para evaluar la composición completa del pedido
   const nowIso = new Date().toISOString();
   const sanitizedItems: OrderItem[] = (data.items || []).map((it, idx) => {
-    const itemNeedsKitchen = it.requiereCocina !== false;
+    const itemNeedsKitchen = restaurantUsaCocina && it.requiereCocina !== false;
     return {
       ...it,
       id: it.id || `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1228,21 +1345,24 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
     };
   });
 
-  // Evaluación canónica única del enrutamiento (Regla 1 vs Regla 2)
-  const routing = determineOrderRouting(sanitizedItems);
-  const computedRuta: OrderRoute = data.ruta || routing.ruta;
-  const isExpress = computedRuta === 'express' || routing.esVentaExpress || Boolean(data.esVentaExpress);
+  // Evaluación canónica única del enrutamiento (Regla 1 vs Regla 2 vs Modo Sin Cocina)
+  const routing = determineOrderRouting(sanitizedItems, restaurantUsaCocina);
+  const computedRuta: OrderRoute = !restaurantUsaCocina ? 'express' : (data.ruta || routing.ruta);
+  const isExpress = !restaurantUsaCocina || computedRuta === 'express' || routing.esVentaExpress || Boolean(data.esVentaExpress);
   
-  // Regla 1: El estado inicial al crear/enviar el pedido debe ser SIEMPRE 'pendiente_cocina' (NUNCA 'listo')
-  // Salvo que venga ya expresamente marcado como 'cobrado' en venta rápida de mostrador
-  const finalInitialState: OrderStatus = (data.estado === 'cobrado') ? 'cobrado' : 'pendiente_cocina';
+  // Regla 1: Si usa cocina, el estado inicial es 'pendiente_cocina'. Si NO usa cocina, pasa directo a 'listo' (mostrador).
+  const finalInitialState: OrderStatus = (data.estado === 'cobrado') 
+    ? 'cobrado' 
+    : (restaurantUsaCocina ? 'pendiente_cocina' : 'listo');
 
   const initialTimeline: OrderTimelineEvent[] = [
     {
       estado: finalInitialState,
       fecha: nowIso,
       usuario: data.meseroNombre || 'Mesero',
-      motivo: data.tipo === 'local' ? `Mesa #${data.mesaNumero || ''} · Ronda 1 enviada a cocina` : null
+      motivo: data.tipo === 'local' 
+        ? (restaurantUsaCocina ? `Mesa #${data.mesaNumero || ''} · Ronda 1 enviada a cocina` : `Mesa #${data.mesaNumero || ''} · Pedido enviado a mostrador (Sin cocina)`)
+        : (restaurantUsaCocina ? 'Pedido enviado a cocina' : 'Pedido enviado a mostrador')
     }
   ];
 
@@ -1251,7 +1371,7 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
       numero: 1,
       enviadoEn: nowIso,
       meseroNombre: data.meseroNombre || 'Mesero',
-      estado: finalInitialState === 'cobrado' ? 'entregado' : 'pendiente_cocina',
+      estado: finalInitialState === 'cobrado' ? 'entregado' : (restaurantUsaCocina ? 'pendiente_cocina' : 'listo'),
       itemsCount: sanitizedItems.length
     }
   ];
@@ -1405,8 +1525,20 @@ export async function appendItemsToExistingOrder(
     const nextRound = (currentOrder.rondaActual || 1) + 1;
     const nowIso = new Date().toISOString();
 
+    let restaurantUsaCocina = true;
+    if (currentOrder.restaurantId) {
+      try {
+        const rSnap = await tx.get(doc(db, 'restaurants', currentOrder.restaurantId));
+        if (rSnap.exists() && rSnap.data()?.usaCocina === false) {
+          restaurantUsaCocina = false;
+        }
+      } catch {
+        // fallback
+      }
+    }
+
     const sanitizedNewItems: OrderItem[] = newItems.map((it, idx) => {
-      const itemNeedsKitchen = it.requiereCocina !== false;
+      const itemNeedsKitchen = restaurantUsaCocina && it.requiereCocina !== false;
       return {
         ...it,
         id: it.id || `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
@@ -1434,10 +1566,10 @@ export async function appendItemsToExistingOrder(
     const saldoPendiente = Math.max(0, Math.round((total - montoCobradoAcumulado) * 100) / 100);
 
     // Evaluación canónica única del enrutamiento de la comanda ampliada
-    const routing = determineOrderRouting(mergedItems);
-    const computedRuta: OrderRoute = routing.ruta;
-    const isExpress = routing.esVentaExpress;
-    const nextState: OrderStatus = 'pendiente_cocina';
+    const routing = determineOrderRouting(mergedItems, restaurantUsaCocina);
+    const computedRuta: OrderRoute = !restaurantUsaCocina ? 'express' : routing.ruta;
+    const isExpress = !restaurantUsaCocina || routing.esVentaExpress;
+    const nextState: OrderStatus = restaurantUsaCocina ? 'pendiente_cocina' : 'listo';
 
     const userName = typeof options === 'string' ? options : (options?.userName || 'Mesero');
     const addedCount = newItems.reduce((acc, it) => acc + (it.cantidad || 1), 0);
@@ -1446,7 +1578,9 @@ export async function appendItemsToExistingOrder(
       estado: nextState,
       fecha: nowIso,
       usuario: userName,
-      motivo: `Mesa #${currentOrder.mesaNumero || ''} · Ronda ${nextRound} enviada a cocina (+${addedCount} plato(s): ${newItems.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')})`
+      motivo: restaurantUsaCocina
+        ? `Mesa #${currentOrder.mesaNumero || ''} · Ronda ${nextRound} enviada a cocina (+${addedCount} plato(s): ${newItems.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')})`
+        : `Mesa #${currentOrder.mesaNumero || ''} · Ronda ${nextRound} enviada a mostrador (+${addedCount} item(s): ${newItems.map(i => `${i.cantidad}x ${i.nombre}`).join(', ')})`
     };
 
     const mergedTimeline = [...(currentOrder.timeline || []), timelineEvent];
@@ -1466,7 +1600,7 @@ export async function appendItemsToExistingOrder(
       numero: nextRound,
       enviadoEn: nowIso,
       meseroNombre: userName,
-      estado: 'pendiente_cocina',
+      estado: restaurantUsaCocina ? 'pendiente_cocina' : 'listo',
       itemsCount: sanitizedNewItems.length
     };
 
@@ -1660,36 +1794,56 @@ export async function registerPartialPayment(
     const newPayment: PartialPayment = {
       id: paymentId,
       tipo: paymentData.tipo,
-      comensalId: paymentData.comensalId || undefined,
-      comensalNombre: paymentData.comensalNombre || undefined,
-      comensalNumero: paymentData.comensalNumero || undefined,
-      items: paymentData.items || undefined,
-      monto: paymentData.monto,
-      subtotal: paymentData.subtotal || paymentData.monto,
-      descuento: paymentData.descuento || 0,
-      propina: paymentData.propina || 0,
-      total: paymentData.total,
-      metodoPago: paymentData.metodoPago,
-      montoRecibido: paymentData.montoRecibido,
-      vuelto: paymentData.vuelto || 0,
+      monto: Number(paymentData.monto) || 0,
+      subtotal: Number(paymentData.subtotal ?? paymentData.monto) || 0,
+      descuento: Number(paymentData.descuento || 0),
+      propina: Number(paymentData.propina || 0),
+      total: Number(paymentData.total ?? paymentData.monto) || 0,
+      metodoPago: paymentData.metodoPago || 'efectivo',
       fecha: now,
-      cajeroNombre: paymentData.cajeroNombre || 'Cajero',
-      clienteNombre: paymentData.clienteNombre,
-      clienteTelefono: paymentData.clienteTelefono,
       ticketImpreso: true,
-      numeroParte: paymentData.numeroParte,
-      totalPartes: paymentData.totalPartes
+      cajeroNombre: paymentData.cajeroNombre || 'Cajero'
     };
 
-    const existingCobros = order.cobros || [];
-    const updatedCobros = [...existingCobros, newPayment];
-    const totalCobrado = Math.round(updatedCobros.reduce((sum, c) => sum + (c.monto || c.total || 0), 0) * 100) / 100;
-    const orderTotal = order.total || 0;
+    if (paymentData.comensalId) newPayment.comensalId = paymentData.comensalId;
+    if (paymentData.comensalNombre) newPayment.comensalNombre = paymentData.comensalNombre;
+    if (paymentData.comensalNumero !== undefined && paymentData.comensalNumero !== null) {
+      newPayment.comensalNumero = paymentData.comensalNumero;
+    }
+    if (paymentData.items && paymentData.items.length > 0) {
+      newPayment.items = limpiarDatosUndefined(paymentData.items);
+    }
+    if (paymentData.montoRecibido !== undefined && paymentData.montoRecibido !== null) {
+      newPayment.montoRecibido = Number(paymentData.montoRecibido);
+    }
+    if (paymentData.vuelto !== undefined && paymentData.vuelto !== null) {
+      newPayment.vuelto = Number(paymentData.vuelto);
+    }
+    if (paymentData.clienteNombre) newPayment.clienteNombre = paymentData.clienteNombre;
+    if (paymentData.clienteTelefono) newPayment.clienteTelefono = paymentData.clienteTelefono;
+    if (paymentData.numeroParte !== undefined && paymentData.numeroParte !== null) {
+      newPayment.numeroParte = paymentData.numeroParte;
+    }
+    if (paymentData.totalPartes !== undefined && paymentData.totalPartes !== null) {
+      newPayment.totalPartes = paymentData.totalPartes;
+    }
+
+    const sanitizedPayment = limpiarDatosUndefined(newPayment);
+    const existingCobros = (order.cobros || []).map(c => limpiarDatosUndefined(c));
+    const updatedCobros = [...existingCobros, sanitizedPayment];
+    const totalCobrado = Math.round(updatedCobros.reduce((sum, c) => sum + (Number(c.monto) || Number(c.total) || 0), 0) * 100) / 100;
+    const orderTotal = Number(order.total) || 0;
     const newSaldoPendiente = Math.max(0, Math.round((orderTotal - totalCobrado) * 100) / 100);
     saldoRestante = newSaldoPendiente;
 
+    const isFullyPaid = newSaldoPendiente <= 0.01;
+    orderCompleted = isFullyPaid;
+
     // Actualizar items si el cobro fue por comensal o cuenta general
     const updatedItems = (order.items || []).map(it => {
+      if (isFullyPaid) {
+        return { ...it, cobrado: true, estado: 'cobrado' as ItemStatus };
+      }
       if (paymentData.tipo === 'comensal' && paymentData.comensalId && (it.comensalId === paymentData.comensalId || it.comensalNombre === paymentData.comensalNombre)) {
         return { ...it, cobrado: true, cobroId: paymentId, estado: 'cobrado' as ItemStatus };
       }
@@ -1700,26 +1854,28 @@ export async function registerPartialPayment(
     });
 
     // Actualizar comensales
-    const updatedComensales = (order.comensales || []).map(c => {
+    const existingComensales = order.comensales && order.comensales.length > 0 ? order.comensales : [];
+    const updatedComensales = existingComensales.map(c => {
       if (paymentData.tipo === 'comensal' && (c.id === paymentData.comensalId || c.nombre === paymentData.comensalNombre)) {
         return { ...c, pagado: true, montoPagado: (c.montoPagado || 0) + paymentData.total };
+      }
+      if (isFullyPaid) {
+        return { ...c, pagado: true };
       }
       return c;
     });
 
-    const isFullyPaid = newSaldoPendiente <= 0.01;
-    orderCompleted = isFullyPaid;
-
     const timelineEvent: OrderTimelineEvent = {
-      estado: isFullyPaid ? 'cobrado' : order.estado,
+      estado: isFullyPaid ? 'cobrado' : (order.estado || 'entregado'),
       fecha: now,
       usuario: paymentData.cajeroNombre || 'Cajero',
       motivo: isFullyPaid 
-        ? `Cobro final completado (${paymentData.tipo === 'comensal' ? `Comensal: ${paymentData.comensalNombre}` : 'Cuenta liquidada'}). Total cobrado: $${totalCobrado.toFixed(2)}`
-        : `Pago parcial registrado: $${paymentData.total.toFixed(2)} (${paymentData.tipo === 'comensal' ? `Comensal: ${paymentData.comensalNombre}` : `Parte ${paymentData.numeroParte || 1}/${paymentData.totalPartes || 1}`}). Saldo pendiente: $${newSaldoPendiente.toFixed(2)}`
+        ? `Cobro final completado (${paymentData.tipo === 'comensal' ? `Comensal: ${paymentData.comensalNombre || 'Comensal'}` : 'Cuenta liquidada'}). Total cobrado: $${totalCobrado.toFixed(2)}`
+        : `Pago parcial registrado: $${paymentData.total.toFixed(2)} (${paymentData.tipo === 'comensal' ? `Comensal: ${paymentData.comensalNombre || 'Comensal'}` : `Parte ${paymentData.numeroParte || 1}/${paymentData.totalPartes || 1}`}). Saldo pendiente: $${newSaldoPendiente.toFixed(2)}`
     };
 
-    const updatePayload: any = {
+    const updatePayload: Record<string, any> = {
+      appId: (order as any).appId || 'gastro_smart',
       cobros: updatedCobros,
       montoCobradoAcumulado: totalCobrado,
       saldoPendiente: newSaldoPendiente,
@@ -1732,21 +1888,29 @@ export async function registerPartialPayment(
     if (isFullyPaid) {
       updatePayload.estado = 'cobrado';
       updatePayload.cobradoEn = now;
-      updatePayload.metodoPago = paymentData.metodoPago;
+      updatePayload.metodoPago = paymentData.metodoPago || 'efectivo';
       updatePayload.montoPagado = totalCobrado;
-      updatePayload.cajeroNombre = paymentData.cajeroNombre;
+      updatePayload.cajeroNombre = paymentData.cajeroNombre || 'Cajero';
     }
 
-    tx.update(orderRef, updatePayload);
-
-    // Si está totalmente pagado y tenía mesa, liberar la mesa
-    if (isFullyPaid && order.mesaId) {
-      tx.update(doc(db, 'tables', order.mesaId), {
-        estado: 'libre',
-        comandaActivaId: null
-      });
-    }
+    const payloadLimpio = limpiarDatosUndefined(updatePayload);
+    tx.update(orderRef, payloadLimpio);
   });
+
+  // Si está totalmente pagado y tenía mesa asignada, liberar la mesa de manera segura fuera de la transacción
+  if (orderCompleted) {
+    try {
+      const snap = await getDoc(orderRef);
+      if (snap.exists()) {
+        const orderData = snap.data() as Order;
+        if (orderData.mesaId) {
+          await releaseTableIfAllOrdersPaid(orderData.mesaId, orderId);
+        }
+      }
+    } catch (tblErr) {
+      console.warn('Advertencia al verificar liberación de mesa:', tblErr);
+    }
+  }
 
   // Sincronizar estadísticas diarias con el monto cobrado en este pago parcial
   try {
@@ -2720,7 +2884,7 @@ export async function deleteRestaurantCascade(restaurantId: string): Promise<voi
 
 /**
  * ELIMINACIÓN EN CASCADA DE NEGOCIO (MULTI-TENANT):
- * Borra todo el tenant businessId (sucursales, mesas, empleados, cartas, pedidos, gastos, alertas).
+ * Borra todo el tenant businessId (sucursales, mesas, empleados, cartas, pedidos, gastos, alertas, estadísticas).
  * Otros negocios y cuentas permanecen intactos.
  */
 export async function deleteBusinessCascade(businessId: string): Promise<void> {
@@ -2735,14 +2899,18 @@ export async function deleteBusinessCascade(businessId: string): Promise<void> {
     'expenses',
     'cashRegisterCloses',
     'loginAttempts',
-    'securityAlerts'
+    'securityAlerts',
+    'dailyStats'
   ];
 
   for (const colName of collections) {
     const snap = await getDocs(query(collection(db, colName), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId)));
-    const batch = writeBatch(db);
-    snap.docs.forEach(d => batch.delete(d.ref));
-    await batch.commit();
+    for (let i = 0; i < snap.docs.length; i += 400) {
+      const batch = writeBatch(db);
+      const chunk = snap.docs.slice(i, i + 400);
+      chunk.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
   }
 
   // Eliminar el documento del negocio
@@ -2750,6 +2918,351 @@ export async function deleteBusinessCascade(businessId: string): Promise<void> {
 }
 
 export const deleteAllAccountData = deleteBusinessCascade;
+
+export interface TestOperationalSummary {
+  pedidos: number;
+  gastos: number;
+  turnos: number;
+  arqueos: number;
+  alertas: number;
+  estadisticas: number;
+  mesasOcupadas: number;
+}
+
+export async function getTestOperationalCounts(businessId: string): Promise<TestOperationalSummary> {
+  const [ordersSnap, expensesSnap, shiftsSnap, cashSnap, alertsSnap, statsSnap, tablesSnap] = await Promise.all([
+    getDocs(query(collection(db, 'orders'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'expenses'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'shifts'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'cashRegisterCloses'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'securityAlerts'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'dailyStats'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId)))
+  ]);
+
+  const mesasOcupadas = tablesSnap.docs.filter(d => d.data().estado !== 'libre').length;
+
+  return {
+    pedidos: ordersSnap.size,
+    gastos: expensesSnap.size,
+    turnos: shiftsSnap.size,
+    arqueos: cashSnap.size,
+    alertas: alertsSnap.size,
+    estadisticas: statsSnap.size,
+    mesasOcupadas
+  };
+}
+
+/**
+ * RESET DE FASE DE PRUEBAS:
+ * Elimina todos los pedidos, cuentas, comandas, gastos, turnos de prueba, cierres de caja y alertas.
+ * Desocupa y libera todas las mesas a 'libre'.
+ * MANTIENE: Restaurantes, Mesas, Empleados con sus PINs y la Carta de Menú.
+ */
+export async function resetTestOperationalData(businessId: string): Promise<TestOperationalSummary> {
+  const [ordersSnap, expensesSnap, shiftsSnap, cashSnap, alertsSnap, statsSnap, tablesSnap] = await Promise.all([
+    getDocs(query(collection(db, 'orders'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'expenses'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'shifts'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'cashRegisterCloses'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'securityAlerts'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'dailyStats'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))),
+    getDocs(query(collection(db, 'tables'), where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId)))
+  ]);
+
+  const summary: TestOperationalSummary = {
+    pedidos: ordersSnap.size,
+    gastos: expensesSnap.size,
+    turnos: shiftsSnap.size,
+    arqueos: cashSnap.size,
+    alertas: alertsSnap.size,
+    estadisticas: statsSnap.size,
+    mesasOcupadas: tablesSnap.docs.filter(d => d.data().estado !== 'libre').length
+  };
+
+  const deleteInChunks = async (docs: Array<any>) => {
+    for (let i = 0; i < docs.length; i += 400) {
+      const batch = writeBatch(db);
+      const chunk = docs.slice(i, i + 400);
+      chunk.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
+  };
+
+  await Promise.all([
+    deleteInChunks(ordersSnap.docs),
+    deleteInChunks(expensesSnap.docs),
+    deleteInChunks(shiftsSnap.docs),
+    deleteInChunks(cashSnap.docs),
+    deleteInChunks(alertsSnap.docs),
+    deleteInChunks(statsSnap.docs)
+  ]);
+
+  // Reset mesas a libre
+  for (let i = 0; i < tablesSnap.docs.length; i += 400) {
+    const batch = writeBatch(db);
+    const chunk = tablesSnap.docs.slice(i, i + 400);
+    chunk.forEach(d => batch.update(d.ref, { estado: 'libre' }));
+    await batch.commit();
+  }
+
+  return summary;
+}
+
+/**
+ * Pone todas las suscripciones de negocios en versión "prueba" (Trial/Testing)
+ * e incrementa sus días de validez para pruebas libres.
+ */
+export async function setAllBusinessesToTrialMode(): Promise<number> {
+  const q = query(collection(db, 'businesses'), where('appId', '==', 'gastro_smart'));
+  const snap = await getDocs(q);
+  const now = new Date();
+  const futureExpiry = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 días de prueba
+
+  const batch = writeBatch(db);
+  let count = 0;
+
+  snap.docs.forEach(docSnap => {
+    const data = docSnap.data() as Business;
+    const currentSub = data.suscripcion || {
+      plan: data.plan || 'pro',
+      estado: 'prueba',
+      fechaInicio: now.toISOString(),
+      fechaVencimiento: futureExpiry,
+      limiteSucursales: 5,
+      limiteMesasPorSucursal: 50,
+      limiteUsuarios: 20,
+      precioMensualUSD: 0,
+      notasSuscripcion: 'Modo Prueba / Testing Activado Globalmente'
+    };
+
+    batch.update(docSnap.ref, {
+      activo: true,
+      suscripcion: {
+        ...currentSub,
+        estado: 'prueba',
+        fechaVencimiento: futureExpiry,
+        notasSuscripcion: (currentSub.notasSuscripcion || '') + ' [VERSIÓN PRUEBA]'
+      }
+    });
+    count++;
+  });
+
+  await batch.commit();
+  return count;
+}
+
+/**
+ * Sembrar datos rápidos de prueba si el menú o mesas están vacíos
+ */
+export async function seedQuickTestingDishesAndOrder(businessId: string, restaurantId: string): Promise<void> {
+  const menuSnap = await getDocs(query(
+    collection(db, 'menuItems'), 
+    where('appId', '==', 'gastro_smart'), 
+    where('businessId', '==', businessId)
+  ));
+
+  if (menuSnap.size === 0) {
+    await seedSampleDishesForBusiness(businessId, restaurantId);
+  }
+}
+
+/**
+ * SIMULADOR OPERATIVO: Crea una comanda de prueba en una mesa con notas de cocina
+ */
+export async function simulateTableOrder(
+  businessId: string, 
+  restaurantId: string, 
+  mesaNumero: number = 1
+): Promise<{ orderId: string; tableNumber: number; total: number }> {
+  await seedQuickTestingDishesAndOrder(businessId, restaurantId);
+
+  const menuSnap = await getDocs(query(
+    collection(db, 'menuItems'),
+    where('appId', '==', 'gastro_smart'),
+    where('businessId', '==', businessId)
+  ));
+  const menuList = menuSnap.docs.map(d => ({ id: d.id, ...d.data() } as MenuItem));
+
+  const itemsToOrder: OrderItem[] = menuList.slice(0, 2).map((item, idx) => ({
+    menuItemId: item.id,
+    nombre: item.nombre,
+    precio: item.precio,
+    cantidad: idx === 0 ? 2 : 1,
+    notas: idx === 0 ? 'Término medio, sin cebolla' : 'Salsa aparte, bien caliente',
+    requiereCocina: true,
+    estadoItem: 'pendiente'
+  }));
+
+  if (itemsToOrder.length === 0) {
+    itemsToOrder.push({
+      menuItemId: 'demo-dish-1',
+      nombre: 'Hamburguesa Gourmet Angus',
+      precio: 14.50,
+      cantidad: 2,
+      notas: 'Término medio, sin cebolla',
+      requiereCocina: true,
+      estadoItem: 'pendiente'
+    });
+  }
+
+  const subtotal = itemsToOrder.reduce((acc, i) => acc + (i.precio * i.cantidad), 0);
+  const impuesto = Math.round(subtotal * 0.12 * 100) / 100;
+  const total = Math.round((subtotal + impuesto) * 100) / 100;
+
+  // Buscar o crear la mesa
+  let targetTableId: string | null = null;
+  const tableSnap = await getDocs(query(
+    collection(db, 'tables'),
+    where('appId', '==', 'gastro_smart'),
+    where('restaurantId', '==', restaurantId),
+    where('numero', '==', mesaNumero)
+  ));
+
+  if (!tableSnap.empty) {
+    targetTableId = tableSnap.docs[0].id;
+  } else {
+    const createdTable = await addDoc(collection(db, 'tables'), {
+      businessId,
+      restaurantId,
+      numero: mesaNumero,
+      capacidad: 4,
+      estado: 'libre',
+      appId: 'gastro_smart'
+    });
+    targetTableId = createdTable.id;
+  }
+
+  const orderId = await createOrder({
+    businessId,
+    restaurantId,
+    meseroId: 'simulador',
+    meseroNombre: 'Simulador de Pruebas',
+    tipo: 'local',
+    mesaId: targetTableId,
+    mesaNumero,
+    items: itemsToOrder,
+    total,
+    metodoPago: 'efectivo',
+    estado: 'pendiente_cocina',
+    estadoPago: 'pendiente',
+    clienteNombre: 'Mesa ' + mesaNumero + ' (Simulación)'
+  });
+
+  await updateDoc(doc(db, 'tables', targetTableId), {
+    estado: 'ocupada',
+    comandaActivaId: orderId
+  });
+
+  return { orderId, tableNumber: mesaNumero, total };
+}
+
+/**
+ * SIMULADOR OPERATIVO: Crea un pedido express de mostrador / delivery
+ */
+export async function simulateExpressOrder(
+  businessId: string, 
+  restaurantId: string,
+  tipo: 'mostrador' | 'delivery' = 'mostrador'
+): Promise<{ orderId: string; total: number; canal: string }> {
+  await seedQuickTestingDishesAndOrder(businessId, restaurantId);
+
+  const menuSnap = await getDocs(query(
+    collection(db, 'menuItems'),
+    where('appId', '==', 'gastro_smart'),
+    where('businessId', '==', businessId)
+  ));
+  const menuList = menuSnap.docs.map(d => ({ id: d.id, ...d.data() } as MenuItem));
+
+  const selectedItem = menuList[0] || {
+    id: 'demo-item',
+    nombre: 'Combo Alitas BBQ + Papas',
+    precio: 11.90
+  };
+
+  const items: OrderItem[] = [{
+    menuItemId: selectedItem.id,
+    nombre: selectedItem.nombre,
+    precio: selectedItem.precio,
+    cantidad: 1,
+    notas: tipo === 'delivery' ? 'Empaque sellado para delivery' : 'Para llevar en bolsa kraft',
+    requiereCocina: true,
+    estadoItem: 'pendiente'
+  }];
+
+  const subtotal = items[0].precio * items[0].cantidad;
+  const impuesto = Math.round(subtotal * 0.12 * 100) / 100;
+  const deliveryFee = tipo === 'delivery' ? 2.50 : 0;
+  const total = Math.round((subtotal + impuesto + deliveryFee) * 100) / 100;
+
+  const orderId = await createOrder({
+    businessId,
+    restaurantId,
+    meseroId: 'simulador',
+    meseroNombre: 'Mostrador / Simulador',
+    tipo: tipo === 'delivery' ? 'delivery' : 'para_llevar',
+    empresaDelivery: tipo === 'delivery' ? 'PedidosYa' : undefined,
+    mesaId: null,
+    items,
+    total,
+    metodoPago: 'efectivo',
+    estado: 'pendiente_cocina',
+    estadoPago: 'pendiente',
+    clienteNombre: tipo === 'delivery' ? 'Cliente Delivery (Simulado)' : 'Cliente Mostrador (Simulado)',
+    clienteTelefono: '0991234567',
+    clienteDireccion: tipo === 'delivery' ? 'Av. Principal #123 y Calle 4' : undefined
+  });
+
+  return { orderId, total, canal: tipo === 'delivery' ? 'PedidosYa / Delivery' : 'Mostrador Express' };
+}
+
+/**
+ * SIMULADOR OPERATIVO: Simula apertura de turno de caja
+ */
+export async function simulateCashShift(
+  businessId: string,
+  restaurantId: string,
+  restaurantNombre: string,
+  fondoInicial: number = 50.00
+): Promise<{ shiftId: string; fondoInicial: number; employeeName: string }> {
+  const empSnap = await getDocs(query(
+    collection(db, 'employees'),
+    where('appId', '==', 'gastro_smart'),
+    where('businessId', '==', businessId)
+  ));
+  
+  let employeeName = 'Cajero de Pruebas';
+  let employeeId = 'cajero-test-id';
+  let employeePuesto: Role = 'caja';
+
+  if (!empSnap.empty) {
+    const cashiers = empSnap.docs.map(d => ({ id: d.id, ...d.data() } as Employee)).filter(e => e.puesto === 'caja');
+    const emp = cashiers[0] || (empSnap.docs[0].data() as Employee);
+    employeeName = emp.nombre;
+    employeeId = empSnap.docs[0].id;
+    employeePuesto = emp.puesto;
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const shiftDoc = await addDoc(collection(db, 'shifts'), {
+    businessId,
+    employeeId,
+    employeeName,
+    employeePuesto,
+    restaurantId,
+    restaurantNombre,
+    fecha: today,
+    horaInicio: new Date().toISOString(),
+    estado: 'abierto',
+    fondoInicial,
+    pedidosTomados: 0,
+    ventasGeneradas: 0,
+    pagado: false,
+    appId: 'gastro_smart'
+  });
+
+  return { shiftId: shiftDoc.id, fondoInicial, employeeName };
+}
 
 // ======================= SEED SAMPLE DISHES & DEMO =======================
 
@@ -3328,7 +3841,70 @@ export async function markOrdersDeliveryPaid(
 }
 
 /**
+ * Obtener pedidos históricos con filtros avanzados (fecha, sucursal, método de pago, estado)
+ */
+export async function fetchHistoricalOrders(params: {
+  businessId?: string;
+  restaurantId?: string;
+  startDate?: string;
+  endDate?: string;
+  paymentMethod?: string;
+  status?: string;
+  maxLimit?: number;
+}): Promise<Order[]> {
+  try {
+    const colRef = collection(db, 'orders');
+    let q = query(
+      colRef,
+      where('appId', '==', 'gastro_smart'),
+      limit(params.maxLimit || 400)
+    );
+    if (params.businessId) {
+      q = query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', params.businessId), limit(params.maxLimit || 400));
+    }
+    const snap = await getDocs(q);
+    let list: Order[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as Order));
+    
+    if (params.restaurantId && params.restaurantId !== 'all') {
+      list = list.filter(o => o.restaurantId === params.restaurantId);
+    }
+    if (params.startDate) {
+      list = list.filter(o => {
+        const orderDate = (o.creadoEn || '').split('T')[0];
+        return orderDate >= params.startDate!;
+      });
+    }
+    if (params.endDate) {
+      list = list.filter(o => {
+        const orderDate = (o.creadoEn || '').split('T')[0];
+        return orderDate <= params.endDate!;
+      });
+    }
+    if (params.paymentMethod && params.paymentMethod !== 'all') {
+      list = list.filter(o => {
+        if (params.paymentMethod === 'mixto') {
+          return (o.cobros && o.cobros.length > 1);
+        }
+        if (o.metodoPago === params.paymentMethod) return true;
+        if (o.cobros?.some(c => c.metodoPago === params.paymentMethod)) return true;
+        return false;
+      });
+    }
+    if (params.status && params.status !== 'all') {
+      list = list.filter(o => o.estado === params.status || o.estadoPago === params.status);
+    }
+
+    list.sort((a, b) => new Date(b.creadoEn).getTime() - new Date(a.creadoEn).getTime());
+    return list;
+  } catch (err) {
+    console.error('Error fetching historical orders:', err);
+    return [];
+  }
+}
+
+/**
  * Pago masivo de nóminas / sueldos y generación de gastos automáticos
+ * Soporta cálculo dinámico según la modalidad del empleado (por hora, por día / jornal, o mensual)
  */
 export async function paySalaryBatch(
   businessId: string,
@@ -3337,7 +3913,8 @@ export async function paySalaryBatch(
   employeeRateMap: Record<string, number>,
   periodLabel: string,
   userName: string,
-  overtimeMultiplier = 1.5
+  overtimeMultiplier = 1.5,
+  employeeDataMap?: Record<string, { modalidad?: string; tarifaHora?: number; tarifaDiaria?: number; sueldoMensual?: number }>
 ): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
@@ -3354,18 +3931,42 @@ export async function paySalaryBatch(
   let totalPaidOverall = 0;
 
   for (const [employeeId, empShifts] of Object.entries(shiftsByEmployee)) {
-    const rate = employeeRateMap[employeeId] || 12;
-    let normalHours = 0;
-    let overtimeHours = 0;
+    const empInfo = employeeDataMap ? employeeDataMap[employeeId] : undefined;
+    const modalidad = empInfo?.modalidad || 'por_horas';
     const employeeName = empShifts[0]?.employeeName || 'Empleado';
 
-    empShifts.forEach(shift => {
-      const h = (shift.minutosTrabajados || 0) / 60;
-      normalHours += Math.min(8, h);
-      overtimeHours += Math.max(0, h - 8);
-    });
+    let totalPay = 0;
+    let description = '';
+    let normalHours = 0;
+    let overtimeHours = 0;
+    let daysCount = 0;
 
-    const totalPay = Math.round((normalHours * rate + overtimeHours * rate * overtimeMultiplier) * 100) / 100;
+    if (modalidad === 'por_dia') {
+      // Cálculo por día / jornal
+      const uniqueDays = new Set(empShifts.map(s => s.fecha || (s.horaInicio || '').split('T')[0])).size;
+      daysCount = uniqueDays || empShifts.length;
+      const dailyRate = empInfo?.tarifaDiaria && empInfo.tarifaDiaria > 0 
+        ? empInfo.tarifaDiaria 
+        : (employeeRateMap[employeeId] || 50);
+      
+      totalPay = Math.round(daysCount * dailyRate * 100) / 100;
+      description = `Pago de sueldo ${periodLabel} - ${employeeName} (${daysCount} días a $${dailyRate}/día)`;
+    } else {
+      // Cálculo estándar por horas
+      const hourlyRate = empInfo?.tarifaHora && empInfo.tarifaHora > 0 
+        ? empInfo.tarifaHora 
+        : (employeeRateMap[employeeId] || 12);
+
+      empShifts.forEach(shift => {
+        const h = (shift.minutosTrabajados || 0) / 60;
+        normalHours += Math.min(8, h);
+        overtimeHours += Math.max(0, h - 8);
+      });
+
+      totalPay = Math.round((normalHours * hourlyRate + overtimeHours * hourlyRate * overtimeMultiplier) * 100) / 100;
+      description = `Pago de sueldo ${periodLabel} - ${employeeName} (${normalHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${hourlyRate}/h)`;
+    }
+
     totalPaidOverall += totalPay;
 
     // 1. Crear gasto de sueldo
@@ -3374,12 +3975,15 @@ export async function paySalaryBatch(
       restaurantId: empShifts[0]?.restaurantId || restaurantId,
       tipo: 'sueldo',
       monto: totalPay,
-      descripcion: `Pago de sueldo ${periodLabel} - ${employeeName} (${normalHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${rate}/h)`,
+      descripcion: description,
       employeeId,
       employeeName,
       horasTrabajadas: Math.round((normalHours + overtimeHours) * 10) / 10,
       horasExtra: Math.round(overtimeHours * 10) / 10,
-      tarifaHora: rate,
+      diasTrabajados: daysCount || undefined,
+      modalidadPago: modalidad,
+      tarifaHora: modalidad === 'por_horas' ? (empInfo?.tarifaHora || employeeRateMap[employeeId] || 12) : undefined,
+      tarifaDiaria: modalidad === 'por_dia' ? (empInfo?.tarifaDiaria || 50) : undefined,
       fecha: today,
       appId: 'gastro_smart',
       creadoEn: now
@@ -3388,15 +3992,24 @@ export async function paySalaryBatch(
     // 2. Marcar cada shift como pagado
     for (const shift of empShifts) {
       const shiftRef = doc(db, 'shifts', shift.id);
-      const shiftHours = (shift.minutosTrabajados || 0) / 60;
-      const shiftNorm = Math.min(8, shiftHours);
-      const shiftExt = Math.max(0, shiftHours - 8);
-      const shiftPay = Math.round((shiftNorm * rate + shiftExt * rate * overtimeMultiplier) * 100) / 100;
+      let shiftPay = 0;
+      if (modalidad === 'por_dia') {
+        const dailyRate = empInfo?.tarifaDiaria && empInfo.tarifaDiaria > 0 ? empInfo.tarifaDiaria : 50;
+        shiftPay = Math.round(dailyRate * 100) / 100;
+      } else {
+        const hourlyRate = empInfo?.tarifaHora && empInfo.tarifaHora > 0 ? empInfo.tarifaHora : (employeeRateMap[employeeId] || 12);
+        const shiftHours = (shift.minutosTrabajados || 0) / 60;
+        const shiftNorm = Math.min(8, shiftHours);
+        const shiftExt = Math.max(0, shiftHours - 8);
+        shiftPay = Math.round((shiftNorm * hourlyRate + shiftExt * hourlyRate * overtimeMultiplier) * 100) / 100;
+      }
 
       await updateDoc(shiftRef, {
         pagado: true,
         fechaPago: now,
-        montoPagadoSueldo: shiftPay
+        montoPagadoSueldo: shiftPay,
+        sueldoPagado: true,
+        sueldoTotal: shiftPay
       });
     }
   }
