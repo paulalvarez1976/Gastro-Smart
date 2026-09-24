@@ -229,7 +229,8 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
         targetRestId,
         menuItems,
         orders,
-        ranges.currentDates
+        ranges.currentDates,
+        expenses
       );
 
       setSummaryData(enrichedSummary);
@@ -1002,6 +1003,144 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
           </div>
         </div>
 
+      </div>
+
+      {/* SECCIÓN: COMPRAS DE INSUMOS POR VARIEDAD, CANTIDADES Y COSTOS */}
+      <div className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-neutral-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-700 flex items-center justify-center font-bold">
+              <Package className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-extrabold text-neutral-900 text-sm uppercase tracking-wider">
+                  Compras de Insumos por Variedad, Cantidades y Costos
+                </h4>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  {summaryData?.comprasInsumosDetalle?.length || 0} Variedades
+                </span>
+              </div>
+              <p className="text-xs text-neutral-500 mt-0.5">
+                Desglose consolidado de materia prima e insumos adquiridos en el periodo ({periodLabels.current})
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowNewPurchaseModal(true)}
+              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Registrar Compra</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubView('historial_insumos')}
+              className="px-3 py-1.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-xs font-bold transition cursor-pointer"
+            >
+              Ver Historial Completo →
+            </button>
+          </div>
+        </div>
+
+        {summaryData?.comprasInsumosDetalle && summaryData.comprasInsumosDetalle.length > 0 ? (
+          <div className="mt-4 space-y-4">
+            {/* Summary Badge */}
+            <div className="bg-emerald-50/60 border border-emerald-100 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-4">
+                <div>
+                  <span className="text-neutral-500 block text-[10px] uppercase font-bold">Inversión Total en Insumos:</span>
+                  <span className="font-black text-sm text-emerald-900 font-mono">
+                    ${summaryData.montoTotalComprasInsumos?.toFixed(2) || '0.00'}
+                  </span>
+                </div>
+                <div className="h-6 w-px bg-emerald-200 hidden sm:block" />
+                <div>
+                  <span className="text-neutral-500 block text-[10px] uppercase font-bold">Insumo / Variedad Principal:</span>
+                  <span className="font-bold text-neutral-800">
+                    {summaryData.comprasInsumosDetalle[0]?.insumo} ({summaryData.comprasInsumosDetalle[0]?.porcentajeDelTotalInsumos}% de la inversión)
+                  </span>
+                </div>
+              </div>
+              <div className="text-neutral-500 text-[11px]">
+                Mostrando {summaryData.comprasInsumosDetalle.length} variedades ordenadas por mayor costo
+              </div>
+            </div>
+
+            {/* Detailed Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-neutral-50 text-neutral-500 font-bold border-b border-neutral-200 uppercase text-[10px] tracking-wider">
+                    <th className="py-2.5 px-3">#</th>
+                    <th className="py-2.5 px-3">Insumo / Variedad</th>
+                    <th className="py-2.5 px-3 text-center">Cant. Comprada</th>
+                    <th className="py-2.5 px-3 text-right">Costo Unit. Prom.</th>
+                    <th className="py-2.5 px-3 text-right">Costo Total ($)</th>
+                    <th className="py-2.5 px-3 text-center">% de Inversión</th>
+                    <th className="py-2.5 px-3 text-left">Proveedor(es)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100 font-medium">
+                  {summaryData.comprasInsumosDetalle.map((item, idx) => (
+                    <tr key={`${item.insumo}-${idx}`} className="hover:bg-neutral-50/80 transition-colors">
+                      <td className="py-2.5 px-3 font-mono font-bold text-neutral-400">{idx + 1}</td>
+                      <td className="py-2.5 px-3 font-bold text-neutral-900">
+                        {item.insumo}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-bold text-neutral-800 font-mono">
+                        {item.cantidadTotal} <span className="text-[10px] text-neutral-500 font-normal">{item.variedadOUnidad}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-neutral-700">
+                        ${item.costoPromedioUnitario.toFixed(2)} / {item.variedadOUnidad}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-black text-emerald-700">
+                        ${item.costoTotal.toFixed(2)}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <div className="w-16 h-1.5 bg-neutral-100 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-emerald-500 rounded-full"
+                              style={{ width: `${Math.min(100, Math.max(5, item.porcentajeDelTotalInsumos))}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] font-bold text-neutral-600 font-mono">
+                            {item.porcentajeDelTotalInsumos}%
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-xs text-neutral-500 max-w-[150px] truncate">
+                        {item.proveedores && item.proveedores.length > 0 
+                          ? item.proveedores.join(', ')
+                          : 'General'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 p-8 bg-neutral-50 rounded-xl border border-dashed border-neutral-200 text-center text-xs">
+            <Package className="w-8 h-8 text-neutral-300 mx-auto mb-2" />
+            <p className="font-bold text-neutral-700">No hay registro de compras de insumos para este periodo ({periodLabels.current})</p>
+            <p className="text-neutral-500 mt-1 max-w-md mx-auto">
+              Registra las compras detalladas de materias primas o víveres con sus unidades, cantidades y precios para visualizar este reporte consolidado.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowNewPurchaseModal(true)}
+              className="mt-3 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Registrar Primera Compra</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 5. SECCIÓN INFERIOR: ALERTAS INTELIGENTES & COSTO LABORAL */}

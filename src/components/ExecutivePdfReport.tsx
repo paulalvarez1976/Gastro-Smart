@@ -331,6 +331,40 @@ export const ExecutivePdfReport: React.FC<ExecutivePdfReportProps> = ({
             </table>
           </div>
 
+          {/* Desglose de Compras de Insumos por Variedad, Cantidades y Costos */}
+          {summary.comprasInsumosDetalle && summary.comprasInsumosDetalle.length > 0 && (
+            <div className="border border-black p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-black pb-1">
+                <h4 className="text-xs font-bold uppercase tracking-wider">Reporte de Compras de Insumos por Variedad, Cantidades y Costos</h4>
+                <span className="text-[10px] font-mono font-bold">Total Insumos: ${summary.montoTotalComprasInsumos?.toFixed(2) || '0.00'}</span>
+              </div>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-neutral-500 border-b border-neutral-200">
+                    <th className="pb-1 text-left font-normal">#</th>
+                    <th className="pb-1 text-left font-normal">Insumo / Variedad</th>
+                    <th className="pb-1 text-center font-normal">Cant. Comprada</th>
+                    <th className="pb-1 text-right font-normal">Costo Unit. Prom.</th>
+                    <th className="pb-1 text-right font-normal">Costo Total ($)</th>
+                    <th className="pb-1 text-center font-normal">% Insumos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.comprasInsumosDetalle.map((item, idx) => (
+                    <tr key={idx} className="border-b border-neutral-100">
+                      <td className="py-1.5 font-bold font-mono">{idx + 1}</td>
+                      <td className="py-1.5 font-bold">{item.insumo}</td>
+                      <td className="py-1.5 text-center font-mono">{item.cantidadTotal} {item.variedadOUnidad}</td>
+                      <td className="py-1.5 text-right font-mono">${item.costoPromedioUnitario.toFixed(2)}</td>
+                      <td className="py-1.5 text-right font-mono font-bold">${item.costoTotal.toFixed(2)}</td>
+                      <td className="py-1.5 text-center font-mono">{item.porcentajeDelTotalInsumos}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Signatures / Footer */}
           <div className="pt-12 grid grid-cols-2 gap-12 text-center text-xs">
             <div className="border-t border-black pt-2">

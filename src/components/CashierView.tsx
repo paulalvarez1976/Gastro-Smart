@@ -1,5 +1,5 @@
 import { UNIQUE_BUSINESS_ID } from '../config/business';
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Order, CashRegisterClose, MenuItem, Table, Client, OrderDiner, PartialPayment } from '../types';
 import { 
@@ -10,7 +10,8 @@ import {
   getOperationalDateString,
   markOrderDelivered,
   registerPartialPayment,
-  registerOrderFuga
+  registerOrderFuga,
+  subscribeToCashCloses
 } from '../services/dataService';
 import { sounds } from '../utils/sound';
 import { haptics } from '../utils/haptics';
@@ -91,6 +92,18 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
   const [closedSummary, setClosedSummary] = useState<CashRegisterClose | null>(null);
   const [isCashShiftClosed, setIsCashShiftClosed] = useState<boolean>(false);
   const [thermalPrintOrder, setThermalPrintOrder] = useState<Order | null>(null);
+  const [cashCloses, setCashCloses] = useState<CashRegisterClose[]>([]);
+  const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!currentRestaurant) return;
+    const unsub = subscribeToCashCloses(
+      currentRestaurant.businessId || UNIQUE_BUSINESS_ID,
+      currentRestaurant.id,
+      (data) => setCashCloses(data)
+    );
+    return () => unsub();
+  }, [currentRestaurant]);
   const [shiftStartTime, setShiftStartTime] = useState<number>(() => {
     const stored = localStorage.getItem(`cash_shift_start_${currentRestaurant?.id}`);
     return stored ? new Date(stored).getTime() : 0;
@@ -1182,10 +1195,23 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                     Cajero: <strong>{currentEmployee?.nombre}</strong> • {currentRestaurant?.nombre}
                   </p>
                 </div>
-                <div className="text-right">
-                  <div className="text-xs font-semibold text-neutral-400">Fecha del turno</div>
-                  <div className="text-sm font-black text-neutral-800">
-                    {new Date().toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowHistoryModal(true);
+                      sounds.playKeypadClick();
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-blue-200 shadow-2xs"
+                  >
+                    <History className="w-4 h-4" />
+                    <span>Histórico de Cierres</span>
+                  </button>
+                  <div className="text-right">
+                    <div className="text-xs font-semibold text-neutral-400">Fecha del turno</div>
+                    <div className="text-sm font-black text-neutral-800">
+                      {new Date().toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1947,6 +1973,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           <ThermalReceiptModal
             order={thermalPrintOrder}
             restaurantName={currentRestaurant?.nombre || 'Restaurante'}
+            restaurantLogo={currentRestaurant?.logoUrl || undefined}
             restaurantAddress={currentRestaurant?.direccion}
             restaurantPhone={currentRestaurant?.telefono}
             clientPhone={resolvedClientPhone || undefined}
@@ -1956,6 +1983,120 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           />
         );
       })()}
+
+      {/* Modal Histórico de Cierres de Caja (Transparencia Contable) */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-neutral-100 overflow-hidden">
+            {/* Header */}
+            <div className="p-6 border-b border-neutral-100 flex items-center justify-between bg-neutral-50/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-neutral-950">Histórico de Cierres de Caja</h3>
+                  <p className="text-xs text-neutral-500">
+                    Auditoría y transparencia contable de turnos anteriores • {currentRestaurant?.nombre}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="text-neutral-400 hover:text-neutral-600 p-1.5 rounded-xl hover:bg-neutral-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content List / Table */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {cashCloses.length === 0 ? (
+                <div className="text-center py-16 text-neutral-400">
+                  <FileSpreadsheet className="w-12 h-12 mx-auto mb-3 opacity-30 text-blue-600" />
+                  <p className="font-bold text-sm">No hay cierres de caja registrados todavía en este establecimiento.</p>
+                  <p className="text-xs text-neutral-400 mt-1">Los cierres guardados por los cajeros aparecerán listados aquí.</p>
+                </div>
+              ) : (
+                <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden shadow-xs">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-neutral-50 border-b border-neutral-200 text-neutral-500 font-bold uppercase text-[10px]">
+                      <tr>
+                        <th className="p-3.5">Fecha / Turno</th>
+                        <th className="p-3.5">Cajero</th>
+                        <th className="p-3.5 text-right">Fondo Inicial</th>
+                        <th className="p-3.5 text-right">Esperado</th>
+                        <th className="p-3.5 text-right">Real Contado</th>
+                        <th className="p-3.5 text-right">Diferencia</th>
+                        <th className="p-3.5 text-center">Pedidos</th>
+                        <th className="p-3.5">Notas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-100 text-neutral-700">
+                      {cashCloses.map((cClose, idx) => {
+                        const diff = cClose.diferencia || 0;
+                        const isSquare = Math.abs(diff) < 0.01;
+                        const isSurplus = diff > 0.01;
+
+                        return (
+                          <tr key={`close-${cClose.id || idx}`} className="hover:bg-neutral-50/70 transition">
+                            <td className="p-3.5 font-mono">
+                              <div className="font-bold text-neutral-900">{new Date(cClose.fecha || cClose.creadoEn).toLocaleDateString()}</div>
+                              <div className="text-[10px] text-neutral-400">
+                                {new Date(cClose.fecha || cClose.creadoEn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </td>
+                            <td className="p-3.5 font-semibold text-neutral-800">
+                              {cClose.cajeroNombre || 'Cajero'}
+                            </td>
+                            <td className="p-3.5 text-right font-mono text-neutral-600">
+                              ${(cClose.montoInicial || 0).toFixed(2)}
+                            </td>
+                            <td className="p-3.5 text-right font-mono font-bold text-neutral-900">
+                              ${(cClose.totalEsperado || 0).toFixed(2)}
+                            </td>
+                            <td className="p-3.5 text-right font-mono font-bold text-emerald-700">
+                              ${(cClose.totalReal || 0).toFixed(2)}
+                            </td>
+                            <td className="p-3.5 text-right font-mono">
+                              <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-black ${
+                                isSquare
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : isSurplus
+                                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                    : 'bg-rose-50 text-rose-700 border border-rose-200'
+                              }`}>
+                                {isSquare ? 'Cuadrado ($0.00)' : isSurplus ? `+${diff.toFixed(2)}` : diff.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="p-3.5 text-center font-bold text-neutral-600">
+                              {cClose.totalPedidosCobrados || 0}
+                            </td>
+                            <td className="p-3.5 text-neutral-500 italic max-w-xs truncate">
+                              {cClose.notas || 'Sin observaciones'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 bg-neutral-50 border-t border-neutral-100 flex items-center justify-between text-xs text-neutral-500">
+              <span>Total de cierres históricos: <strong className="text-neutral-900">{cashCloses.length}</strong></span>
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-white font-bold rounded-xl transition cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

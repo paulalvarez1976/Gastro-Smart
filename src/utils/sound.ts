@@ -346,6 +346,38 @@ class SoundEffects {
     }
   }
 
+  // Sonido de éxito / guardado exitoso
+  playSuccess() {
+    if (this.muted) return;
+    try {
+      this.init();
+      if (!this.ctx) return;
+      const now = this.ctx.currentTime;
+
+      [
+        { freq: 523.25, start: now, dur: 0.15, gain: 0.25 }, // C5
+        { freq: 659.25, start: now + 0.1, dur: 0.18, gain: 0.28 }, // E5
+        { freq: 783.99, start: now + 0.2, dur: 0.35, gain: 0.32 }  // G5
+      ].forEach(item => {
+        const osc = this.ctx!.createOscillator();
+        const gain = this.ctx!.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(item.freq, item.start);
+
+        gain.gain.setValueAtTime(item.gain, item.start);
+        gain.gain.exponentialRampToValueAtTime(0.001, item.start + item.dur);
+
+        osc.connect(gain);
+        gain.connect(this.ctx!.destination);
+
+        osc.start(item.start);
+        osc.stop(item.start + item.dur);
+      });
+    } catch (e) {
+      console.warn('Audio play error:', e);
+    }
+  }
+
   // Sonido de alerta de demora (>15 min) o pedido rechazado
   playAlertWarning() {
     if (this.muted) return;

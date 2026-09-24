@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Table, Client, Order, OrderType, DeliveryCompany, MenuItem } from '../types';
-import { createClient } from '../services/dataService';
+import { Table, Client, Order, OrderType, DeliveryCompany, MenuItem, Restaurant } from '../types';
+import { createClient, getRestaurantDeliveryCompanies } from '../services/dataService';
 import { sounds } from '../utils/sound';
 import { haptics } from '../utils/haptics';
 import { 
@@ -43,6 +43,7 @@ interface WaiterOrderSetupProps {
   orders: Order[];
   clients: Client[];
   restaurantId: string;
+  restaurant?: Restaurant | null;
   initialData?: OrderSetupData | null;
   onContinue: (data: OrderSetupData) => void;
 }
@@ -52,6 +53,7 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
   orders,
   clients,
   restaurantId,
+  restaurant,
   initialData,
   onContinue
 }) => {
@@ -747,23 +749,38 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {(['Propio', 'PedidosYa', 'UberEats', 'Rappi', 'Otro'] as DeliveryCompany[]).map((comp, idx) => (
+                  {getRestaurantDeliveryCompanies(restaurant).map((comp) => (
                     <button
-                      key={`${comp}-${idx}`}
+                      key={comp.id}
                       type="button"
                       onClick={() => {
                         sounds.playKeypadClick();
-                        setDeliveryCompany(comp);
+                        setDeliveryCompany(comp.nombre);
                       }}
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold transition border ${
-                        deliveryCompany === comp
+                        deliveryCompany.toLowerCase() === comp.nombre.toLowerCase() || deliveryCompany.toLowerCase() === comp.id.toLowerCase()
                           ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
                           : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-50'
                       }`}
                     >
-                      {comp}
+                      {comp.nombre}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playKeypadClick();
+                      const customName = prompt('Nombre de la empresa o canal de delivery:') || 'Otro';
+                      setDeliveryCompany(customName);
+                    }}
+                    className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition border ${
+                      !getRestaurantDeliveryCompanies(restaurant).some(c => c.nombre.toLowerCase() === deliveryCompany.toLowerCase())
+                        ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
+                        : 'bg-white text-neutral-500 border-neutral-200 hover:bg-neutral-50'
+                    }`}
+                  >
+                    + Otro
+                  </button>
                 </div>
               </div>
             )}

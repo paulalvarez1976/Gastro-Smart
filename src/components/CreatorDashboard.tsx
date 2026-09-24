@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Business, BusinessSubscription, Restaurant } from '../types';
+import { LogoUploader } from './LogoUploader';
 import { 
   createBusiness, 
   updateBusiness, 
@@ -74,6 +75,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     ownerEmail: string;
     ownerClave: string;
     ownerNombre: string;
+    logoUrl?: string;
   }>({
     plan: 'pro',
     estado: 'activo',
@@ -85,7 +87,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     notasSuscripcion: '',
     ownerEmail: '',
     ownerClave: '',
-    ownerNombre: ''
+    ownerNombre: '',
+    logoUrl: ''
   });
 
   // Modal para registrar nuevo restaurante
@@ -100,7 +103,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     plan: 'pro' as 'basico' | 'pro' | 'enterprise',
     diasValidez: 30,
     limiteSucursales: 3,
-    precioUSD: 49
+    precioUSD: 49,
+    logoUrl: ''
   });
   const [isSubmittingNew, setIsSubmittingNew] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -258,7 +262,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
       notasSuscripcion: sub?.notasSuscripcion || '',
       ownerEmail: biz.email || biz.ownerEmail || '',
       ownerClave: biz.ownerClave || 'Gastro1234',
-      ownerNombre: biz.ownerNombre || 'Administrador'
+      ownerNombre: biz.ownerNombre || 'Administrador',
+      logoUrl: biz.logoUrl || ''
     });
   };
 
@@ -288,7 +293,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         ownerClave: subForm.ownerClave.trim(),
         ownerEmail: subForm.ownerEmail.trim(),
         ownerNombre: subForm.ownerNombre.trim(),
-        email: subForm.ownerEmail.trim()
+        email: subForm.ownerEmail.trim(),
+        logoUrl: subForm.logoUrl ? subForm.logoUrl.trim() : null
       });
 
       // También actualizar la cuenta en la colección users si existe
@@ -444,11 +450,12 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         ownerNombre: tenantForm.ownerName.trim() || 'Administrador',
         ownerClave: assignedClave,
         email: tenantForm.email.trim(),
+        logoUrl: tenantForm.logoUrl ? tenantForm.logoUrl.trim() : null,
         appId: 'gastro_smart'
       };
 
       await createBusiness(newBizData, newBizId);
-      await bootstrapNewBusinessDefaults(newBizId, tenantForm.nombre.trim());
+      await bootstrapNewBusinessDefaults(newBizId, tenantForm.nombre.trim(), tenantForm.logoUrl ? tenantForm.logoUrl.trim() : null);
 
       // Crear cuenta de usuario Administrador en colección users
       if (tenantForm.email.trim()) {
@@ -481,7 +488,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         plan: 'pro',
         diasValidez: 30,
         limiteSucursales: 3,
-        precioUSD: 49
+        precioUSD: 49,
+        logoUrl: ''
       });
     } catch (err: any) {
       alert('Error creando nuevo restaurante: ' + err.message);
@@ -721,13 +729,29 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                 >
                   <div className="space-y-3">
                     
-                    {/* Fila Superior: Nombre + Badge Estado */}
+                    {/* Fila Superior: Nombre + Logo + Badge Estado */}
                     <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-extrabold text-base text-white flex items-center gap-2">
-                          <span>{biz.nombre}</span>
-                        </h3>
-                        <div className="text-xs font-mono text-purple-400">RIF/RUC: {biz.rif_o_ruc || 'N/A'}</div>
+                      <div className="flex items-center gap-3 min-w-0">
+                        {biz.logoUrl ? (
+                          <div className="w-11 h-11 rounded-2xl bg-neutral-900 border border-neutral-800 p-1 flex items-center justify-center shrink-0 overflow-hidden shadow-md">
+                            <img
+                              src={biz.logoUrl}
+                              alt={biz.nombre}
+                              className="w-full h-full object-contain"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-11 h-11 rounded-2xl bg-purple-950/80 border border-purple-800/80 text-purple-300 flex items-center justify-center shrink-0">
+                            <Store className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <h3 className="font-extrabold text-base text-white truncate">
+                            {biz.nombre}
+                          </h3>
+                          <div className="text-xs font-mono text-purple-400">RIF/RUC: {biz.rif_o_ruc || 'N/A'}</div>
+                        </div>
                       </div>
 
                       <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shrink-0 ${
@@ -886,8 +910,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
 
       {/* MODAL EDITAR SUSCRIPCIÓN Y LÍMITES */}
       {editingBusiness && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-neutral-100">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150 overflow-y-auto">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-neutral-100 max-h-[90vh] overflow-y-auto overscroll-contain">
             
             <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
               <div className="flex items-center gap-2.5">
@@ -1056,6 +1080,18 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                 </div>
               </div>
 
+              {/* Subir y Editar Logotipo de la Marca */}
+              <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <LogoUploader
+                  logoUrl={subForm.logoUrl}
+                  onChange={(url) => setSubForm({ ...subForm, logoUrl: url })}
+                  restaurantName={editingBusiness.nombre}
+                  theme="dark"
+                  label="Logotipo del Restaurante / Marca:"
+                  helperText="Actualiza el logo de la marca (PNG o JPG). Se mostrará en todas las interfaces del restaurante."
+                />
+              </div>
+
               {/* Notas de Suscripción */}
               <div>
                 <label className="block font-bold text-neutral-300 mb-1">Notas Internas de Suscripción</label>
@@ -1096,8 +1132,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
 
       {/* MODAL REGISTRAR NUEVO TENANT / RESTAURANTE SAAS */}
       {showNewTenantModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-neutral-100">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150 overflow-y-auto">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-neutral-100 max-h-[90vh] overflow-y-auto overscroll-contain">
             
             <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
               <div className="flex items-center gap-2.5">
@@ -1234,6 +1270,18 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                     className="w-full h-11 px-3 rounded-xl bg-neutral-950 border border-neutral-800 font-bold text-emerald-400 text-center focus:outline-none focus:border-purple-500"
                   />
                 </div>
+              </div>
+
+              {/* Subir Logotipo del Nuevo Restaurante */}
+              <div className="p-3.5 rounded-2xl bg-neutral-950 border border-neutral-800">
+                <LogoUploader
+                  logoUrl={tenantForm.logoUrl}
+                  onChange={(url) => setTenantForm({ ...tenantForm, logoUrl: url })}
+                  restaurantName={tenantForm.nombre}
+                  theme="dark"
+                  label="Logotipo del Restaurante / Marca:"
+                  helperText="Sube el logo o isotipo de la marca (PNG o JPG). Se configurará en el tenant y sucursal principal."
+                />
               </div>
 
               <div className="p-3 rounded-xl bg-purple-950/60 border border-purple-800/80 text-[11px] text-purple-200">

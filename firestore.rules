@@ -200,5 +200,15 @@ service cloud.firestore {
       allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
       allow delete: if isAuthenticated();
     }
+
+    // ==========================================
+    // 16. MENU AUDIT LOGS (REGISTROS DE AUDITORÍA DE MENÚ Y STOCK)
+    // ==========================================
+    match /menuAuditLogs/{logId} {
+      allow read: if isGastroSmart(resource.data) || isAuthenticated();
+      allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
   }
 }

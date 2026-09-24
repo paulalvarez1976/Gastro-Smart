@@ -10,6 +10,7 @@ import {
 import { 
   paySalaryBatch,
   payFixedSalaryExpense,
+  createExpense,
   subscribeToExpenses,
   getOperationalDateString,
   getOperationalMonthString
@@ -383,50 +384,111 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
     document.body.removeChild(link);
   };
 
-  // Agrupación y cálculo basado ÚNICAMENTE en pagos reales registrados (Gastos)
+  // Agrupación y cálculo de planilla por empleado
   const payrollRows: PayrollEmployeeRow[] = useMemo(() => {
-    // 1. Filtrar empleados aplicables por hora
-    const hourlyEmployees = employees.filter(e => {
-      if (e.tipoSueldo === 'fijo') return false;
+    // 1. Filtrar empleados aplicables
+    const applicableEmployees = employees.filter(e => {
       if (selectedBranchId !== 'all' && e.restaurantId !== selectedBranchId) return false;
       if (selectedEmployeeId !== 'all' && e.id !== selectedEmployeeId) return false;
       if (selectedRole !== 'all' && e.puesto !== selectedRole) return false;
       return true;
     });
 
-    // 2. Asociar los gastos reales del periodo a cada empleado
-    return hourlyEmployees.map(emp => {
+    return applicableEmployees.map(emp => {
+      const empShifts = filteredShifts.filter(s => s.employeeId === emp.id);
+
+      // Abonos, adelantos o pagos de sueldo ya registrados en Gastos para este empleado en el periodo
       const expForEmp = salaryExpenses.filter(e => {
         if (e.employeeId !== emp.id) return false;
         const expDate = (e.fecha || '').split('T')[0];
         return expDate >= dateFilter.start && expDate <= dateFilter.end;
       });
 
-      const totalPagado = expForEmp.reduce((sum, e) => sum + (e.monto || 0), 0);
-      const horasTrab = expForEmp.reduce((sum, e) => sum + (e.horasTrabajadas || 0), 0);
-      const horasExt = expForEmp.reduce((sum, e) => sum + (e.horasExtra || 0), 0);
-
-      const estado = expForEmp.length > 0 ? 'Pagado' : 'Sin pagos registrados';
+      const totalAbonado = expForEmp.reduce((sum, e) => sum + (e.monto || 0), 0);
       const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
-      const rate = emp.tarifaHora || 0;
+      const modalidad = emp.modalidadPago || (emp.tipoSueldo === 'fijo' ? 'mes' : emp.tipoSueldo) || 'por_horas';
+
+      let horasNormales = 0;
+      let horasExtra = 0;
+      let totalNormal = 0;
+      let totalExtra = 0;
+      let sueldoCalculado = 0;
+      let turnosCount = empShifts.length;
+
+      if (turnosCount > 0) {
+        if (modalidad === 'por_dia') {
+          const uniqueDays = new Set(empShifts.map(s => s.fecha || (s.horaInicio || '').split('T')[0])).size;
+          const rate = emp.tarifaDiaria || 50;
+          sueldoCalculado = Math.round((uniqueDays || turnosCount) * rate * 100) / 100;
+          empShifts.forEach(shift => {
+            const h = (shift.minutosTrabajados || 0) / 60;
+            horasNormales += Math.min(8, h);
+            horasExtra += Math.max(0, h - 8);
+          });
+        } else if (modalidad === 'mes' || emp.tipoSueldo === 'fijo') {
+          sueldoCalculado = emp.sueldoMensual || 1200;
+          empShifts.forEach(shift => {
+            const h = (shift.minutosTrabajados || 0) / 60;
+            horasNormales += Math.min(8, h);
+            horasExtra += Math.max(0, h - 8);
+          });
+        } else {
+          const rate = emp.tarifaHora || 12;
+          empShifts.forEach(shift => {
+            const h = (shift.minutosTrabajados || 0) / 60;
+            const norm = Math.min(8, h);
+            const ext = Math.max(0, h - 8);
+            horasNormales += norm;
+            horasExtra += ext;
+          });
+          totalNormal = Math.round(horasNormales * rate * 100) / 100;
+          totalExtra = Math.round(horasExtra * rate * overtimeMultiplier * 100) / 100;
+          sueldoCalculado = Math.round((totalNormal + totalExtra) * 100) / 100;
+        }
+      } else if (emp.tipoSueldo === 'fijo' || modalidad === 'mes') {
+        sueldoCalculado = emp.sueldoMensual || 0;
+      } else if (expForEmp.length > 0) {
+        horasNormales = expForEmp.reduce((sum, e) => sum + (e.horasTrabajadas || 0), 0);
+        horasExtra = expForEmp.reduce((sum, e) => sum + (e.horasExtra || 0), 0);
+        sueldoCalculado = totalAbonado;
+        turnosCount = expForEmp.length;
+      }
+
+      // El monto a pagar/liquidar es el sueldo registrado menos los abonos previos realizados en Gastos
+      const totalPagar = Math.max(0, Math.round((sueldoCalculado - totalAbonado) * 100) / 100);
+
+      let estadoPago = 'Sin turnos';
+      if (sueldoCalculado > 0 || turnosCount > 0) {
+        if (totalAbonado >= sueldoCalculado && sueldoCalculado > 0) {
+          estadoPago = 'Pagado';
+        } else if (totalAbonado > 0 && totalPagar > 0) {
+          estadoPago = 'Abonado';
+        } else {
+          estadoPago = 'Pendiente';
+        }
+      } else if (totalAbonado > 0) {
+        estadoPago = 'Pagado';
+      }
 
       return {
         empleadoId: emp.id,
         nombre: emp.nombre,
         puesto: emp.puesto,
         sucursal: restName,
-        tarifaHora: rate,
-        horasNormales: Math.max(0, horasTrab - horasExt),
-        horasExtra: horasExt,
-        horasTotales: horasTrab,
-        totalNormal: 0, // Solo mostramos los totales pagados reales
-        totalExtra: 0, 
-        totalPagar: totalPagado,
-        turnosContados: expForEmp.length,
-        estadoPago: estado
+        tarifaHora: emp.tarifaHora || 0,
+        horasNormales: Math.round(horasNormales * 10) / 10,
+        horasExtra: Math.round(horasExtra * 10) / 10,
+        horasTotales: Math.round((horasNormales + horasExtra) * 10) / 10,
+        totalNormal,
+        totalExtra,
+        sueldoCalculado,
+        totalAbonado,
+        totalPagar,
+        turnosContados: turnosCount,
+        estadoPago
       };
     });
-  }, [salaryExpenses, employees, restaurantMap, selectedEmployeeId, selectedBranchId, selectedRole, dateFilter]);
+  }, [salaryExpenses, filteredShifts, employees, restaurantMap, selectedEmployeeId, selectedBranchId, selectedRole, dateFilter, overtimeMultiplier]);
 
   // Datos para la gráfica de barras: Horas por día de los turnos filtrados
   const chartData = useMemo(() => {
@@ -450,7 +512,9 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
   // Totales consolidados del periodo
   const grandTotalHours = useMemo(() => payrollRows.reduce((s, r) => s + r.horasTotales, 0), [payrollRows]);
   const grandTotalOvertime = useMemo(() => payrollRows.reduce((s, r) => s + r.horasExtra, 0), [payrollRows]);
-  const grandTotalPayable = useMemo(() => payrollRows.reduce((s, r) => s + r.totalPagar, 0), [payrollRows]);
+  const grandTotalCalculated = useMemo(() => payrollRows.reduce((s, r) => s + r.sueldoCalculado, 0), [payrollRows]);
+  const grandTotalAbonado = useMemo(() => payrollRows.reduce((s, r) => s + r.totalAbonado, 0), [payrollRows]);
+  const grandTotalPending = useMemo(() => payrollRows.reduce((s, r) => s + r.totalPagar, 0), [payrollRows]);
 
   // Exportar a Excel (SheetJS)
   const handleExportExcel = () => {
@@ -510,22 +574,56 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         ? (restaurants[0]?.id || 'central') 
         : selectedBranchId;
 
-      await paySalaryBatch(
-        businessId,
-        targetRestId,
-        pendingShiftsToPay,
-        rateMap,
-        dateFilter.label,
-        currentUserName,
-        overtimeMultiplier,
-        empDataMap
-      );
+      const abonosMap: Record<string, number> = {};
+      payrollRows.forEach(r => {
+        abonosMap[r.empleadoId] = r.totalAbonado;
+      });
 
-      setSalarySuccessToast(`¡Gastos de sueldo generados exitosamente! Se procesaron ${pendingShiftsToPay.length} turnos.`);
+      if (pendingShiftsToPay.length > 0) {
+        await paySalaryBatch(
+          businessId,
+          targetRestId,
+          pendingShiftsToPay,
+          rateMap,
+          dateFilter.label,
+          currentUserName,
+          overtimeMultiplier,
+          empDataMap,
+          abonosMap
+        );
+        setSalarySuccessToast(`¡Gastos de sueldo generados exitosamente! Se procesaron ${pendingShiftsToPay.length} turnos.`);
+      } else {
+        // Generar gastos directos para los empleados seleccionados
+        const selectedRows = payrollRows.filter(r => selectedForPayment[r.empleadoId] && r.totalPagar > 0);
+        let count = 0;
+        const todayStr = new Date().toISOString().split('T')[0];
+        
+        for (const row of selectedRows) {
+          const emp = employees.find(e => e.id === row.empleadoId);
+          await createExpense({
+            businessId,
+            restaurantId: emp?.restaurantId || targetRestId,
+            tipo: 'sueldo',
+            monto: row.totalPagar,
+            descripcion: `Liquidación de sueldo ${dateFilter.label} - ${row.nombre} (${row.horasTotales} hrs)`,
+            employeeId: row.empleadoId,
+            employeeName: row.nombre,
+            horasTrabajadas: row.horasTotales,
+            horasExtra: row.horasExtra,
+            fecha: todayStr,
+            appId: 'gastro_smart',
+            creadoEn: new Date().toISOString()
+          });
+          count++;
+        }
+        setSalarySuccessToast(`¡Gastos de sueldo registrados exitosamente en P&L para ${count || selectedRows.length} empleados!`);
+      }
+
       setShowPayrollModal(false);
       setTimeout(() => setSalarySuccessToast(null), 5000);
     } catch (err: any) {
       console.error('Error procesando nóminas:', err);
+      alert('Error al generar gastos de sueldo: ' + (err.message || 'Error desconocido'));
     } finally {
       setIsProcessingSalary(false);
     }
@@ -1066,7 +1164,8 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                     <th className="p-3.5">Puesto</th>
                     <th className="p-3.5">Sucursal</th>
                     <th className="p-3.5 text-right">Sueldo Base ($)</th>
-                    <th className="p-3.5 text-right text-indigo-700">Pagado Real ($)</th>
+                    <th className="p-3.5 text-right text-emerald-700">Abonos en Gastos ($)</th>
+                    <th className="p-3.5 text-right text-amber-700">Saldo Pendiente ($)</th>
                     <th className="p-3.5 text-center">Estado {selectedMonthLabel}</th>
                     <th className="p-3.5">Historial Pagado</th>
                     <th className="p-3.5 text-right">Acción</th>
@@ -1080,6 +1179,16 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                     const actualPaidAmount = salaryExpenses
                       .filter(e => e.employeeId === emp.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
                       .reduce((sum, e) => sum + (e.monto || 0), 0);
+                    
+                    const sueldoBase = emp.sueldoMensual || 0;
+                    const saldoPendiente = Math.max(0, Math.round((sueldoBase - actualPaidAmount) * 100) / 100);
+
+                    let estadoPagoFixed = 'Pendiente';
+                    if (isPaidForSelectedMonth || (actualPaidAmount >= sueldoBase && sueldoBase > 0)) {
+                      estadoPagoFixed = 'Pagado';
+                    } else if (actualPaidAmount > 0) {
+                      estadoPagoFixed = 'Abonado';
+                    }
 
                     return (
                       <tr key={emp.id} className="hover:bg-neutral-50/50 transition">
@@ -1096,24 +1205,25 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                         </td>
                         <td className="p-3.5 uppercase font-medium text-neutral-600">{emp.puesto}</td>
                         <td className="p-3.5 text-neutral-500">{restName}</td>
-                        <td className="p-3.5 text-right font-mono font-bold text-sm text-neutral-500">
-                          ${(emp.sueldoMensual || 0).toFixed(2)}
+                        <td className="p-3.5 text-right font-mono font-bold text-sm text-neutral-700">
+                          ${sueldoBase.toFixed(2)}
                         </td>
-                        <td className="p-3.5 text-right font-mono font-black text-sm text-indigo-700 bg-indigo-50/30">
-                          ${actualPaidAmount.toFixed(2)}
+                        <td className="p-3.5 text-right font-mono font-bold text-sm text-emerald-600">
+                          {actualPaidAmount > 0 ? `$${actualPaidAmount.toFixed(2)}` : '-'}
+                        </td>
+                        <td className="p-3.5 text-right font-mono font-black text-sm text-amber-600 bg-amber-50/30">
+                          ${saldoPendiente.toFixed(2)}
                         </td>
                         <td className="p-3.5 text-center">
-                          {isPaidForSelectedMonth ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                              Pagado
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                              <AlertCircle className="w-3 h-3 text-amber-600" />
-                              Pendiente
-                            </span>
-                          )}
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                            estadoPagoFixed === 'Pagado'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : estadoPagoFixed === 'Abonado'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}>
+                            {estadoPagoFixed === 'Abonado' ? `Abonado ($${actualPaidAmount.toFixed(0)})` : estadoPagoFixed}
+                          </span>
                         </td>
                         <td className="p-3.5">
                           <div className="flex flex-wrap gap-1 max-w-xs">
@@ -1280,29 +1390,37 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
           <span className="text-xs text-neutral-500 font-bold uppercase">Total Horas Trabajadas</span>
           <div className="text-2xl font-black text-neutral-900 mt-1">
             {grandTotalHours.toFixed(1)} hrs
           </div>
-          <span className="text-[11px] text-neutral-400 mt-0.5 block">{filteredShifts.length} jornadas registradas</span>
+          <span className="text-[11px] text-neutral-400 mt-0.5 block">{filteredShifts.length} jornadas ({grandTotalOvertime.toFixed(1)}h extra)</span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Horas Extra Acumuladas</span>
-          <div className="text-2xl font-black text-red-600 mt-1">
-            {grandTotalOvertime.toFixed(1)} hrs
+          <span className="text-xs text-neutral-500 font-bold uppercase">Sueldo Registrado</span>
+          <div className="text-2xl font-black text-indigo-700 mt-1 font-mono">
+            ${grandTotalCalculated.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-red-500/80 mt-0.5 block">Calculadas con factor {overtimeMultiplier}x (&gt;8h diarias)</span>
+          <span className="text-[11px] text-neutral-400 mt-0.5 block">Total ganado por el personal</span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Pagos Registrados (Gastos)</span>
-          <div className="text-2xl font-black text-emerald-600 mt-1">
-            ${grandTotalPayable.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          <span className="text-xs text-neutral-500 font-bold uppercase">Abonos en Gastos</span>
+          <div className="text-2xl font-black text-emerald-600 mt-1 font-mono">
+            ${grandTotalAbonado.toLocaleString('en-US', { minimumFractionDigits: 2 })}
           </div>
-          <span className="text-[11px] text-neutral-400 mt-0.5 block">Total abonado a este personal en el periodo</span>
+          <span className="text-[11px] text-emerald-600/80 mt-0.5 block">Adelantos y abonos registrados</span>
+        </div>
+
+        <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
+          <span className="text-xs text-neutral-500 font-bold uppercase">Saldo Pendiente por Liquidar</span>
+          <div className="text-2xl font-black text-amber-600 mt-1 font-mono">
+            ${grandTotalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          </div>
+          <span className="text-[11px] text-amber-600/80 mt-0.5 block">Monto pendiente a pagar</span>
         </div>
       </div>
 
@@ -1350,10 +1468,10 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                 <th className="p-3.5">Puesto</th>
                 <th className="p-3.5">Sucursal</th>
                 <th className="p-3.5 text-right">Tarifa ($/h)</th>
-                <th className="p-3.5 text-right">Horas Normales</th>
-                <th className="p-3.5 text-right">Horas Extra</th>
                 <th className="p-3.5 text-right">Horas Totales</th>
-                <th className="p-3.5 text-right text-emerald-700">Pagado Real ($)</th>
+                <th className="p-3.5 text-right text-indigo-900">Sueldo Registrado ($)</th>
+                <th className="p-3.5 text-right text-emerald-700">Abonos en Gastos ($)</th>
+                <th className="p-3.5 text-right text-amber-700">Saldo Pendiente ($)</th>
                 <th className="p-3.5 text-center">Estado</th>
               </tr>
             </thead>
@@ -1364,23 +1482,27 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                   <td className="p-3.5 uppercase font-medium text-neutral-600">{row.puesto}</td>
                   <td className="p-3.5 text-neutral-500">{row.sucursal}</td>
                   <td className="p-3.5 text-right font-mono">${row.tarifaHora.toFixed(2)}</td>
-                  <td className="p-3.5 text-right font-mono">{row.horasNormales} h</td>
-                  <td className="p-3.5 text-right font-mono font-bold text-red-600">
-                    {row.horasExtra > 0 ? `${row.horasExtra} h` : '-'}
-                  </td>
                   <td className="p-3.5 text-right font-mono font-bold text-neutral-900">{row.horasTotales} h</td>
-                  <td className="p-3.5 text-right font-mono font-black text-emerald-600 text-sm">
+                  <td className="p-3.5 text-right font-mono font-bold text-indigo-900">
+                    ${row.sueldoCalculado.toFixed(2)}
+                  </td>
+                  <td className="p-3.5 text-right font-mono font-bold text-emerald-600">
+                    {row.totalAbonado > 0 ? `$${row.totalAbonado.toFixed(2)}` : '-'}
+                  </td>
+                  <td className="p-3.5 text-right font-mono font-black text-amber-600 text-sm">
                     ${row.totalPagar.toFixed(2)}
                   </td>
                   <td className="p-3.5 text-center">
                     <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
                       row.estadoPago === 'Pagado'
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : row.estadoPago === 'Parcial'
-                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          : 'bg-neutral-100 text-neutral-600 border-neutral-200'
+                        : row.estadoPago === 'Abonado'
+                          ? 'bg-amber-50 text-amber-800 border-amber-200'
+                          : row.estadoPago === 'Pendiente'
+                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                            : 'bg-neutral-100 text-neutral-600 border-neutral-200'
                     }`}>
-                      {row.estadoPago}
+                      {row.estadoPago === 'Abonado' ? `Abonado ($${row.totalAbonado.toFixed(0)})` : row.estadoPago}
                     </span>
                   </td>
                 </tr>
@@ -1507,39 +1629,53 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
               </span>
 
               <div className="border border-neutral-200 rounded-2xl divide-y divide-neutral-100 overflow-hidden max-h-60 overflow-y-auto">
-                {payrollRows.filter(r => r.estadoPago !== 'Pagado').map(row => {
-                  const isChecked = !!selectedForPayment[row.empleadoId];
-                  return (
-                    <label 
-                      key={row.empleadoId}
-                      className={`p-3.5 flex items-center justify-between cursor-pointer transition ${
-                        isChecked ? 'bg-purple-50/50' : 'hover:bg-neutral-50'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            setSelectedForPayment(prev => ({
-                              ...prev,
-                              [row.empleadoId]: e.target.checked
-                            }));
-                          }}
-                          className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500"
-                        />
-                        <div>
-                          <strong className="text-xs text-neutral-900 block">{row.nombre}</strong>
-                          <span className="text-[10px] text-neutral-400 uppercase">{row.puesto} • {row.horasTotales} hrs ({row.horasExtra} extra)</span>
+                {payrollRows.filter(r => r.estadoPago !== 'Pagado').length === 0 ? (
+                  <div className="p-6 text-center space-y-2 bg-emerald-50/50">
+                    <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
+                    <p className="text-xs font-bold text-emerald-900">
+                      ¡Todos los turnos de este periodo ({dateFilter.label}) se encuentran liquidados y registrados en gastos!
+                    </p>
+                  </div>
+                ) : (
+                  payrollRows.filter(r => r.estadoPago !== 'Pagado').map(row => {
+                    const isChecked = !!selectedForPayment[row.empleadoId];
+                    return (
+                      <label 
+                        key={row.empleadoId}
+                        className={`p-3.5 flex items-center justify-between cursor-pointer transition ${
+                          isChecked ? 'bg-purple-50/50' : 'hover:bg-neutral-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              setSelectedForPayment(prev => ({
+                                ...prev,
+                                [row.empleadoId]: e.target.checked
+                              }));
+                            }}
+                            className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500"
+                          />
+                          <div>
+                            <strong className="text-xs text-neutral-900 block">{row.nombre}</strong>
+                            <span className="text-[10px] text-neutral-400 uppercase">{row.puesto} • {row.horasTotales} hrs</span>
+                            {row.totalAbonado > 0 && (
+                              <span className="block text-[10px] font-medium text-emerald-700">
+                                Sueldo bruto: ${row.sueldoCalculado.toFixed(2)} | Abonos en gastos: -${row.totalAbonado.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <strong className="text-sm font-black text-emerald-600 font-mono">${row.totalPagar.toFixed(2)}</strong>
-                        <span className="text-[10px] text-neutral-400 block">${row.tarifaHora}/h</span>
-                      </div>
-                    </label>
-                  );
-                })}
+                        <div className="text-right">
+                          <strong className="text-sm font-black text-emerald-600 font-mono">${row.totalPagar.toFixed(2)}</strong>
+                          <span className="text-[10px] text-neutral-400 block font-medium">Pendiente a liquidar</span>
+                        </div>
+                      </label>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -1615,18 +1751,38 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
             )}
 
             {/* Datos del empleado */}
-            <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-xs font-black text-indigo-950 block">{payingFixedEmployee.nombre}</span>
-                  <span className="text-[11px] text-indigo-700 font-medium uppercase">{payingFixedEmployee.puesto} • {restaurantMap.get(payingFixedEmployee.restaurantId) || 'Sucursal'}</span>
+            {(() => {
+              const base = payingFixedEmployee.sueldoMensual || 0;
+              const abonos = salaryExpenses
+                .filter(e => e.employeeId === payingFixedEmployee.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
+                .reduce((sum, e) => sum + (e.monto || 0), 0);
+              const netPending = Math.max(0, Math.round((base - abonos) * 100) / 100);
+
+              return (
+                <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-black text-indigo-950 block">{payingFixedEmployee.nombre}</span>
+                      <span className="text-[11px] text-indigo-700 font-medium uppercase">{payingFixedEmployee.puesto} • {restaurantMap.get(payingFixedEmployee.restaurantId) || 'Sucursal'}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] text-indigo-500 uppercase font-bold block">Sueldo Base</span>
+                      <span className="text-sm font-black text-indigo-900 font-mono">${base.toFixed(2)}</span>
+                    </div>
+                  </div>
+                  {abonos > 0 && (
+                    <div className="flex items-center justify-between pt-2 border-t border-indigo-200/60 text-xs">
+                      <span className="text-emerald-700 font-bold">Abonos previos en Gastos:</span>
+                      <span className="font-mono font-bold text-emerald-700">-${abonos.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between pt-2 border-t border-indigo-200 text-sm font-black">
+                    <span className="text-indigo-950">Saldo Neto a Liquidar:</span>
+                    <span className="font-mono text-indigo-700 text-lg">${netPending.toFixed(2)}</span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-indigo-500 uppercase font-bold block">Sueldo a Liquidar</span>
-                  <span className="text-xl font-black text-indigo-950 font-mono">${(payingFixedEmployee.sueldoMensual || 0).toFixed(2)}</span>
-                </div>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Selector de Método de Pago */}
             <div>
@@ -1660,7 +1816,7 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
             </div>
 
             <p className="text-[10px] text-neutral-500">
-              ℹ️ Al confirmar, se creará un gasto de tipo <strong className="text-neutral-800">sueldo</strong> de ${(payingFixedEmployee.sueldoMensual || 0).toFixed(2)}, se actualizará el dailyStats de hoy y el mes <strong className="text-neutral-800">{fixedSalaryMonthKey}</strong> quedará marcado como pagado.
+              ℹ️ Al confirmar, se creará un gasto de tipo <strong className="text-neutral-800">sueldo</strong> por el saldo pendiente neto, se actualizará el dailyStats de hoy y el mes <strong className="text-neutral-800">{fixedSalaryMonthKey}</strong> quedará marcado como pagado.
             </p>
 
             {/* Actions */}
@@ -1680,11 +1836,17 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                   setIsProcessingFixedPay(true);
                   setFixedPayError(null);
                   try {
+                    const base = payingFixedEmployee.sueldoMensual || 0;
+                    const abonos = salaryExpenses
+                      .filter(e => e.employeeId === payingFixedEmployee.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
+                      .reduce((sum, e) => sum + (e.monto || 0), 0);
+
                     const res = await payFixedSalaryExpense({
                       employee: payingFixedEmployee,
                       monthKey: fixedSalaryMonthKey,
                       monthLabel: selectedMonthLabel,
-                      amount: payingFixedEmployee.sueldoMensual || 0,
+                      amount: base,
+                      abonoPrevio: abonos,
                       userDisplayName: currentUserName,
                       paymentMethod: fixedPayMethod,
                       notes: fixedPayNotes

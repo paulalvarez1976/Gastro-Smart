@@ -1,7 +1,54 @@
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { collection, getDocs, updateDoc, doc } from 'firebase/firestore';
 import { storage, db } from '../firebase';
-import { compressImage } from '../utils/imageCompressor';
+import { compressImage, compressLogo } from '../utils/imageCompressor';
+
+/**
+ * Servicio de almacenamiento para logotipo del restaurante o negocio.
+ * Ruta en Storage: /restaurants/{restaurantId}/logo.jpg o fallback dataUrl optimizado.
+ */
+export async function uploadRestaurantLogo(
+  restaurantOrBusinessId: string,
+  imageFile: File | Blob
+): Promise<string> {
+  const cleanId = restaurantOrBusinessId && restaurantOrBusinessId !== 'all' ? restaurantOrBusinessId : 'logo_' + Date.now();
+  const storagePath = `restaurants/${cleanId}/logo.png`;
+
+  console.log(`[Storage] 📤 Procesando logo de restaurante:`, {
+    targetId: cleanId,
+    storagePath,
+    originalFileSize: `${(imageFile.size / 1024).toFixed(2)} KB`
+  });
+
+  // 1. Optimizar logo (máx 400px, preserva transparencia PNG/WebP)
+  const { blob, dataUrl } = await compressLogo(imageFile, 400);
+
+  // 2. Intentar subida a Firebase Storage con fallback garantizado a dataUrl
+  try {
+    const uploadPromise = (async () => {
+      const storageRef = ref(storage, storagePath);
+      const snapshot = await uploadBytes(storageRef, blob, {
+        contentType: blob.type || 'image/png',
+        customMetadata: {
+          restaurantId: cleanId,
+          uploadedAt: new Date().toISOString()
+        }
+      });
+      const downloadUrl = await getDownloadURL(snapshot.ref);
+      console.log(`[Storage] ✅ Subida de logo a Firebase Storage exitosa:`, downloadUrl);
+      return downloadUrl;
+    })();
+
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Storage upload timeout (6s exceeded)')), 6000)
+    );
+
+    return await Promise.race([uploadPromise, timeoutPromise]);
+  } catch (storageError: any) {
+    console.warn(`[Storage] ℹ️ Firebase Storage no disponible para logo (${storageError?.code || storageError?.message}). Usando dataUrl optimizado:`, cleanId);
+    return dataUrl;
+  }
+}
 
 /**
  * Servicio de almacenamiento para fotos de platos del menú.

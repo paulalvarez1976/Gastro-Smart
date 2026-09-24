@@ -5,6 +5,7 @@
 
 export interface ReceiptData {
   restaurantName: string;
+  restaurantLogo?: string;
   restaurantAddress?: string;
   restaurantPhone?: string;
   orderNumber: number | string;

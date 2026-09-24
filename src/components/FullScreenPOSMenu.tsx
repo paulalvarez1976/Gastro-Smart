@@ -47,10 +47,11 @@ interface FullScreenPOSMenuProps {
   onAddDiner: () => void;
   onSaveDinerName: (dinerId: string, name: string) => void;
   cart: OrderItem[];
-  onAddToCart: (item: MenuItem) => void;
+  onAddToCart: (item: MenuItem, routeOverride?: 'cocina' | 'express') => void;
   onSubtractItem: (item: MenuItem) => void;
   onUpdateQty: (index: number, delta: number) => void;
   onRemoveItem: (index: number) => void;
+  onToggleItemRoute?: (index: number) => void;
   onAssignItemDiner: (index: number, dinerId: string) => void;
   onOpenNoteModal: (index: number, currentNote: string) => void;
   totalAmount: number;
@@ -73,6 +74,7 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
   onSubtractItem,
   onUpdateQty,
   onRemoveItem,
+  onToggleItemRoute,
   onAssignItemDiner,
   onOpenNoteModal,
   totalAmount,
@@ -670,13 +672,29 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                         {item.categoria}
                       </span>
                       {item.requiereCocina === false ? (
-                        <span className="px-1.5 py-0.5 rounded-md bg-blue-600/80 text-white text-[9px] font-black flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddToCart(item, 'cocina');
+                          }}
+                          className="px-1.5 py-0.5 rounded-md bg-blue-600/90 hover:bg-blue-500 text-white text-[9px] font-black flex items-center gap-0.5 transition cursor-pointer shadow-xs"
+                          title="Clic para pedir con preparación en Cocina"
+                        >
                           <Zap className="w-2.5 h-2.5" /> Express
-                        </span>
+                        </button>
                       ) : (
-                        <span className="px-1.5 py-0.5 rounded-md bg-orange-600/80 text-white text-[9px] font-black flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddToCart(item, 'express');
+                          }}
+                          className="px-1.5 py-0.5 rounded-md bg-orange-600/90 hover:bg-orange-500 text-white text-[9px] font-black flex items-center gap-0.5 transition cursor-pointer shadow-xs"
+                          title="Clic para pedir con despacho Xpress"
+                        >
                           <ChefHat className="w-2.5 h-2.5" /> Cocina
-                        </span>
+                        </button>
                       )}
                     </div>
 
@@ -741,16 +759,45 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => onAddToCart(item)}
-                          disabled={!item.disponible}
-                          className="h-8 px-3 rounded-xl bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white font-black text-xs flex items-center gap-1 shadow-md shadow-orange-600/20 transition cursor-pointer active:scale-95 disabled:opacity-40"
-                          title="Agregar al pedido"
-                        >
-                          <Plus className="w-3.5 h-3.5 stroke-[3]" />
-                          <span>Agregar</span>
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => onAddToCart(item)}
+                            disabled={!item.disponible}
+                            className="h-8 px-2.5 sm:px-3 rounded-xl bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white font-black text-xs flex items-center gap-1 shadow-md shadow-orange-600/20 transition cursor-pointer active:scale-95 disabled:opacity-40"
+                            title="Agregar al pedido con su preparación por defecto"
+                          >
+                            <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                            <span>Agregar</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={!item.disponible}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAddToCart(item, item.requiereCocina !== false ? 'express' : 'cocina');
+                            }}
+                            className={`h-8 px-2 rounded-xl text-[10px] font-black flex items-center gap-1 border transition cursor-pointer disabled:opacity-40 ${
+                              item.requiereCocina !== false
+                                ? 'bg-neutral-800 hover:bg-emerald-950/80 hover:text-emerald-400 text-neutral-300 border-neutral-700 hover:border-emerald-700/60'
+                                : 'bg-neutral-800 hover:bg-orange-950/80 hover:text-orange-400 text-neutral-300 border-neutral-700 hover:border-orange-700/60'
+                            }`}
+                            title={`Agregar como ${item.requiereCocina !== false ? 'Xpress (Mostrador)' : 'Cocina (KDS)'}`}
+                          >
+                            {item.requiereCocina !== false ? (
+                              <>
+                                <Zap className="w-3 h-3 text-emerald-400" />
+                                <span className="hidden sm:inline">Xpress</span>
+                              </>
+                            ) : (
+                              <>
+                                <ChefHat className="w-3 h-3 text-orange-400" />
+                                <span className="hidden sm:inline">Cocina</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -855,6 +902,23 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                         <span className="text-[10px] px-2 py-0.5 rounded bg-neutral-900 text-neutral-400">
                           {item.categoria}
                         </span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-black flex items-center gap-1 border ${
+                          item.requiereCocina !== false
+                            ? 'bg-orange-950/80 text-orange-400 border-orange-700/60'
+                            : 'bg-emerald-950/80 text-emerald-400 border-emerald-700/60'
+                        }`}>
+                          {item.requiereCocina !== false ? (
+                            <>
+                              <ChefHat className="w-3 h-3 text-orange-400" />
+                              <span>Cocina</span>
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-3 h-3 text-emerald-400" />
+                              <span>Xpress</span>
+                            </>
+                          )}
+                        </span>
                       </div>
                       {item.descripcion && (
                         <p className="text-xs text-neutral-400 truncate">
@@ -890,15 +954,41 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                         </button>
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => onAddToCart(item)}
-                        disabled={!item.disponible}
-                        className="h-8 px-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs flex items-center gap-1 cursor-pointer"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Agregar</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onAddToCart(item)}
+                          disabled={!item.disponible}
+                          className="h-8 px-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-white font-bold text-xs flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                          title="Agregar al pedido"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Agregar</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!item.disponible}
+                          onClick={() => onAddToCart(item, item.requiereCocina !== false ? 'express' : 'cocina')}
+                          className={`h-8 px-2 rounded-xl text-[10px] font-black flex items-center gap-1 border transition cursor-pointer disabled:opacity-40 ${
+                            item.requiereCocina !== false
+                              ? 'bg-neutral-900 hover:bg-emerald-950/80 hover:text-emerald-400 text-neutral-300 border-neutral-700 hover:border-emerald-700/60'
+                              : 'bg-neutral-900 hover:bg-orange-950/80 hover:text-orange-400 text-neutral-300 border-neutral-700 hover:border-orange-700/60'
+                          }`}
+                          title={`Agregar como ${item.requiereCocina !== false ? 'Xpress' : 'Cocina'}`}
+                        >
+                          {item.requiereCocina !== false ? (
+                            <>
+                              <Zap className="w-3 h-3 text-emerald-400" />
+                              <span>Xpress</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChefHat className="w-3 h-3 text-orange-400" />
+                              <span>Cocina</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1063,23 +1153,49 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                           {it.nombre}
                         </div>
                         
-                        {/* Selector de Comensal para este ítem */}
-                        {setupData.orderTargetType === 'mesa' && (
-                          <div className="flex items-center gap-1.5 mt-1.5">
-                            <Tag className="w-3 h-3 text-orange-400" />
-                            <select
-                              value={it.comensalId || diners[0]?.id}
-                              onChange={(e) => onAssignItemDiner(idx, e.target.value)}
-                              className="text-[10px] font-bold bg-neutral-800 border border-neutral-700 rounded-lg px-2 py-0.5 text-neutral-200 outline-none cursor-pointer"
-                            >
-                              {diners.map(d => (
-                                <option key={d.id} value={d.id}>
-                                  {d.nombre}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
+                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                          {/* Selector de Comensal para este ítem */}
+                          {setupData.orderTargetType === 'mesa' && (
+                            <div className="flex items-center gap-1.5">
+                              <Tag className="w-3 h-3 text-orange-400" />
+                              <select
+                                value={it.comensalId || diners[0]?.id}
+                                onChange={(e) => onAssignItemDiner(idx, e.target.value)}
+                                className="text-[10px] font-bold bg-neutral-800 border border-neutral-700 rounded-lg px-2 py-0.5 text-neutral-200 outline-none cursor-pointer"
+                              >
+                                {diners.map(d => (
+                                  <option key={d.id} value={d.id}>
+                                    {d.nombre}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+
+                          {/* Selector Interactivo de Preparación: Cocina vs Preparación Xpress */}
+                          <button
+                            type="button"
+                            onClick={() => onToggleItemRoute && onToggleItemRoute(idx)}
+                            className={`px-2 py-0.5 rounded-lg text-[10px] font-black flex items-center gap-1 transition cursor-pointer border ${
+                              it.requiereCocina !== false
+                                ? 'bg-orange-950/80 text-orange-400 border-orange-700/60 hover:bg-orange-900'
+                                : 'bg-emerald-950/80 text-emerald-400 border-emerald-700/60 hover:bg-emerald-900'
+                            }`}
+                            title="Clic para cambiar entre Cocina y Preparación Xpress"
+                          >
+                            {it.requiereCocina !== false ? (
+                              <>
+                                <ChefHat className="w-3 h-3 text-orange-400" />
+                                <span>Cocina</span>
+                              </>
+                            ) : (
+                              <>
+                                <Zap className="w-3 h-3 text-emerald-400" />
+                                <span>Xpress</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </div>
 
                       <span className="font-mono font-black text-sm text-emerald-400 shrink-0">

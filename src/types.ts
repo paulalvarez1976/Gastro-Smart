@@ -50,6 +50,16 @@ export interface UserAccount {
   claveAsignada?: string;
 }
 
+export interface DeliveryCompanyConfig {
+  id: string; // e.g. 'pedidosya', 'ubereats', 'rappi', 'propio', 'custom_123'
+  nombre: string; // e.g. 'PedidosYa', 'UberEats', 'Rappi', 'Yummy', 'Didi Food', 'Reparto Propio'
+  comisionPorcentaje: number; // Porcentaje de comisión retenido por la app (e.g. 18, 20, 22, 15, 0)
+  activo?: boolean;
+  color?: string; // 'red' | 'emerald' | 'orange' | 'blue' | 'purple' | 'amber' | 'neutral' | string
+  tiempoPagoDias?: number; // Días promedio para liquidar a banco
+  notas?: string;
+}
+
 export interface Restaurant {
   id: string;
   businessId?: string;
@@ -59,8 +69,11 @@ export interface Restaurant {
   numeroMesas?: number;
   activo: boolean;
   usaCocina?: boolean; // true: con pantalla/display cocina KDS; false: sin cocina, pedidos van directo a mostrador
+  logoUrl?: string | null;
   timeZone?: string;
   creadoEn?: string;
+  deliveryCompanies?: DeliveryCompanyConfig[];
+  deliveryCommissions?: Record<string, number>;
 }
 
 export type EmployeeSalaryType = 'por_horas' | 'por_dia' | 'mes' | 'fijo' | 'por_hora';
@@ -135,7 +148,12 @@ export interface MenuItem {
   costoElaboracion?: number; // Costo de preparación / elaboración (Food Cost)
   categoria: string;
   disponible: boolean;
-  requiereCocina?: boolean; // false para productos sin preparación en cocina (bebidas, postres listos, etc.)
+  requiereCocina?: boolean; // true: Preparación en Cocina (KDS) | false: Preparación Xpress (mostrador / barra)
+  tipoPreparacion?: 'cocina' | 'express'; // Opción de preparación del producto (Cocina o Xpress)
+  controlaStock?: boolean; // Control de inventario activo para este producto
+  stockActual?: number; // Cantidad actual disponible en inventario
+  stockMinimo?: number; // Umbral mínimo de alerta de stock bajo (ej. 5)
+  unidadMedida?: string; // 'unidades' | 'porciones' | 'botellas' | 'latas' | 'kg' | 'litros' | etc.
   fotoUrl?: string | null;
   imagenUrl?: string | null;
 }
@@ -173,7 +191,7 @@ export type OrderStatus =
 export type OrderRoute = 'express' | 'cocina' | 'mixto';
 
 export type OrderType = 'local' | 'delivery' | 'para_llevar';
-export type DeliveryCompany = 'PedidosYa' | 'UberEats' | 'Rappi' | 'Propio' | 'Otro';
+export type DeliveryCompany = 'PedidosYa' | 'UberEats' | 'Rappi' | 'Propio' | 'Otro' | string;
 
 export type ItemStatus =
   | 'pendiente_cocina'
@@ -335,7 +353,7 @@ export interface CashRegisterClose {
   creadoEn: string;
 }
 
-export type PurchaseUnit = 'kg' | 'litros' | 'unidades' | 'cajas';
+export type PurchaseUnit = 'kg' | 'libra' | 'quintal' | 'litros' | 'unidades' | 'cajas' | 'sacos' | 'gramos' | 'galones' | 'paquetes' | string;
 
 export interface PurchaseItem {
   nombre: string;
@@ -383,7 +401,11 @@ export interface Expense {
   shiftId?: string;
   horasTrabajadas?: number;
   horasExtra?: number;
+  diasTrabajados?: number;
+  modalidadPago?: string;
   tarifaHora?: number;
+  tarifaDiaria?: number;
+  appId?: string;
   fecha: string;
   creadoEn: string;
 }
@@ -404,7 +426,7 @@ export interface SecurityAlert {
   businessId: string;
   restaurantId?: string;
   restaurantNombre?: string;
-  tipo: 'fuerza_bruta_pin' | 'cambio_seguridad' | 'intruso' | 'pago_delivery_conciliado' | 'pago_sueldos_generado';
+  tipo: 'fuerza_bruta_pin' | 'cambio_seguridad' | 'intruso' | 'pago_delivery_conciliado' | 'pago_sueldos_generado' | 'stock_bajo' | 'stock_agotado';
   mensaje: string;
   fecha: string;
   leido: boolean;
@@ -474,6 +496,17 @@ export interface FinancialKPI {
   variacionPorcentaje: number; // e.g. +12.5% or -4.2%
 }
 
+export interface SupplyPurchaseSummaryItem {
+  insumo: string;
+  variedadOUnidad: string;
+  cantidadTotal: number;
+  costoPromedioUnitario: number;
+  costoTotal: number;
+  comprasCount: number;
+  proveedores: string[];
+  porcentajeDelTotalInsumos: number;
+}
+
 export interface FinancialSummaryData {
   ventasTotales: FinancialKPI;
   gastosOperativos: FinancialKPI;
@@ -497,6 +530,8 @@ export interface FinancialSummaryData {
     color: string;
   }[];
   topPlatos: DailyDishSale[];
+  comprasInsumosDetalle?: SupplyPurchaseSummaryItem[];
+  montoTotalComprasInsumos?: number;
   horasTrabajadas: number;
   costoLaboral: number;
   ratioCostoLaboral: number; // (costoLaboral / ventas) * 100
@@ -523,5 +558,35 @@ export interface FinancialSummaryData {
     ticketPromedio: number;
     margen: number;
   }[];
+}
+
+export type MenuAuditActionType = 
+  | 'creacion_plato'
+  | 'modificacion_plato'
+  | 'ajuste_stock'
+  | 'cambio_disponibilidad'
+  | 'eliminacion_plato';
+
+export interface MenuAuditLogChange {
+  campo: string;
+  valorAnterior?: any;
+  valorNuevo?: any;
+}
+
+export interface MenuAuditLog {
+  id: string;
+  businessId: string;
+  restaurantId?: string;
+  restaurantNombre?: string;
+  platoId: string;
+  platoNombre: string;
+  tipoAccion: MenuAuditActionType;
+  detalles: string;
+  cambios?: MenuAuditLogChange[];
+  empleadoId?: string;
+  empleadoNombre: string;
+  empleadoRol?: string;
+  fecha: string; // ISO String con fecha y hora exacta
+  appId: 'gastro_smart';
 }
 

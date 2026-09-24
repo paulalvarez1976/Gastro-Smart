@@ -34,7 +34,29 @@ interface NewPurchaseModalProps {
   onSuccess?: (createdExpense: Expense) => void;
 }
 
-const COMMON_UNITS: PurchaseUnit[] = ['kg', 'litros', 'unidades', 'cajas'];
+export interface PurchaseUnitConfig {
+  id: PurchaseUnit;
+  label: string;
+  symbol: string;
+  group: 'Peso' | 'Volumen' | 'Empaque / Conteo';
+}
+
+export const PURCHASE_UNITS_CONFIG: PurchaseUnitConfig[] = [
+  // ⚖️ Peso (Con Kilogramo, Libra y Quintal como opciones principales)
+  { id: 'kg', label: 'Kilogramo (kg)', symbol: 'kg', group: 'Peso' },
+  { id: 'libra', label: 'Libra (lb)', symbol: 'lb', group: 'Peso' },
+  { id: 'quintal', label: 'Quintal (qq / 100 lb)', symbol: 'qq', group: 'Peso' },
+  { id: 'gramos', label: 'Gramo (g)', symbol: 'g', group: 'Peso' },
+  // 🧪 Volumen / Líquidos
+  { id: 'litros', label: 'Litro (L)', symbol: 'L', group: 'Volumen' },
+  { id: 'galones', label: 'Galón (gal)', symbol: 'gal', group: 'Volumen' },
+  // 📦 Empaque y Conteo
+  { id: 'unidades', label: 'Unidad (und)', symbol: 'und', group: 'Empaque / Conteo' },
+  { id: 'cajas', label: 'Caja (cj)', symbol: 'cj', group: 'Empaque / Conteo' },
+  { id: 'sacos', label: 'Saco / Bulto (saco)', symbol: 'saco', group: 'Empaque / Conteo' },
+  { id: 'paquetes', label: 'Paquete (paq)', symbol: 'paq', group: 'Empaque / Conteo' },
+];
+
 const PAYMENT_METHODS: { id: PaymentMethod; label: string }[] = [
   { id: 'efectivo', label: 'Efectivo' },
   { id: 'tarjeta', label: 'Tarjeta' },
@@ -786,12 +808,24 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({
                         value={item.unidad}
                         onChange={(e) => handleItemChange(idx, 'unidad', e.target.value)}
                         className="w-full h-8 px-1.5 rounded-lg border border-neutral-300 bg-white text-xs font-semibold text-neutral-800 focus:ring-2 focus:ring-emerald-500 focus:outline-hidden cursor-pointer"
+                        title="Seleccionar unidad de medida del insumo (Kilogramo, Libra, Quintal, etc.)"
                       >
-                        {COMMON_UNITS.map((u) => (
-                          <option key={u} value={u}>
-                            {u}
-                          </option>
-                        ))}
+                        <optgroup label="⚖️ Peso">
+                          <option value="kg">Kilogramo (kg)</option>
+                          <option value="libra">Libra (lb)</option>
+                          <option value="quintal">Quintal (qq / 100 lb)</option>
+                          <option value="gramos">Gramo (g)</option>
+                        </optgroup>
+                        <optgroup label="🧪 Volumen / Líquidos">
+                          <option value="litros">Litro (L)</option>
+                          <option value="galones">Galón (gal)</option>
+                        </optgroup>
+                        <optgroup label="📦 Empaque / Conteo">
+                          <option value="unidades">Unidad (und)</option>
+                          <option value="cajas">Caja (cj)</option>
+                          <option value="sacos">Saco / Bulto (saco)</option>
+                          <option value="paquetes">Paquete (paq)</option>
+                        </optgroup>
                       </select>
                     </div>
                   </div>

@@ -42,7 +42,7 @@ export const TestModeBanner: React.FC<TestModeBannerProps> = ({ onDataReset }) =
   const { currentBusiness, currentUserAccount, currentRestaurant } = useAuth();
   
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
-  const isTestMode = currentBusiness?.modoPruebas !== false; // Activo por defecto en fase de pruebas
+  const isTestMode = currentBusiness?.modoPruebas === true; // Desactivado por defecto en producción real
 
   const [showModal, setShowModal] = useState(false);
   const [showGuideModal, setShowGuideModal] = useState(false);
@@ -224,21 +224,7 @@ export const TestModeBanner: React.FC<TestModeBannerProps> = ({ onDataReset }) =
   };
 
   if (!isTestMode) {
-    if (!currentUserAccount) return null;
-    return (
-      <div className="bg-neutral-900 text-neutral-400 px-3 py-1 text-[11px] flex items-center justify-between border-b border-neutral-800">
-        <div className="flex items-center gap-1.5">
-          <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-          <span>Modo Producción Real</span>
-        </div>
-        <button
-          onClick={handleToggleTestMode}
-          className="text-orange-400 hover:text-orange-300 font-bold underline cursor-pointer"
-        >
-          Activar Fase de Pruebas
-        </button>
-      </div>
-    );
+    return null;
   }
 
   return (

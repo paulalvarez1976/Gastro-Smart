@@ -177,19 +177,24 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
     setEditingDinerNameVal('');
   };
 
-  // Add Item to Cart
-  const handleAddToCart = (item: MenuItem) => {
+  // Add Item to Cart with optional route override (Cocina vs Xpress)
+  const handleAddToCart = (item: MenuItem, routeOverride?: 'cocina' | 'express') => {
     if (!item.disponible) return;
     sounds.playKeypadClick();
     haptics.tap();
 
     const activeDiner = diners.find(d => d.id === activeDinerId) || diners[0];
     const isTableOrder = setupData?.orderTargetType === 'mesa';
+    const isKitchen = routeOverride !== undefined
+      ? routeOverride === 'cocina'
+      : (item.requiereCocina !== false);
 
     setCart(prev => {
-      // If table order, match by both menuItemId and active comensalId
+      // If table order, match by menuItemId, active comensalId AND requiresKitchen setting
       const existingIdx = prev.findIndex(i => 
-        i.menuItemId === item.id && (!isTableOrder || i.comensalId === activeDiner?.id)
+        i.menuItemId === item.id && 
+        (!isTableOrder || i.comensalId === activeDiner?.id) &&
+        (i.requiereCocina !== false) === isKitchen
       );
 
       if (existingIdx >= 0) {
@@ -208,18 +213,36 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
         precio: item.precio,
         cantidad: 1,
         notas: null,
-        requiereCocina: item.requiereCocina !== false,
+        requiereCocina: isKitchen,
         fotoUrl: item.fotoUrl || item.imagenUrl || null,
         imagenUrl: item.imagenUrl || item.fotoUrl || null,
         ronda: currentRoundNumber,
         comensalId: isTableOrder ? (activeDiner?.id || 'c1') : null,
         comensalNombre: isTableOrder ? (activeDiner?.nombre || 'Comensal 1') : null,
         comensalNumero: isTableOrder ? (activeDiner?.numero || 1) : null,
-        estadoItem: item.requiereCocina !== false ? 'pendiente' : 'listo',
-        estado: item.requiereCocina !== false ? 'pendiente_cocina' : 'listo'
+        estadoItem: isKitchen ? 'pendiente' : 'listo',
+        estado: isKitchen ? 'pendiente_cocina' : 'listo'
       };
 
       return [...prev, newItem];
+    });
+  };
+
+  // Alternar entre Preparación en Cocina y Preparación Xpress para un ítem en el carrito
+  const handleToggleItemRoute = (index: number) => {
+    sounds.playKeypadClick();
+    haptics.tap();
+    setCart(prev => {
+      if (!prev[index]) return prev;
+      const updated = [...prev];
+      const newKitchenState = !(updated[index].requiereCocina !== false);
+      updated[index] = {
+        ...updated[index],
+        requiereCocina: newKitchenState,
+        estadoItem: newKitchenState ? 'pendiente' : 'listo',
+        estado: newKitchenState ? 'pendiente_cocina' : 'listo'
+      };
+      return updated;
     });
   };
 
@@ -798,6 +821,7 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
               orders={orders}
               clients={clients}
               restaurantId={currentRestaurant?.id || ''}
+              restaurant={currentRestaurant}
               initialData={setupData}
               onContinue={handleOrderSetupContinue}
             />
@@ -817,6 +841,7 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
             onSubtractItem={handleSubtractItem}
             onUpdateQty={handleUpdateQty}
             onRemoveItem={handleRemoveItem}
+            onToggleItemRoute={handleToggleItemRoute}
             onAssignItemDiner={handleAssignItemDiner}
             onOpenNoteModal={(index, currentNote) => setItemNoteModal({ index, note: currentNote })}
             totalAmount={totalAmount}
@@ -895,11 +920,20 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
             <div className="max-h-56 overflow-y-auto space-y-1.5 divide-y divide-neutral-100 text-xs">
               {cart.map((it, idx) => (
                 <div key={`modal-cart-${it.menuItemId}-${idx}`} className="pt-1.5 first:pt-0 flex items-center justify-between">
-                  <div>
-                    <span className="font-semibold">{it.cantidad}x {it.nombre}</span>
-                    {it.comensalNombre && (
-                      <span className="text-[10px] text-orange-600 block">({it.comensalNombre})</span>
-                    )}
+                  <div className="flex items-center gap-2">
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold">{it.cantidad}x {it.nombre}</span>
+                        <span className={`text-[9px] px-1.5 py-0.2 rounded font-black uppercase ${
+                          it.requiereCocina !== false ? 'bg-orange-100 text-orange-800' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          {it.requiereCocina !== false ? 'Cocina' : 'Xpress'}
+                        </span>
+                      </div>
+                      {it.comensalNombre && (
+                        <span className="text-[10px] text-orange-600 block">({it.comensalNombre})</span>
+                      )}
+                    </div>
                   </div>
                   <span className="font-mono font-bold">${(it.precio * it.cantidad).toFixed(2)}</span>
                 </div>
@@ -945,6 +979,7 @@ export const WaiterPOS: React.FC<WaiterPOSProps> = ({
           <ThermalReceiptModal
             order={ticketOrderToPrint}
             restaurantName={currentRestaurant?.nombre || 'Restaurante'}
+            restaurantLogo={currentRestaurant?.logoUrl || undefined}
             restaurantAddress={currentRestaurant?.direccion}
             restaurantPhone={currentRestaurant?.telefono}
             clientPhone={resolvedPhone}

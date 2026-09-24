@@ -1,7 +1,7 @@
 import { UNIQUE_BUSINESS_ID } from '../config/business';
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType } from '../types';
+import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType, CashRegisterClose, MenuAuditLog, MenuAuditActionType, MenuAuditLogChange } from '../types';
 import { 
   createRestaurant, 
   updateRestaurant, 
@@ -12,6 +12,8 @@ import {
   setMenuItem,
   generateMenuItemId,
   updateMenuItem, 
+  updateMenuItemStock,
+  quickAdjustMenuItemStock,
   deleteMenuItem,
   updateRestaurantTableCount,
   renumberTables,
@@ -30,10 +32,15 @@ import {
   seedQuickTestingDishesAndOrder,
   simulateTableOrder,
   simulateExpressOrder,
-  simulateCashShift
+  simulateCashShift,
+  subscribeToCashCloses,
+  recordMenuAuditLog,
+  subscribeToMenuAuditLogs,
+  seedSampleMenuAuditLogsIfEmpty
 } from '../services/dataService';
 import { uploadDishPhoto, migrateBase64MenuItemsToStorage } from '../services/storageService';
 import { sounds } from '../utils/sound';
+import { LogoUploader } from './LogoUploader';
 import { FinancialDashboard } from './FinancialDashboard';
 import { DeliveryReconciliation } from './DeliveryReconciliation';
 import { StaffAttendanceAdminView } from './StaffAttendanceAdminView';
@@ -43,6 +50,10 @@ import { DishCostProfitReport } from './DishCostProfitReport';
 import { KeyIndicatorsPanel } from './KeyIndicatorsPanel';
 import { OrderHistoryAdminView } from './OrderHistoryAdminView';
 import { AdminMessageCenterModal } from './AdminMessageCenterModal';
+import { LowStockNotificationBanner } from './LowStockNotificationBanner';
+import { QuickRestockModal } from './QuickRestockModal';
+import { AdminPdfReportsModal } from './AdminPdfReportsModal';
+import { MenuAuditLogsTable } from './MenuAuditLogsTable';
 import { 
   ShieldCheck, 
   ShieldAlert,
@@ -86,7 +97,14 @@ import {
   Wallet,
   BarChart3,
   History,
-  ReceiptText
+  ReceiptText,
+  Boxes,
+  PackageCheck,
+  PackagePlus,
+  PackageX,
+  FileDown,
+  ClipboardList,
+  Info
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -110,6 +128,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     currentRestaurant, 
     selectRestaurant, 
     currentUserAccount, 
+    currentEmployee,
     currentBusiness,
     securityAlerts,
     markAlertRead,
@@ -122,13 +141,45 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   
   // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión y pruebas)
-  const [activeTab, setActiveTab] = useState<'indicadores' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'turnos' | 'peligro'>('indicadores');
+  const [activeTab, setActiveTab] = useState<'indicadores' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'peligro'>('indicadores');
+
+  // Registros de Auditoría de Menú y Stock
+  const [menuAuditLogs, setMenuAuditLogs] = useState<MenuAuditLog[]>([]);
+  const [isAuditLogsLoading, setIsAuditLogsLoading] = useState(true);
+
+  // Suscripción en tiempo real a auditoría de menú y stock
+  useEffect(() => {
+    if (!activeBizId) return;
+    setIsAuditLogsLoading(true);
+    const unsub = subscribeToMenuAuditLogs(activeBizId, (data) => {
+      setMenuAuditLogs(data);
+      setIsAuditLogsLoading(false);
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [activeBizId]);
 
   // Modal Centro de Mensajes & Avisos de Seguridad
   const [showMessageCenterModal, setShowMessageCenterModal] = useState(false);
 
   // Modal Reparar Pedidos Atascados
   const [showRepairModal, setShowRepairModal] = useState(false);
+
+  // Modal Exportación PDF (Inventario y Cierres de Caja)
+  const [showPdfExportModal, setShowPdfExportModal] = useState(false);
+  const [pdfModalInitialTab, setPdfModalInitialTab] = useState<'inventario' | 'cierres'>('inventario');
+  const [cashCloses, setCashCloses] = useState<CashRegisterClose[]>([]);
+
+  // Suscripción a cierres de caja en tiempo real para reportes de auditoría
+  useEffect(() => {
+    const unsub = subscribeToCashCloses(activeBizId, null, (data) => {
+      setCashCloses(data);
+    });
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [activeBizId]);
 
   // Restaurant Modal State
   const [showRestModal, setShowRestModal] = useState(false);
@@ -140,7 +191,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     activo: boolean;
     numeroMesas: number;
     usaCocina: boolean;
-  }>({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true });
+    logoUrl?: string | null;
+  }>({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true, logoUrl: '' });
 
   // Modal Gestión de Mesas
   const [tableModalRest, setTableModalRest] = useState<Restaurant | null>(null);
@@ -231,9 +283,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Menu Item Modal State
   const [showMenuModal, setShowMenuModal] = useState(false);
+  const [showRestockModal, setShowRestockModal] = useState(false);
   const [editingMenu, setEditingMenu] = useState<MenuItem | null>(null);
   const [menuViewMode, setMenuViewMode] = useState<'tabla' | 'tarjetas'>('tabla');
-  const [menuPrepFilter, setMenuPrepFilter] = useState<'all' | 'cocina' | 'express'>('all');
+  const [menuPrepFilter, setMenuPrepFilter] = useState<'all' | 'cocina' | 'express' | 'stock_bajo' | 'control_stock'>('all');
   const [isManualCocinaTouched, setIsManualCocinaTouched] = useState(false);
   const [menuForm, setMenuForm] = useState({
     nombre: '',
@@ -243,6 +296,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     categoria: 'Platos Fuertes',
     requiereCocina: true,
     disponible: true,
+    controlaStock: false,
+    stockActual: 20,
+    stockMinimo: 5,
+    unidadMedida: 'unidades',
     restaurantId: 'all',
     fotoUrl: '',
     imagenUrl: ''
@@ -507,6 +564,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       categoria: 'Platos Fuertes',
       requiereCocina: true,
       disponible: true,
+      controlaStock: false,
+      stockActual: 20,
+      stockMinimo: 5,
+      unidadMedida: 'unidades',
       restaurantId: 'all',
       fotoUrl: '',
       imagenUrl: ''
@@ -524,18 +585,161 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsManualCocinaTouched(true);
     setMenuForm({
       nombre: item.nombre,
-      descripcion: item.descripcion,
+      descripcion: item.descripcion || '',
       precio: item.precio,
       costoElaboracion: item.costoElaboracion || 0,
       categoria: item.categoria,
       requiereCocina: item.requiereCocina === true,
-      disponible: item.disponible,
-      restaurantId: item.restaurantId,
+      disponible: item.disponible !== false,
+      controlaStock: item.controlaStock === true,
+      stockActual: typeof item.stockActual === 'number' ? item.stockActual : 20,
+      stockMinimo: typeof item.stockMinimo === 'number' ? item.stockMinimo : 5,
+      unidadMedida: item.unidadMedida || 'unidades',
+      restaurantId: item.restaurantId || 'all',
       fotoUrl: item.fotoUrl || item.imagenUrl || '',
       imagenUrl: item.imagenUrl || item.fotoUrl || ''
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
     setShowMenuModal(true);
+  };
+
+  // Helper para identificar al empleado / usuario responsable del cambio para la auditoría
+  const getAuditActor = () => {
+    if (currentEmployee) {
+      return {
+        id: currentEmployee.id,
+        nombre: currentEmployee.nombre,
+        rol: currentEmployee.puesto || 'Empleado'
+      };
+    }
+    if (currentUserAccount) {
+      return {
+        id: currentUserAccount.uid,
+        nombre: currentUserAccount.nombre || currentUserAccount.email || 'Administrador',
+        rol: currentUserAccount.rol === 'owner' ? 'Propietario / Dueño' : 'Administrador'
+      };
+    }
+    return {
+      id: 'admin',
+      nombre: 'Administrador General',
+      rol: 'Administrador'
+    };
+  };
+
+  // Ajuste rápido de stock auditado
+  const handleQuickStockAdjustWithAudit = async (item: MenuItem, delta: number) => {
+    sounds.playKeypadClick();
+    const actor = getAuditActor();
+    const currentStock = typeof item.stockActual === 'number' ? item.stockActual : 0;
+    const newStock = Math.max(0, currentStock + delta);
+    const unit = item.unidadMedida || 'unidades';
+    const rest = restaurants.find(r => r.id === item.restaurantId);
+
+    await quickAdjustMenuItemStock(item.id, delta);
+
+    await recordMenuAuditLog({
+      businessId: activeBizId,
+      restaurantId: item.restaurantId,
+      restaurantNombre: rest?.nombre || 'Todas las sedes',
+      platoId: item.id,
+      platoNombre: item.nombre,
+      tipoAccion: 'ajuste_stock',
+      detalles: `Ajuste de inventario: ${delta > 0 ? `+${delta}` : delta} ${unit} (Existencias: ${currentStock} → ${newStock} ${unit})`,
+      cambios: [
+        { campo: 'stockActual', valorAnterior: currentStock, valorNuevo: newStock }
+      ],
+      empleadoId: actor.id,
+      empleadoNombre: actor.nombre,
+      empleadoRol: actor.rol,
+      fecha: new Date().toISOString()
+    });
+
+    sounds.playNotification();
+  };
+
+  // Cambio de disponibilidad de plato auditado
+  const handleToggleAvailabilityWithAudit = async (item: MenuItem) => {
+    const newDisp = !item.disponible;
+    const actor = getAuditActor();
+    const rest = restaurants.find(r => r.id === item.restaurantId);
+
+    await updateMenuItem(item.id, { disponible: newDisp });
+
+    await recordMenuAuditLog({
+      businessId: activeBizId,
+      restaurantId: item.restaurantId,
+      restaurantNombre: rest?.nombre || 'Todas las sedes',
+      platoId: item.id,
+      platoNombre: item.nombre,
+      tipoAccion: 'cambio_disponibilidad',
+      detalles: newDisp 
+        ? `Plato habilitado para venta en carta.` 
+        : `Plato marcado como pausado / agotado fuera de carta.`,
+      cambios: [
+        { campo: 'disponible', valorAnterior: item.disponible, valorNuevo: newDisp }
+      ],
+      empleadoId: actor.id,
+      empleadoNombre: actor.nombre,
+      empleadoRol: actor.rol,
+      fecha: new Date().toISOString()
+    });
+  };
+
+  // Cambio de ruta de preparación (Cocina vs Xpress) auditado con 1 clic
+  const handleTogglePreparationRouteWithAudit = async (item: MenuItem) => {
+    sounds.playKeypadClick();
+    const newKitchen = !(item.requiereCocina === true);
+    const actor = getAuditActor();
+    const rest = restaurants.find(r => r.id === item.restaurantId);
+
+    await updateMenuItem(item.id, { 
+      requiereCocina: newKitchen,
+      tipoPreparacion: newKitchen ? 'cocina' : 'express'
+    });
+
+    await recordMenuAuditLog({
+      businessId: activeBizId,
+      restaurantId: item.restaurantId,
+      restaurantNombre: rest?.nombre || 'Todas las sedes',
+      platoId: item.id,
+      platoNombre: item.nombre,
+      tipoAccion: 'modificacion_plato',
+      detalles: newKitchen 
+        ? `Ruta de preparación actualizada a "Preparación en Cocina" (envío a pantalla KDS).` 
+        : `Ruta de preparación actualizada a "Preparación Xpress" (despacho directo en mostrador).`,
+      cambios: [
+        { campo: 'requiereCocina', valorAnterior: item.requiereCocina ? 'Cocina' : 'Xpress', valorNuevo: newKitchen ? 'Cocina' : 'Xpress' }
+      ],
+      empleadoId: actor.id,
+      empleadoNombre: actor.nombre,
+      empleadoRol: actor.rol,
+      fecha: new Date().toISOString()
+    });
+
+    sounds.playNotification();
+  };
+
+  // Eliminación de plato auditada
+  const handleConfirmDeleteMenuItemWithAudit = async (item: MenuItem) => {
+    if (!confirm(`¿Eliminar plato ${item.nombre}?`)) return;
+    const actor = getAuditActor();
+    const rest = restaurants.find(r => r.id === item.restaurantId);
+
+    await recordMenuAuditLog({
+      businessId: activeBizId,
+      restaurantId: item.restaurantId,
+      restaurantNombre: rest?.nombre || 'Todas las sedes',
+      platoId: item.id,
+      platoNombre: item.nombre,
+      tipoAccion: 'eliminacion_plato',
+      detalles: `Plato "${item.nombre}" (${item.categoria || 'General'}, precio $${item.precio}) eliminado definitivamente de la carta.`,
+      empleadoId: actor.id,
+      empleadoNombre: actor.nombre,
+      empleadoRol: actor.rol,
+      fecha: new Date().toISOString()
+    });
+
+    await deleteMenuItem(item.id);
   };
 
   const handleSaveMenuItem = async () => {
@@ -550,17 +754,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const dishId = editingMenu ? editingMenu.id : generateMenuItemId();
       let finalFotoUrl: string | null = menuForm.fotoUrl || menuForm.imagenUrl || null;
 
-      // 3. Al guardar el plato, la imagen se sube a Firebase Storage en la ruta:
-      //    /restaurants/{restaurantId}/menu/{menuItemId}.jpg
-      // 4. Se comprime/redimensiona antes de subir (máx 800px ancho, 80% calidad)
-      // 5. En Firestore solo se guarda la URL de descarga del campo "fotoUrl"
       if (selectedPhotoFile) {
         finalFotoUrl = await uploadDishPhoto(targetRestaurantId, dishId, selectedPhotoFile);
       } else if (!photoPreviewUrl) {
         finalFotoUrl = null;
       }
 
-      const dishPayload = {
+      const isStockControlled = menuForm.controlaStock === true;
+      const parsedStock = Number(menuForm.stockActual) || 0;
+      const parsedMin = Number(menuForm.stockMinimo) || 5;
+
+      // Si se controla stock y está en 0 o menos, forzamos disponible en falso; de lo contrario respetamos la selección manual
+      const finalDisponible = isStockControlled && parsedStock <= 0 ? false : (menuForm.disponible !== false);
+
+      const dishPayload: Record<string, any> = {
         businessId: activeBizId,
         nombre: menuForm.nombre.trim(),
         descripcion: menuForm.descripcion.trim(),
@@ -568,25 +775,124 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         costoElaboracion: Number(menuForm.costoElaboracion) || 0,
         categoria: menuForm.categoria.trim() || 'General',
         requiereCocina: menuForm.requiereCocina === true,
-        disponible: menuForm.disponible,
-        restaurantId: menuForm.restaurantId,
+        tipoPreparacion: menuForm.requiereCocina === true ? 'cocina' : 'express',
+        disponible: finalDisponible,
+        controlaStock: isStockControlled,
+        restaurantId: menuForm.restaurantId || 'all',
         fotoUrl: finalFotoUrl,
         imagenUrl: finalFotoUrl
       };
 
-      if (editingMenu) {
-        await updateMenuItem(editingMenu.id, dishPayload);
-      } else {
-        await setMenuItem(dishId, dishPayload);
+      if (isStockControlled) {
+        dishPayload.stockActual = parsedStock;
+        dishPayload.stockMinimo = parsedMin;
+        dishPayload.unidadMedida = menuForm.unidadMedida || 'unidades';
       }
 
+      if (editingMenu) {
+        await updateMenuItem(editingMenu.id, dishPayload);
+
+        // Registro de auditoría para modificación de plato
+        try {
+          const actor = getAuditActor();
+          const targetRest = restaurants.find(r => r.id === targetRestaurantId);
+          const cambios: MenuAuditLogChange[] = [];
+
+          if (editingMenu.nombre !== menuForm.nombre.trim()) {
+            cambios.push({ campo: 'nombre', valorAnterior: editingMenu.nombre, valorNuevo: menuForm.nombre.trim() });
+          }
+          if (Number(editingMenu.precio) !== (Number(menuForm.precio) || 0)) {
+            cambios.push({ campo: 'precio', valorAnterior: editingMenu.precio, valorNuevo: Number(menuForm.precio) || 0 });
+          }
+          if (Number(editingMenu.costoElaboracion || 0) !== (Number(menuForm.costoElaboracion) || 0)) {
+            cambios.push({ campo: 'costoElaboracion', valorAnterior: editingMenu.costoElaboracion || 0, valorNuevo: Number(menuForm.costoElaboracion) || 0 });
+          }
+          if (editingMenu.categoria !== (menuForm.categoria.trim() || 'General')) {
+            cambios.push({ campo: 'categoria', valorAnterior: editingMenu.categoria, valorNuevo: menuForm.categoria.trim() || 'General' });
+          }
+          if (editingMenu.disponible !== finalDisponible) {
+            cambios.push({ campo: 'disponible', valorAnterior: editingMenu.disponible, valorNuevo: finalDisponible });
+          }
+          if ((editingMenu.requiereCocina === true) !== (menuForm.requiereCocina === true)) {
+            cambios.push({ 
+              campo: 'requiereCocina', 
+              valorAnterior: editingMenu.requiereCocina ? 'Cocina' : 'Xpress', 
+              valorNuevo: menuForm.requiereCocina === true ? 'Cocina' : 'Xpress' 
+            });
+          }
+          if (editingMenu.controlaStock !== isStockControlled) {
+            cambios.push({ campo: 'controlaStock', valorAnterior: editingMenu.controlaStock, valorNuevo: isStockControlled });
+          }
+          if (isStockControlled && Number(editingMenu.stockActual ?? 0) !== parsedStock) {
+            cambios.push({ campo: 'stockActual', valorAnterior: editingMenu.stockActual ?? 0, valorNuevo: parsedStock });
+          }
+          if (isStockControlled && Number(editingMenu.stockMinimo ?? 5) !== parsedMin) {
+            cambios.push({ campo: 'stockMinimo', valorAnterior: editingMenu.stockMinimo ?? 5, valorNuevo: parsedMin });
+          }
+
+          let tipoAccion: MenuAuditActionType = 'modificacion_plato';
+          if (cambios.length === 1 && cambios[0].campo === 'stockActual') {
+            tipoAccion = 'ajuste_stock';
+          } else if (cambios.length === 1 && cambios[0].campo === 'disponible') {
+            tipoAccion = 'cambio_disponibilidad';
+          }
+
+          const detalles = cambios.length > 0
+            ? `Modificaciones en "${menuForm.nombre.trim()}": ${cambios.map(c => `${c.campo} (${c.valorAnterior} → ${c.valorNuevo})`).join(', ')}`
+            : `Actualización general de datos del plato "${menuForm.nombre.trim()}"`;
+
+          await recordMenuAuditLog({
+            businessId: activeBizId,
+            restaurantId: targetRestaurantId,
+            restaurantNombre: targetRest?.nombre || 'Todas las sedes',
+            platoId: dishId,
+            platoNombre: menuForm.nombre.trim(),
+            tipoAccion,
+            detalles,
+            cambios,
+            empleadoId: actor.id,
+            empleadoNombre: actor.nombre,
+            empleadoRol: actor.rol,
+            fecha: new Date().toISOString()
+          });
+        } catch (auditErr) {
+          console.warn('Advertencia registrando auditoría de edición:', auditErr);
+        }
+      } else {
+        await setMenuItem(dishId, dishPayload as any);
+
+        // Registro de auditoría para creación de nuevo plato
+        try {
+          const actor = getAuditActor();
+          const targetRest = restaurants.find(r => r.id === targetRestaurantId);
+
+          await recordMenuAuditLog({
+            businessId: activeBizId,
+            restaurantId: targetRestaurantId,
+            restaurantNombre: targetRest?.nombre || 'Todas las sedes',
+            platoId: dishId,
+            platoNombre: menuForm.nombre.trim(),
+            tipoAccion: 'creacion_plato',
+            detalles: `Alta de nuevo plato "${menuForm.nombre.trim()}" en categoría "${menuForm.categoria.trim() || 'General'}" con precio $${Number(menuForm.precio) || 0}` +
+              (isStockControlled ? ` y stock inicial de ${parsedStock} ${menuForm.unidadMedida || 'unidades'}` : ' (Sin control de inventario)'),
+            empleadoId: actor.id,
+            empleadoNombre: actor.nombre,
+            empleadoRol: actor.rol,
+            fecha: new Date().toISOString()
+          });
+        } catch (auditErr) {
+          console.warn('Advertencia registrando auditoría de alta:', auditErr);
+        }
+      }
+
+      sounds.playCashRegister();
       setShowMenuModal(false);
       setEditingMenu(null);
       setSelectedPhotoFile(null);
       setPhotoPreviewUrl(null);
     } catch (err: any) {
       console.error('Error guardando plato:', err);
-      alert(err.message || 'No se pudo subir la foto, verificá tu conexión e intentá de nuevo.');
+      alert(err.message || 'No se pudo guardar el plato, verificá los datos e intentá de nuevo.');
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -637,14 +943,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             { id: 'restaurantes', label: 'Locales & Mesas', icon: Store },
             { id: 'empleados', label: 'Empleados & PINs', icon: Users },
             { id: 'menu', label: 'Menú & Platos', icon: UtensilsCrossed },
+            { id: 'auditoria_menu', label: 'Auditoría de Menú & Stock', icon: ShieldCheck },
             { id: 'turnos', label: 'Turnos & Sueldos', icon: Clock },
-            { id: 'peligro', label: 'Pruebas & Seguridad', icon: FlaskConical },
+            { id: 'peligro', label: 'Seguridad & Mantenimiento', icon: ShieldCheck },
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             const isDanger = tab.id === 'peligro';
             const isFinancial = tab.id === 'financiero' || tab.id === 'conciliacion' || tab.id === 'asistencia';
             const isIndicator = tab.id === 'indicadores' || tab.id === 'historial_pedidos';
+            const isAudit = tab.id === 'auditoria_menu';
             return (
               <button
                 key={tab.id}
@@ -658,14 +966,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         ? 'bg-red-600 text-white shadow-xs' 
                         : isFinancial 
                           ? 'bg-blue-600 text-white shadow-xs' 
-                          : 'bg-white text-neutral-900 shadow-xs' 
+                          : isAudit
+                            ? 'bg-purple-700 text-white shadow-xs'
+                            : 'bg-white text-neutral-900 shadow-xs' 
                     : isIndicator
                       ? 'text-orange-700 hover:bg-orange-50 font-black'
                       : isDanger 
                         ? 'text-red-600 hover:bg-red-50' 
                         : isFinancial
                           ? 'text-blue-700 hover:bg-blue-50 font-black'
-                          : 'text-neutral-600 hover:text-neutral-900'
+                          : isAudit
+                            ? 'text-purple-700 hover:bg-purple-50 font-bold'
+                            : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 ${
@@ -677,7 +989,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         ? 'text-red-500' 
                         : isFinancial 
                           ? 'text-blue-600' 
-                          : 'text-neutral-400'
+                          : isAudit
+                            ? 'text-purple-600'
+                            : 'text-neutral-400'
                 }`} />
                 <span>{tab.label}</span>
               </button>
@@ -686,6 +1000,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Botón Exportar Reportes PDF */}
+          <button
+            id="admin-export-pdf-btn"
+            type="button"
+            onClick={() => { sounds.playKeypadClick(); setShowPdfExportModal(true); }}
+            className="px-3.5 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer"
+            title="Descargar reportes oficiales en PDF (Inventario y Cierres de Caja)"
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            <span>Exportar Reportes PDF</span>
+          </button>
+
           {/* Botón Centro de Mensajes & Avisos */}
           <button
             id="admin-messages-btn"
@@ -723,6 +1049,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* Main Admin Content Container */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6">
         
+        {/* Banner Global de Notificaciones de Stock Bajo y Productos Agotados */}
+        <div className="max-w-7xl mx-auto">
+          <LowStockNotificationBanner
+            menuItems={menuItems}
+            restaurants={restaurants}
+            onOpenRestockModal={() => setShowRestockModal(true)}
+            onNavigateToMenu={() => {
+              setActiveTab('menu');
+              setMenuPrepFilter('stock_bajo');
+            }}
+            onQuickRestock={async (item, amount) => {
+              await quickAdjustMenuItemStock(item.id, amount);
+            }}
+          />
+        </div>
+
         {/* VIEW INDICADORES: Panel Unificado de Indicadores con Gráficos Recharts (Operaciones en vivo, Tendencia Ventas vs Gastos, Costos & Rentabilidad) */}
         {activeTab === 'indicadores' && (
           <div className="max-w-7xl mx-auto space-y-6">
@@ -800,10 +1142,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 onClick={() => {
                   setEditingRest(null);
-                  setRestForm({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true });
+                  setRestForm({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true, logoUrl: '' });
                   setShowRestModal(true);
                 }}
-                className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm"
+                className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 Nuevo Local
@@ -814,10 +1156,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {restaurants.map(rest => (
                 <div key={rest.id} className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-xs flex flex-col justify-between">
                   <div>
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Store className="w-5 h-5 text-orange-600" />
-                        <h4 className="font-extrabold text-neutral-900 text-base">{rest.nombre}</h4>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        {rest.logoUrl ? (
+                          <div className="w-10 h-10 rounded-xl border border-neutral-200 bg-neutral-50 p-1 flex items-center justify-center shrink-0 overflow-hidden shadow-2xs">
+                            <img
+                              src={rest.logoUrl}
+                              alt={rest.nombre}
+                              className="w-full h-full object-contain"
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center shrink-0">
+                            <Store className="w-5 h-5" />
+                          </div>
+                        )}
+                        <div>
+                          <h4 className="font-extrabold text-neutral-900 text-base leading-tight">{rest.nombre}</h4>
+                          <span className="text-[10px] text-neutral-400 font-mono">ID: {rest.id.slice(0, 8)}</span>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1.5">
                         {rest.usaCocina === false ? (
@@ -856,7 +1214,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           setTableCountInput(rest.numeroMesas || 10);
                           setTableOperationMsg(null);
                         }}
-                        className="px-2.5 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold text-xs flex items-center gap-1 transition"
+                        className="px-2.5 py-1.5 rounded-lg bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
                         title="Gestionar mesas de este local"
                       >
                         <Grid3X3 className="w-3.5 h-3.5" />
@@ -875,11 +1233,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             telefono: rest.telefono,
                             activo: rest.activo,
                             numeroMesas: rest.numeroMesas || 10,
-                            usaCocina: rest.usaCocina !== false
+                            usaCocina: rest.usaCocina !== false,
+                            logoUrl: rest.logoUrl || ''
                           });
                           setShowRestModal(true);
                         }}
-                        className="px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs flex items-center gap-1 transition"
+                        className="px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
                         Editar
@@ -1048,6 +1407,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => { sounds.playKeypadClick(); setActiveTab('auditoria_menu'); }}
+                  className="px-3 py-1.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs font-bold flex items-center gap-1.5 transition"
+                  title="Ver registros de auditoría de cambios en platos y stock"
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
+                  <span>Auditoría de Menú & Stock ({menuAuditLogs.length})</span>
+                </button>
+
+                <button
+                  type="button"
                   disabled={isMigratingPhotos}
                   onClick={handleMigratePhotos}
                   className="px-3 py-1.5 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-800 border border-orange-200 text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-50"
@@ -1057,8 +1426,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <span>Migrar Fotos a Storage</span>
                 </button>
 
-                {/* Filtro Tipo de Preparación */}
-                <div className="flex bg-neutral-150 p-0.5 rounded-xl border border-neutral-200 text-xs">
+                {/* Filtro Tipo de Preparación & Stock */}
+                <div className="flex flex-wrap items-center bg-neutral-150 p-0.5 rounded-xl border border-neutral-200 text-xs">
                   <button
                     type="button"
                     onClick={() => setMenuPrepFilter('all')}
@@ -1088,6 +1457,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <Zap className="w-3.5 h-3.5" />
                     Express ({menuItems.filter(i => i.requiereCocina !== true).length})
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setMenuPrepFilter('stock_bajo')}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-black transition ${
+                      menuPrepFilter === 'stock_bajo' 
+                        ? 'bg-red-600 text-white shadow-xs' 
+                        : menuItems.filter(i => i.controlaStock && (i.stockActual ?? 0) <= (i.stockMinimo ?? 5)).length > 0
+                        ? 'text-red-700 bg-red-50 hover:bg-red-100'
+                        : 'text-neutral-500 hover:text-neutral-900'
+                    }`}
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    Stock Crítico ({menuItems.filter(i => i.controlaStock && (i.stockActual ?? 0) <= (i.stockMinimo ?? 5)).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMenuPrepFilter('control_stock')}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-bold transition ${
+                      menuPrepFilter === 'control_stock' ? 'bg-white text-amber-700 shadow-xs' : 'text-neutral-500 hover:text-neutral-900'
+                    }`}
+                  >
+                    <Boxes className="w-3.5 h-3.5" />
+                    Con Stock ({menuItems.filter(i => i.controlaStock === true).length})
+                  </button>
                 </div>
 
                 {/* Selector Vista Tabla / Cuadrícula */}
@@ -1114,15 +1507,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   </button>
                 </div>
 
-                {/* Botón Acceso Rápido a Reporte de Costos */}
+                {/* Botón Reabastecer Rápido */}
                 <button
                   type="button"
-                  onClick={() => { sounds.playKeypadClick(); setActiveTab('costos'); }}
-                  className="h-10 px-3.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
-                  title="Abrir reporte completo de costos de elaboración y margen de ganancia"
+                  onClick={() => { sounds.playKeypadClick(); setShowRestockModal(true); }}
+                  className="h-10 px-3.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs flex items-center gap-1.5 shadow-xs active:scale-95 transition cursor-pointer"
+                  title="Abrir centro de reabastecimiento rápido de existencias"
                 >
-                  <PieChart className="w-4 h-4 text-amber-700" />
-                  <span>Reporte de Costos & Margen</span>
+                  <Zap className="w-4 h-4" />
+                  <span>Reabastecer Stock</span>
+                </button>
+
+                {/* Botón Reemplazado: Exportar Reportes PDF (Inventario & Cierres de Caja) */}
+                <button
+                  type="button"
+                  onClick={() => { 
+                    sounds.playKeypadClick(); 
+                    setPdfModalInitialTab('inventario');
+                    setShowPdfExportModal(true); 
+                  }}
+                  className="h-10 px-3.5 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-300 font-bold text-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                  title="Exportar reportes oficiales a PDF (Inventario, Existencias y Cierres de Caja)"
+                >
+                  <FileDown className="w-4 h-4 text-purple-700" />
+                  <span>Reportes PDF (Inventario & Cierres)</span>
                 </button>
 
                 <button
@@ -1139,6 +1547,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               const filteredMenu = menuItems.filter(item => {
                 if (menuPrepFilter === 'cocina') return item.requiereCocina === true;
                 if (menuPrepFilter === 'express') return item.requiereCocina !== true;
+                if (menuPrepFilter === 'stock_bajo') {
+                  return item.controlaStock === true && (item.stockActual ?? 0) <= (item.stockMinimo ?? 5);
+                }
+                if (menuPrepFilter === 'control_stock') {
+                  return item.controlaStock === true;
+                }
                 return true;
               });
 
@@ -1151,6 +1565,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <th className="p-3">Plato</th>
                           <th className="p-3">Categoría</th>
                           <th className="p-3">Preparación</th>
+                          <th className="p-3">Inventario / Stock</th>
                           <th className="p-3 text-right">PVP Venta</th>
                           <th className="p-3 text-right">Costo Elab.</th>
                           <th className="p-3 text-right">Margen Bruto</th>
@@ -1170,6 +1585,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           const hasCost = typeof item.costoElaboracion === 'number' && item.costoElaboracion > 0;
                           const margin$ = item.precio - cost;
                           const marginPct = item.precio > 0 ? (margin$ / item.precio) * 100 : 0;
+                          const isControlled = item.controlaStock === true;
+                          const stock = item.stockActual ?? 0;
+                          const minStock = item.stockMinimo ?? 5;
+                          const unit = item.unidadMedida || 'unid.';
+                          const isDepleted = isControlled && stock <= 0;
+                          const isLow = isControlled && stock > 0 && stock <= minStock;
 
                           return (
                             <tr key={item.id} className="hover:bg-neutral-50/50">
@@ -1201,14 +1622,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </span>
                               </td>
                               <td className="p-3">
-                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-bold text-[10px] uppercase ${
-                                  isKitchen 
-                                    ? 'bg-orange-50 text-orange-800 border border-orange-200' 
-                                    : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                }`}>
-                                  {isKitchen ? <ChefHat className="w-3 h-3 text-orange-600" /> : <Zap className="w-3 h-3 text-emerald-600" />}
-                                  {isKitchen ? 'Cocina' : 'Express'}
-                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleTogglePreparationRouteWithAudit(item)}
+                                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-bold text-[11px] transition cursor-pointer border ${
+                                    isKitchen 
+                                      ? 'bg-orange-50 text-orange-800 border-orange-200 hover:bg-orange-100 hover:border-orange-300' 
+                                      : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100 hover:border-emerald-300'
+                                  }`}
+                                  title="Clic para cambiar entre Cocina y Preparación Xpress"
+                                >
+                                  {isKitchen ? <ChefHat className="w-3.5 h-3.5 text-orange-600" /> : <Zap className="w-3.5 h-3.5 text-emerald-600" />}
+                                  <span>{isKitchen ? 'Cocina' : 'Xpress'}</span>
+                                </button>
+                              </td>
+                              <td className="p-3">
+                                {isControlled ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-black uppercase ${
+                                      isDepleted 
+                                        ? 'bg-red-600 text-white' 
+                                        : isLow 
+                                        ? 'bg-amber-500 text-white' 
+                                        : 'bg-emerald-100 text-emerald-800'
+                                    }`}>
+                                      {isDepleted ? '0 ' + unit + ' (AGOTADO)' : `${stock} ${unit}`}
+                                    </span>
+                                    <div className="flex items-center gap-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickStockAdjustWithAudit(item, 5)}
+                                        className="px-1.5 py-0.5 bg-neutral-100 hover:bg-emerald-100 hover:text-emerald-800 rounded font-black text-[10px] text-neutral-600 border border-neutral-200 transition"
+                                        title="Sumar +5 unidades"
+                                      >
+                                        +5
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickStockAdjustWithAudit(item, 10)}
+                                        className="px-1.5 py-0.5 bg-neutral-100 hover:bg-emerald-100 hover:text-emerald-800 rounded font-black text-[10px] text-neutral-600 border border-neutral-200 transition"
+                                        title="Sumar +10 unidades"
+                                      >
+                                        +10
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] text-neutral-400 italic">
+                                    Sin control
+                                  </span>
+                                )}
                               </td>
                               <td className="p-3 text-right font-mono font-bold text-neutral-900 text-sm">
                                 ${item.precio.toFixed(2)}
@@ -1240,7 +1703,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <td className="p-3 text-center">
                                 <button
                                   type="button"
-                                  onClick={() => updateMenuItem(item.id, { disponible: !item.disponible })}
+                                  onClick={() => handleToggleAvailabilityWithAudit(item)}
                                   className={`px-2.5 py-1 rounded-full text-[10px] font-bold transition border ${
                                     item.disponible 
                                       ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200' 
@@ -1259,11 +1722,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   <Edit2 className="w-3.5 h-3.5" />
                                 </button>
                                 <button
-                                  onClick={() => {
-                                    if (confirm(`¿Eliminar plato ${item.nombre}?`)) {
-                                      deleteMenuItem(item.id);
-                                    }
-                                  }}
+                                  onClick={() => handleConfirmDeleteMenuItemWithAudit(item)}
                                   className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition"
                                   title="Eliminar Plato"
                                 >
@@ -1285,6 +1744,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {filteredMenu.map(item => {
                     const photoSrc = item.fotoUrl || item.imagenUrl;
                     const isKitchen = item.requiereCocina === true;
+                    const isControlled = item.controlaStock === true;
+                    const stock = item.stockActual ?? 0;
+                    const minStock = item.stockMinimo ?? 5;
+                    const unit = item.unidadMedida || 'unid.';
+                    const isDepleted = isControlled && stock <= 0;
+                    const isLow = isControlled && stock > 0 && stock <= minStock;
 
                     return (
                       <div key={item.id} className="bg-white rounded-2xl border border-neutral-200 p-4 shadow-xs flex flex-col justify-between">
@@ -1297,15 +1762,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 <UtensilsCrossed className="w-8 h-8" />
                               </div>
                             )}
-                            <div className="absolute top-2 left-2">
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-black uppercase text-[10px] shadow-xs ${
-                                isKitchen 
-                                  ? 'bg-orange-500 text-white' 
-                                  : 'bg-emerald-600 text-white'
-                              }`}>
+                            <div className="absolute top-2 left-2 flex flex-col gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleTogglePreparationRouteWithAudit(item)}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-black uppercase text-[10px] shadow-xs cursor-pointer transition active:scale-95 ${
+                                  isKitchen 
+                                    ? 'bg-orange-500 hover:bg-orange-600 text-white' 
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                }`}
+                                title="Clic para alternar entre Cocina y Preparación Xpress"
+                              >
                                 {isKitchen ? <ChefHat className="w-3 h-3" /> : <Zap className="w-3 h-3" />}
-                                {isKitchen ? 'Cocina' : 'Express'}
-                              </span>
+                                {isKitchen ? 'Cocina' : 'Xpress'}
+                              </button>
+
+                              {isControlled && (
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-black uppercase text-[10px] shadow-xs ${
+                                  isDepleted 
+                                    ? 'bg-red-600 text-white' 
+                                    : isLow 
+                                    ? 'bg-amber-500 text-white' 
+                                    : 'bg-emerald-700 text-white'
+                                }`}>
+                                  {isDepleted ? 'Agotado (0)' : `${stock} ${unit}`}
+                                </span>
+                              )}
                             </div>
                             <span className={`absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-black uppercase shadow-xs ${
                               item.disponible ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
@@ -1333,14 +1815,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
 
                         <div className="mt-4 pt-3 border-t border-neutral-100 flex items-center justify-between">
-                          <button
-                            onClick={() => updateMenuItem(item.id, { disponible: !item.disponible })}
-                            className={`text-xs font-bold px-2.5 py-1 rounded-lg border transition ${
-                              item.disponible ? 'bg-neutral-50 text-neutral-700 hover:bg-neutral-100' : 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                            }`}
-                          >
-                            {item.disponible ? 'Marcar Agotado' : 'Habilitar Plato'}
-                          </button>
+                          <div className="flex items-center gap-1">
+                            {isControlled && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuickStockAdjustWithAudit(item, 5)}
+                                  className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded font-black text-xs border border-emerald-200"
+                                  title="Sumar +5 unidades de stock"
+                                >
+                                  +5
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuickStockAdjustWithAudit(item, 10)}
+                                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-black text-xs"
+                                  title="Sumar +10 unidades de stock"
+                                >
+                                  +10
+                                </button>
+                              </>
+                            )}
+                            <button
+                              onClick={() => handleToggleAvailabilityWithAudit(item)}
+                              className={`text-xs font-bold px-2.5 py-1 rounded-lg border transition ${
+                                item.disponible ? 'bg-neutral-50 text-neutral-700 hover:bg-neutral-100' : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              }`}
+                            >
+                              {item.disponible ? 'Agotado' : 'Habilitar'}
+                            </button>
+                          </div>
 
                           <div className="flex gap-1.5">
                             <button
@@ -1350,11 +1854,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
                             <button
-                              onClick={() => {
-                                if (confirm(`¿Eliminar ${item.nombre}?`)) {
-                                  deleteMenuItem(item.id);
-                                }
-                              }}
+                              onClick={() => handleConfirmDeleteMenuItemWithAudit(item)}
                               className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -1367,6 +1867,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 </div>
               );
             })()}
+          </div>
+        )}
+
+        {/* VIEW: Auditoría de Menú & Stock */}
+        {activeTab === 'auditoria_menu' && (
+          <div className="max-w-6xl mx-auto space-y-4">
+            <MenuAuditLogsTable
+              logs={menuAuditLogs}
+              employees={employees}
+              restaurants={restaurants}
+              menuItems={menuItems}
+              isLoading={isAuditLogsLoading}
+              onSeedDemoLogs={async () => {
+                await seedSampleMenuAuditLogsIfEmpty(activeBizId, employees, menuItems);
+              }}
+            />
           </div>
         )}
 
@@ -1526,57 +2042,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {activeTab === 'peligro' && (
           <div className="max-w-4xl mx-auto space-y-6">
             
-            {/* SECCIÓN 1: Centro de Fase de Pruebas */}
-            <div className="bg-amber-500/10 border-2 border-amber-300 rounded-3xl p-6 shadow-xs">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-amber-200">
+            {/* SECCIÓN 1: Centro de Mantenimiento Operativo */}
+            <div className="bg-slate-900 text-white rounded-3xl p-6 shadow-md border border-slate-800">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-bold shadow-xs">
-                    <FlaskConical className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-2xl bg-orange-600 text-white flex items-center justify-center font-bold shadow-xs">
+                    <ShieldCheck className="w-5 h-5" />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-base font-black text-amber-950">Fase de Pruebas & Simulación</h3>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                        currentBusiness?.modoPruebas !== false
-                          ? 'bg-amber-200 text-amber-900 border border-amber-300'
-                          : 'bg-neutral-200 text-neutral-700'
-                      }`}>
-                        {currentBusiness?.modoPruebas !== false ? 'Activo en Modo Pruebas' : 'Modo Producción'}
+                      <h3 className="text-base font-black text-white">Mantenimiento & Reseteo Operativo</h3>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        Modo Producción
                       </span>
                     </div>
-                    <p className="text-xs text-amber-800 mt-0.5">
-                      Herramientas para probar circuitos de venta (meseros, cocina, cobro, delivery) y limpiar datos sin tocar la configuración.
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Herramientas de mantenimiento para limpiar historial operativo o reiniciar transacciones sin borrar locales ni menú.
                     </p>
                   </div>
                 </div>
-
-                {/* Alternar estado de pruebas */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const next = !(currentBusiness?.modoPruebas !== false);
-                    if (window.confirm(next ? '¿Deseas activar el Modo de Pruebas?' : '¿Deseas cambiar a Modo Producción?')) {
-                      await updateBusiness(activeBizId, { modoPruebas: next });
-                      sounds.playNotification();
-                    }
-                  }}
-                  className="px-3.5 py-2 rounded-xl text-xs font-bold border border-amber-300 bg-white hover:bg-amber-50 text-amber-900 transition flex items-center gap-1.5 shrink-0 shadow-xs"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
-                  <span>{currentBusiness?.modoPruebas !== false ? 'Cambiar a Producción' : 'Activar Modo Pruebas'}</span>
-                </button>
               </div>
 
-              {/* Botón Principal de Borrado de Datos de Prueba */}
-              <div className="mt-5 bg-white rounded-2xl p-5 border border-amber-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              {/* Botón Principal de Borrado de Transacciones */}
+              <div className="mt-5 bg-slate-800/80 rounded-2xl p-5 border border-slate-700/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <h4 className="font-extrabold text-neutral-900 text-sm flex items-center gap-2">
-                    <RotateCcw className="w-4 h-4 text-amber-600" />
-                    Restablecer Todos los Datos de Prueba (Recomendado)
+                  <h4 className="font-extrabold text-white text-sm flex items-center gap-2">
+                    <RotateCcw className="w-4 h-4 text-orange-400" />
+                    Restablecer Transacciones e Historial Operativo
                   </h4>
-                  <p className="text-xs text-neutral-600 mt-1 max-w-xl">
+                  <p className="text-xs text-slate-300 mt-1 max-w-xl">
                     Elimina todos los pedidos, gastos, turnos y cierres de caja en todas las sucursales. Libera todas las mesas ocupadas.
-                    <strong className="text-emerald-700 block mt-0.5">
+                    <strong className="text-emerald-400 block mt-0.5">
                       ✓ Mantiene intactos tus locales, mesas configuradas, platos del menú, empleados y PINs.
                     </strong>
                   </p>
@@ -1584,191 +2080,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => handleOpenDangerModal('reset_test_data')}
-                  className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs shrink-0 transition flex items-center gap-2 shadow-xs"
+                  className="px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-black text-xs shrink-0 transition flex items-center gap-2 shadow-xs cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4" />
-                  <span>Borrar Datos de Prueba</span>
+                  <span>Limpiar Transacciones</span>
                 </button>
               </div>
 
-              {/* Banner de resultado de la simulación */}
+              {/* Banner de resultado */}
               {simFeedback && (
-                <div className="mt-3 p-3 bg-white rounded-2xl border border-amber-300 flex items-center justify-between text-xs text-amber-950 shadow-xs">
+                <div className="mt-3 p-3 bg-slate-800 rounded-2xl border border-slate-700 flex items-center justify-between text-xs text-slate-200 shadow-xs">
                   <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span>{simFeedback}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setSimFeedback(null)}
-                    className="text-neutral-400 hover:text-neutral-600 text-xs font-bold"
+                    className="text-slate-400 hover:text-white text-xs font-bold"
                   >
                     ✕
-                  </button>
-                </div>
-              )}
-
-              {/* Acciones de Simulación en 1 Clic */}
-              <div className="mt-4 pt-4 border-t border-amber-200">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="font-extrabold text-xs uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5 text-amber-600" />
-                    Simuladores de Circuitos en 1 Clic
-                  </h4>
-                  <span className="text-[11px] text-amber-800">
-                    Sede activa: <strong>{currentRestaurant?.nombre || 'Selecciona una sede'}</strong>
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {/* Simulación 1: Comanda en Mesa */}
-                  <div className="p-3 bg-white rounded-2xl border border-amber-200 flex flex-col justify-between gap-2 shadow-xs">
-                    <div>
-                      <div className="font-bold text-xs text-neutral-900 flex items-center gap-1">
-                        <UtensilsCrossed className="w-3.5 h-3.5 text-orange-600" />
-                        <span>Mesa 1 (Salón)</span>
-                      </div>
-                      <p className="text-[11px] text-neutral-500 mt-1">
-                        Crea un pedido en Mesa 1 con notas de cocina ("Término medio, sin cebolla") para probar KDS y Caja.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={!currentRestaurant || simulatingAction === 'table'}
-                      onClick={async () => {
-                        if (!currentRestaurant) return;
-                        setSimulatingAction('table');
-                        try {
-                          sounds.playKeypadClick();
-                          const res = await simulateTableOrder(activeBizId, currentRestaurant.id, 1);
-                          sounds.playNotification();
-                          setSimFeedback(`¡Comanda creada en Mesa #${res.tableNumber}! Total: $${res.total.toFixed(2)}. Revisa Cocina y Caja.`);
-                        } catch (e: any) {
-                          alert('Error al simular: ' + e.message);
-                        } finally {
-                          setSimulatingAction(null);
-                        }
-                      }}
-                      className="w-full py-1.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
-                    >
-                      {simulatingAction === 'table' ? <Loader2 className="w-3 h-3 animate-spin" /> : <PlayCircle className="w-3 h-3" />}
-                      <span>Simular Mesa 1</span>
-                    </button>
-                  </div>
-
-                  {/* Simulación 2: Venta Express Mostrador */}
-                  <div className="p-3 bg-white rounded-2xl border border-amber-200 flex flex-col justify-between gap-2 shadow-xs">
-                    <div>
-                      <div className="font-bold text-xs text-neutral-900 flex items-center gap-1">
-                        <Truck className="w-3.5 h-3.5 text-blue-600" />
-                        <span>Express / Delivery</span>
-                      </div>
-                      <p className="text-[11px] text-neutral-500 mt-1">
-                        Genera un pedido para llevar o con recargo de delivery para validar cobro inmediato y comisiones.
-                      </p>
-                    </div>
-                    <div className="flex gap-1.5">
-                      <button
-                        type="button"
-                        disabled={!currentRestaurant || simulatingAction === 'mostrador'}
-                        onClick={async () => {
-                          if (!currentRestaurant) return;
-                          setSimulatingAction('mostrador');
-                          try {
-                            sounds.playKeypadClick();
-                            const res = await simulateExpressOrder(activeBizId, currentRestaurant.id, 'mostrador');
-                            sounds.playNotification();
-                            setSimFeedback(`¡Venta Mostrador creada! Total: $${res.total.toFixed(2)}. Lista para cobrar en Caja.`);
-                          } catch (e: any) {
-                            alert('Error al simular: ' + e.message);
-                          } finally {
-                            setSimulatingAction(null);
-                          }
-                        }}
-                        className="flex-1 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
-                      >
-                        {simulatingAction === 'mostrador' ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                        <span>+ Mostrador</span>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!currentRestaurant || simulatingAction === 'delivery'}
-                        onClick={async () => {
-                          if (!currentRestaurant) return;
-                          setSimulatingAction('delivery');
-                          try {
-                            sounds.playKeypadClick();
-                            const res = await simulateExpressOrder(activeBizId, currentRestaurant.id, 'delivery');
-                            sounds.playNotification();
-                            setSimFeedback(`¡Pedido Delivery (PedidosYa) creado! Total: $${res.total.toFixed(2)}.`);
-                          } catch (e: any) {
-                            alert('Error al simular: ' + e.message);
-                          } finally {
-                            setSimulatingAction(null);
-                          }
-                        }}
-                        className="flex-1 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-900 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
-                      >
-                        {simulatingAction === 'delivery' ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                        <span>+ Delivery</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Simulación 3: Turno de Caja */}
-                  <div className="p-3 bg-white rounded-2xl border border-amber-200 flex flex-col justify-between gap-2 shadow-xs">
-                    <div>
-                      <div className="font-bold text-xs text-neutral-900 flex items-center gap-1">
-                        <Wallet className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Turno de Caja</span>
-                      </div>
-                      <p className="text-[11px] text-neutral-500 mt-1">
-                        Abre un turno con fondo inicial de $50.00 para verificar el arqueo, cálculo de diferencias y cuadre.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={!currentRestaurant || simulatingAction === 'shift'}
-                      onClick={async () => {
-                        if (!currentRestaurant) return;
-                        setSimulatingAction('shift');
-                        try {
-                          sounds.playKeypadClick();
-                          const res = await simulateCashShift(activeBizId, currentRestaurant.id, currentRestaurant.nombre, 50.00);
-                          sounds.playCashRegister();
-                          setSimFeedback(`¡Turno abierto para ${res.employeeName} con fondo de $${res.fondoInicial.toFixed(2)}!`);
-                        } catch (e: any) {
-                          alert('Error al simular: ' + e.message);
-                        } finally {
-                          setSimulatingAction(null);
-                        }
-                      }}
-                      className="w-full py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center justify-center gap-1 disabled:opacity-50"
-                    >
-                      {simulatingAction === 'shift' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wallet className="w-3 h-3" />}
-                      <span>Abrir Turno $50</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Sembrar platos de prueba si el menú está vacío */}
-              {menuItems.length === 0 && (
-                <div className="mt-3 bg-white/70 rounded-2xl p-4 border border-amber-200 flex items-center justify-between gap-3 text-xs">
-                  <div className="text-amber-900">
-                    <span className="font-bold">Tu carta está vacía.</span> Puedes generar 6 platos de prueba para ensayar comandas de inmediato.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (!currentRestaurant) return;
-                      await seedQuickTestingDishesAndOrder(activeBizId, currentRestaurant.id);
-                      sounds.playNotification();
-                      alert('¡Platos demo agregados al menú correctamente!');
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold shrink-0 transition"
-                  >
-                    + Cargar Platos Demo
                   </button>
                 </div>
               )}
@@ -2028,6 +2359,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs outline-none focus:border-orange-500"
                 />
               </div>
+
+              {/* Subida y Preview de Logo del Local */}
+              <LogoUploader
+                logoUrl={restForm.logoUrl}
+                onChange={(url) => setRestForm({ ...restForm, logoUrl: url })}
+                restaurantName={restForm.nombre}
+                label="Logotipo de la Sucursal / Restaurante:"
+                helperText="Sube el logo o isotipo en formato PNG o JPG."
+              />
 
               {/* Modo de Cocina y Despacho */}
               <div className="pt-2 border-t border-neutral-100 space-y-2">
@@ -2408,8 +2748,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     const newCat = e.target.value;
                     setMenuForm(prev => ({
                       ...prev,
-                      categoria: newCat,
-                      requiereCocina: isManualCocinaTouched ? prev.requiereCocina : !isCategoryNoKitchen(newCat)
+                      categoria: newCat
                     }));
                   }}
                   placeholder="Ej: Platos Fuertes, Bebidas, Postres..."
@@ -2417,49 +2756,228 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
 
-              {/* RUTA / DESTINO: ¿Requiere preparación en Cocina? */}
+              {/* RUTA / DESTINO: Opción de Preparación: Cocina vs Preparación Xpress */}
+              <div className="p-4 bg-neutral-50 rounded-2xl border border-neutral-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-xs font-black text-neutral-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>Opción de Preparación del Producto</span>
+                    </label>
+                    <p className="text-[11px] text-neutral-500">
+                      Define si se envía a la pantalla KDS de Cocina o si es despacho directo en mostrador/barra.
+                    </p>
+                  </div>
+                  <span className={`text-[10px] px-2.5 py-1 rounded-full font-black uppercase shrink-0 border ${
+                    menuForm.requiereCocina 
+                      ? 'bg-orange-100 text-orange-800 border-orange-200' 
+                      : 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                  }`}>
+                    {menuForm.requiereCocina ? '👨‍🍳 Ruta: Cocina' : '⚡ Ruta: Xpress'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsManualCocinaTouched(true);
+                      setMenuForm(prev => ({ ...prev, requiereCocina: true }));
+                    }}
+                    className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex items-start gap-3 ${
+                      menuForm.requiereCocina 
+                        ? 'bg-orange-50/90 border-orange-500 shadow-xs ring-2 ring-orange-400/20' 
+                        : 'bg-white border-neutral-200 hover:border-neutral-300 opacity-70 hover:opacity-100'
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      menuForm.requiereCocina ? 'bg-orange-500 text-white' : 'bg-neutral-100 text-neutral-500'
+                    }`}>
+                      <ChefHat className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-neutral-900 flex items-center gap-1">
+                        <span>Preparación en Cocina</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                        Se envía a la comanda y pantalla KDS de Cocina para su elaboración y comande.
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsManualCocinaTouched(true);
+                      setMenuForm(prev => ({ ...prev, requiereCocina: false }));
+                    }}
+                    className={`p-3.5 rounded-xl border text-left transition cursor-pointer flex items-start gap-3 ${
+                      !menuForm.requiereCocina 
+                        ? 'bg-emerald-50/90 border-emerald-500 shadow-xs ring-2 ring-emerald-400/20' 
+                        : 'bg-white border-neutral-200 hover:border-neutral-300 opacity-70 hover:opacity-100'
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      !menuForm.requiereCocina ? 'bg-emerald-600 text-white' : 'bg-neutral-100 text-neutral-500'
+                    }`}>
+                      <Zap className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-neutral-900 flex items-center gap-1">
+                        <span>Preparación Xpress</span>
+                      </div>
+                      <p className="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                        Despacho inmediato en mostrador o barra sin ocupar la pantalla de cocina.
+                      </p>
+                    </div>
+                  </button>
+                </div>
+
+                <div className="p-2.5 bg-neutral-100/80 rounded-xl text-[11px] text-neutral-600 flex items-center gap-2">
+                  <Info className="w-4 h-4 text-orange-600 shrink-0" />
+                  <span>
+                    Todos los productos tienen ambas opciones. Además, los meseros y cajeros pueden cambiar entre Cocina y Xpress al tomar pedidos.
+                  </span>
+                </div>
+              </div>
+
+              {/* ESTADO DE DISPONIBILIDAD EN CARTA */}
               <div className="p-3.5 bg-neutral-50 rounded-2xl border border-neutral-200">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                      menuForm.requiereCocina ? 'bg-orange-100 text-orange-600' : 'bg-emerald-100 text-emerald-700'
+                      menuForm.disponible ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
                     }`}>
-                      {menuForm.requiereCocina ? <ChefHat className="w-5 h-5" /> : <Zap className="w-5 h-5" />}
+                      <CheckCircle2 className="w-5 h-5" />
                     </div>
                     <div>
                       <div className="text-xs font-black text-neutral-900 flex items-center gap-1.5">
-                        {menuForm.requiereCocina ? 'Preparación en Cocina' : 'Sin preparación (Venta Express)'}
-                        <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold uppercase ${
-                          menuForm.requiereCocina ? 'bg-orange-100 text-orange-800' : 'bg-emerald-100 text-emerald-800'
+                        {menuForm.disponible ? 'Disponible para Venta' : 'Pausado / Fuera de Carta'}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                          menuForm.disponible ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
                         }`}>
-                          {menuForm.requiereCocina ? 'Cocina' : 'Express'}
+                          {menuForm.disponible ? 'Disponible' : 'Agotado'}
                         </span>
                       </div>
                       <p className="text-[11px] text-neutral-500 leading-tight mt-0.5">
-                        {menuForm.requiereCocina 
-                          ? 'Se enviará a la pantalla KDS de Cocina para su preparación' 
-                          : 'Listo para entrega inmediata (bebidas, postres, snacks, etc.)'}
+                        {menuForm.disponible 
+                          ? 'Habilitado en el punto de venta y cartas digitales para recibir pedidos' 
+                          : 'Pausado temporalmente (no se podrá seleccionar en comandas)'}
                       </p>
                     </div>
                   </div>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsManualCocinaTouched(true);
-                      setMenuForm(prev => ({ ...prev, requiereCocina: !prev.requiereCocina }));
-                    }}
+                    onClick={() => setMenuForm(prev => ({ ...prev, disponible: !prev.disponible }))}
                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      menuForm.requiereCocina ? 'bg-orange-600' : 'bg-neutral-300'
+                      menuForm.disponible ? 'bg-emerald-600' : 'bg-neutral-300'
                     }`}
                   >
                     <span
                       className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                        menuForm.requiereCocina ? 'translate-x-5' : 'translate-x-0'
+                        menuForm.disponible ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
                   </button>
                 </div>
+              </div>
+
+              {/* CONTROL DE INVENTARIO Y STOCK (OPCIONAL) */}
+              <div className="p-3.5 bg-amber-50/50 rounded-2xl border border-amber-200/80">
+                <div className="flex items-center justify-between gap-3 mb-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                      <Boxes className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-neutral-900 flex items-center gap-1.5">
+                        Control de Inventario & Stock
+                        <span className="text-[10px] px-1.5 py-0.2 rounded font-bold uppercase bg-amber-100 text-amber-800">
+                          Opcional
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-neutral-500">Descuenta automáticamente al ordenar y emite alertas de agotamiento</div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setMenuForm(prev => ({ ...prev, controlaStock: !prev.controlaStock }))}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      menuForm.controlaStock ? 'bg-amber-600' : 'bg-neutral-300'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                        menuForm.controlaStock ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {!menuForm.controlaStock ? (
+                  <div className="mt-2.5 text-[11px] text-neutral-600 bg-white/80 p-2.5 rounded-xl border border-amber-200/50 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span><strong>Sin control de inventario:</strong> Podés guardar y modificar este plato libremente sin necesidad de marcar stock ni unidades.</span>
+                    </div>
+                    <span className="text-[10px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md shrink-0">
+                      Venta Libre
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-3 pt-3 border-t border-amber-200/60 space-y-2.5">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-bold text-neutral-700 mb-1">Stock Actual *</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={menuForm.stockActual}
+                          onChange={(e) => setMenuForm(prev => ({ ...prev, stockActual: Math.max(0, parseInt(e.target.value) || 0) }))}
+                          className="w-full h-9 px-2.5 rounded-xl border border-amber-300 bg-white text-xs font-black text-neutral-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-neutral-700 mb-1">Stock Mínimo (Alerta) *</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={menuForm.stockMinimo}
+                          onChange={(e) => setMenuForm(prev => ({ ...prev, stockMinimo: Math.max(1, parseInt(e.target.value) || 1) }))}
+                          className="w-full h-9 px-2.5 rounded-xl border border-amber-300 bg-white text-xs font-bold text-neutral-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-neutral-700 mb-1">Unidad de Medida</label>
+                        <input
+                          type="text"
+                          value={menuForm.unidadMedida}
+                          onChange={(e) => setMenuForm(prev => ({ ...prev, unidadMedida: e.target.value }))}
+                          placeholder="unidades, porciones..."
+                          className="w-full h-9 px-2.5 rounded-xl border border-neutral-300 bg-white text-xs font-bold text-neutral-800"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-xl bg-white border border-amber-200">
+                      <span className="text-neutral-600">Estado según stock:</span>
+                      <span className={`font-black uppercase text-[10px] px-2 py-0.5 rounded-full ${
+                        Number(menuForm.stockActual) <= 0 
+                          ? 'bg-red-100 text-red-800' 
+                          : Number(menuForm.stockActual) <= Number(menuForm.stockMinimo) 
+                          ? 'bg-amber-100 text-amber-800' 
+                          : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        {Number(menuForm.stockActual) <= 0 
+                          ? 'Agotado (0)' 
+                          : Number(menuForm.stockActual) <= Number(menuForm.stockMinimo) 
+                          ? 'Alerta de Stock Bajo' 
+                          : 'Stock Saludable'}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -2680,7 +3198,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <div>
                 <h3 className="font-black text-base text-neutral-900">
-                  {dangerModal.type === 'reset_test_data' && 'Confirmar Reset de Fase de Pruebas'}
+                  {dangerModal.type === 'reset_test_data' && 'Confirmar Reset Transaccional / Operativo'}
                   {dangerModal.type === 'reset_operational' && 'Confirmar Reset Operativo de Sucursal'}
                   {dangerModal.type === 'delete_restaurant' && 'Confirmar Eliminación en Cascada'}
                   {dangerModal.type === 'delete_account' && 'Confirmar Eliminación de Toda la Cuenta'}
@@ -2790,6 +3308,63 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         onDeleteAlert={deleteAlert}
         onClearReadAlerts={clearReadAlerts}
         onClearAllAlerts={clearAllAlerts}
+      />
+
+      {/* Modal de Reabastecimiento Rápido de Inventario / Stock */}
+      <QuickRestockModal
+        isOpen={showRestockModal}
+        onClose={() => setShowRestockModal(false)}
+        menuItems={menuItems}
+        restaurants={restaurants}
+        onUpdateStock={async (itemId, newStock, newMin) => {
+          const item = menuItems.find(i => i.id === itemId);
+          if (item) {
+            try {
+              const actor = getAuditActor();
+              const rest = restaurants.find(r => r.id === item.restaurantId);
+              await recordMenuAuditLog({
+                businessId: activeBizId,
+                restaurantId: item.restaurantId,
+                restaurantNombre: rest?.nombre || 'Todas las sedes',
+                platoId: item.id,
+                platoNombre: item.nombre,
+                tipoAccion: 'ajuste_stock',
+                detalles: `Reabastecimiento de inventario: Stock ${item.stockActual ?? 0} → ${newStock} ${item.unidadMedida || 'unidades'}, Mínimo ${item.stockMinimo ?? 5} → ${newMin}`,
+                cambios: [
+                  { campo: 'stockActual', valorAnterior: item.stockActual ?? 0, valorNuevo: newStock },
+                  { campo: 'stockMinimo', valorAnterior: item.stockMinimo ?? 5, valorNuevo: newMin }
+                ],
+                empleadoId: actor.id,
+                empleadoNombre: actor.nombre,
+                empleadoRol: actor.rol,
+                fecha: new Date().toISOString()
+              });
+            } catch (auditErr) {
+              console.warn('Error en auditoría de reabastecimiento:', auditErr);
+            }
+          }
+          await updateMenuItemStock(itemId, newStock, newMin);
+        }}
+        onQuickAdjust={async (itemId, delta) => {
+          const item = menuItems.find(i => i.id === itemId);
+          if (item) {
+            await handleQuickStockAdjustWithAudit(item, delta);
+          } else {
+            await quickAdjustMenuItemStock(itemId, delta);
+          }
+        }}
+      />
+
+      {/* Modal Exportación de Reportes PDF Oficiales (Inventario & Cierres de Caja) */}
+      <AdminPdfReportsModal
+        isOpen={showPdfExportModal}
+        onClose={() => setShowPdfExportModal(false)}
+        initialTab={pdfModalInitialTab}
+        menuItems={menuItems}
+        cashCloses={cashCloses}
+        restaurants={restaurants}
+        businessName={currentBusiness?.nombre || 'Gastro Smart'}
+        currentUserName={currentUserAccount?.nombre || 'Administrador'}
       />
 
     </div>

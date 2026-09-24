@@ -515,7 +515,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const newUserAccount: UserAccount = {
         uid,
-        email,
+        email: cleanEmail,
         nombre: name,
         rol: 'owner',
         businessId,

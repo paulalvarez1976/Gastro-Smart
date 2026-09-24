@@ -1054,6 +1054,7 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
         <ThermalReceiptModal
           order={comandaToPrint.order}
           restaurantName={currentRestaurant?.nombre || 'Cocina'}
+          restaurantLogo={currentRestaurant?.logoUrl || undefined}
           restaurantAddress={currentRestaurant?.direccion}
           restaurantPhone={currentRestaurant?.telefono}
           mode="comanda"

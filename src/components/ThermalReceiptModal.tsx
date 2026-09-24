@@ -22,6 +22,7 @@ export interface ThermalReceiptModalProps {
   data?: ReceiptData;
   order?: Order;
   restaurantName?: string;
+  restaurantLogo?: string;
   restaurantAddress?: string;
   restaurantPhone?: string;
   clientPhone?: string;
@@ -36,6 +37,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
   data: propData,
   order,
   restaurantName,
+  restaurantLogo,
   restaurantAddress,
   restaurantPhone,
   clientPhone,
@@ -62,6 +64,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
     if (propData) {
       return {
         ...propData,
+        restaurantLogo: propData.restaurantLogo || restaurantLogo,
         clienteTelefono: effectivePhone,
         isKitchenTicket: Boolean(propData.isKitchenTicket),
       };
@@ -95,6 +98,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
 
       return {
         restaurantName: restaurantName || 'Restaurante',
+        restaurantLogo: restaurantLogo || undefined,
         restaurantAddress: restaurantAddress || undefined,
         restaurantPhone: restaurantPhone || undefined,
         orderNumber: displayOrderNum,
@@ -303,7 +307,17 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
             }`}
           >
             {/* Header */}
-            <div className="text-center space-y-0.5 pb-2 border-b border-dashed border-neutral-400">
+            <div className="text-center space-y-1 pb-2 border-b border-dashed border-neutral-400">
+              {data.restaurantLogo && (
+                <div className="flex justify-center mb-1">
+                  <img
+                    src={data.restaurantLogo}
+                    alt={data.restaurantName}
+                    className="max-h-12 max-w-[120px] object-contain filter grayscale"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              )}
               <h2 className="font-black text-xs sm:text-sm tracking-tight text-black">{data.restaurantName}</h2>
               {data.restaurantAddress && <p className="text-[10px] text-neutral-600">{data.restaurantAddress}</p>}
               {data.restaurantPhone && <p className="text-[10px] text-neutral-600">Tel: {data.restaurantPhone}</p>}

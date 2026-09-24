@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { createRestaurantWithTables } from '../services/dataService';
 import { sounds } from '../utils/sound';
+import { LogoUploader } from './LogoUploader';
 import { 
   UtensilsCrossed, 
   Store, 
@@ -35,6 +36,7 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   const [nombre, setNombre] = useState('');
   const [direccion, setDireccion] = useState('');
   const [telefono, setTelefono] = useState('');
+  const [logoUrl, setLogoUrl] = useState<string>('');
   const [numeroMesas, setNumeroMesas] = useState<number>(10);
   const [usaCocina, setUsaCocina] = useState<boolean>(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -73,7 +75,8 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
         direccion: direccion.trim(),
         telefono: telefono.trim(),
         numeroMesas: Number(numeroMesas),
-        usaCocina: usaCocina !== false
+        usaCocina: usaCocina !== false,
+        logoUrl: logoUrl.trim() || null
       }, activeBizId);
       selectRestaurant(newRestId);
       setCreatedRestaurantId(newRestId);
@@ -88,8 +91,8 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   // Pantalla de éxito tras crear el restaurante
   if (createdRestaurantId) {
     return (
-      <div className={isSecondaryModal ? "p-2" : "min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 flex items-center justify-center p-4 sm:p-6"}>
-        <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-orange-100 p-6 sm:p-8 text-center space-y-6 animate-in zoom-in-95 duration-200">
+      <div className={isSecondaryModal ? "p-2 overflow-y-auto" : "min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 flex items-center justify-center p-4 sm:p-6 overflow-y-auto py-8"}>
+        <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-orange-100 p-6 sm:p-8 text-center space-y-6 animate-in zoom-in-95 duration-200 max-h-[88vh] overflow-y-auto overscroll-contain">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-emerald-100 text-emerald-600 shadow-md">
             <CheckCircle2 className="w-10 h-10" />
           </div>
@@ -165,8 +168,8 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
   }
 
   return (
-    <div className={isSecondaryModal ? "p-1" : "min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 flex items-center justify-center p-4 sm:p-6"}>
-      <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-orange-100 p-6 sm:p-8 backdrop-blur-sm relative">
+    <div className={isSecondaryModal ? "p-1 overflow-y-auto" : "min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-amber-100 flex items-center justify-center p-4 sm:p-6 overflow-y-auto py-8 sm:py-12"}>
+      <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-orange-100 p-5 sm:p-8 backdrop-blur-sm relative max-h-[88vh] sm:max-h-[90vh] overflow-y-auto overscroll-contain">
         
         {isSecondaryModal && onCloseModal && (
           <button
@@ -244,6 +247,15 @@ export const RestaurantOnboarding: React.FC<RestaurantOnboardingProps> = ({
               />
             </div>
           </div>
+
+          {/* Subir Logotipo del Restaurante */}
+          <LogoUploader
+            logoUrl={logoUrl}
+            onChange={(url) => setLogoUrl(url)}
+            restaurantName={nombre}
+            label="Logotipo del Restaurante:"
+            helperText="Sube el logo de la marca (PNG o JPG). Se mostrará en la barra superior, TPV, comandas y pantalla de inicio."
+          />
 
           <div className="bg-amber-50/60 p-4 rounded-2xl border border-amber-200/80">
             <div className="flex items-center justify-between mb-1.5">

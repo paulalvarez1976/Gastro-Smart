@@ -231,6 +231,27 @@
         "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
       "required": ["businessId", "restaurantId", "fecha", "ventasTotales", "gastosTotales", "pedidosCobrados"]
+    },
+    "MenuAuditLog": {
+      "title": "MenuAuditLog",
+      "description": "Registro de auditoría de cambios en platos de menú y actualizaciones de stock por empleado",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "restaurantNombre": { "type": "string" },
+        "platoId": { "type": "string" },
+        "platoNombre": { "type": "string" },
+        "tipoAccion": { "type": "string", "enum": ["creacion_plato", "modificacion_plato", "ajuste_stock", "cambio_disponibilidad", "eliminacion_plato"] },
+        "detalles": { "type": "string" },
+        "cambios": { "type": "array" },
+        "empleadoId": { "type": "string" },
+        "empleadoNombre": { "type": "string" },
+        "empleadoRol": { "type": "string" },
+        "fecha": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "platoId", "platoNombre", "tipoAccion", "detalles", "empleadoNombre", "fecha", "appId"]
     }
   },
   "firestore": {
@@ -289,6 +310,10 @@
     "/dailyStats/{statId}": {
       "schema": "DailyStat",
       "description": "Estadísticas pre-agregadas diarias para análisis financiero"
+    },
+    "/menuAuditLogs/{logId}": {
+      "schema": "MenuAuditLog",
+      "description": "Historial de auditoría de cambios de menú y stock por empleado"
     }
   }
 }

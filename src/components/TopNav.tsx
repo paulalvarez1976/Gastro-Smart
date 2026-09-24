@@ -451,12 +451,23 @@ export const TopNav: React.FC<TopNavProps> = ({
           {/* Izquierda: Logo, Nombre de Negocio y Selector Multisede */}
           <div className="flex items-center gap-2.5 sm:gap-4 min-w-0">
             <div className="flex items-center gap-2 shrink-0">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center font-black shadow-xs shrink-0">
-                <UtensilsCrossed className="w-4 h-4 sm:w-5 sm:h-5" />
-              </div>
+              {(currentRestaurant?.logoUrl || currentBusiness?.logoUrl) ? (
+                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-neutral-50 border border-neutral-200/90 p-0.5 flex items-center justify-center overflow-hidden shadow-2xs shrink-0">
+                  <img
+                    src={(currentRestaurant?.logoUrl || currentBusiness?.logoUrl)!}
+                    alt={currentRestaurant?.nombre || currentBusiness?.nombre || 'Logo'}
+                    className="w-full h-full object-contain"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+              ) : (
+                <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white flex items-center justify-center font-black shadow-xs shrink-0">
+                  <UtensilsCrossed className="w-4 h-4 sm:w-5 sm:h-5" />
+                </div>
+              )}
               <div className="hidden md:block">
                 <div className="font-black text-neutral-900 tracking-tight text-xs sm:text-sm flex items-center gap-1.5 leading-tight">
-                  <span className="truncate">{currentBusiness?.nombre || 'Gastro Smart'}</span>
+                  <span className="truncate">{currentBusiness?.nombre || currentRestaurant?.nombre || 'Gastro Smart'}</span>
                   {currentUserAccount && (
                     <span className="text-[10px] font-extrabold bg-orange-100 text-orange-700 px-1.5 py-0.2 rounded">
                       {currentUserAccount.rol === 'owner' ? 'DUEÑO' : 'ADMIN'}
@@ -464,7 +475,7 @@ export const TopNav: React.FC<TopNavProps> = ({
                   )}
                 </div>
                 <div className="text-[10px] text-neutral-400 font-medium truncate">
-                  {currentBusiness?.rif_o_ruc ? `ID: ${currentBusiness.rif_o_ruc}` : 'Plataforma Gastronómica'}
+                  {currentRestaurant?.nombre ? `Sucursal: ${currentRestaurant.nombre}` : (currentBusiness?.rif_o_ruc ? `ID: ${currentBusiness.rif_o_ruc}` : 'Plataforma Gastronómica')}
                 </div>
               </div>
             </div>

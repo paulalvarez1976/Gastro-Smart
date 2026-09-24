@@ -10,12 +10,15 @@ import {
   getDoc,
   getDocs, 
   deleteDoc, 
+  deleteField,
   serverTimestamp,
   orderBy,
   limit,
   writeBatch,
   runTransaction
 } from 'firebase/firestore';
+
+export { deleteField };
 import { db } from '../firebase';
 import { UNIQUE_BUSINESS_ID } from '../config/business';
 import { 
@@ -43,7 +46,11 @@ import {
   SecurityAlert,
   DailyStat,
   Supplier,
-  PaymentMethod
+  PaymentMethod,
+  MenuAuditLog,
+  MenuAuditActionType,
+  MenuAuditLogChange,
+  DeliveryCompanyConfig
 } from '../types';
 import { 
   getDailyStatDocId, 
@@ -368,6 +375,7 @@ export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?
   return addDoc(collection(db, 'restaurants'), {
     ...data,
     usaCocina: data.usaCocina !== false,
+    logoUrl: data.logoUrl || null,
     businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
@@ -375,7 +383,7 @@ export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?
 }
 
 export async function createRestaurantWithTables(
-  data: { businessId?: string; nombre: string; direccion: string; telefono: string; numeroMesas: number; usaCocina?: boolean },
+  data: { businessId?: string; nombre: string; direccion: string; telefono: string; numeroMesas: number; usaCocina?: boolean; logoUrl?: string | null },
   businessIdParam?: string
 ): Promise<string> {
   const targetBizId = data.businessId || businessIdParam || UNIQUE_BUSINESS_ID;
@@ -390,10 +398,17 @@ export async function createRestaurantWithTables(
     telefono: data.telefono.trim(),
     numeroMesas: data.numeroMesas,
     usaCocina: data.usaCocina !== false,
+    logoUrl: data.logoUrl || null,
     activo: true,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
+
+  // Si se proporcionó logo y el negocio no tiene logo configurado, actualizarlo en el negocio
+  if (data.logoUrl && targetBizId) {
+    const bizRef = doc(db, 'businesses', targetBizId);
+    batch.set(bizRef, { logoUrl: data.logoUrl }, { merge: true });
+  }
 
   // Generar mesas del 1 al N en estado "libre" de forma atómica en el mismo batch
   for (let i = 1; i <= data.numeroMesas; i++) {
@@ -415,6 +430,52 @@ export async function createRestaurantWithTables(
 
 export async function updateRestaurant(id: string, data: Partial<Restaurant>) {
   return updateDoc(doc(db, 'restaurants', id), data);
+}
+
+export const DEFAULT_DELIVERY_COMPANIES: DeliveryCompanyConfig[] = [
+  { id: 'pedidosya', nombre: 'PedidosYa', comisionPorcentaje: 18, activo: true, color: 'red', tiempoPagoDias: 7 },
+  { id: 'ubereats', nombre: 'UberEats', comisionPorcentaje: 20, activo: true, color: 'emerald', tiempoPagoDias: 7 },
+  { id: 'rappi', nombre: 'Rappi', comisionPorcentaje: 22, activo: true, color: 'orange', tiempoPagoDias: 7 },
+  { id: 'propio', nombre: 'Reparto Propio', comisionPorcentaje: 0, activo: true, color: 'blue', tiempoPagoDias: 1 },
+];
+
+export function getRestaurantDeliveryCompanies(restaurant?: Restaurant | null): DeliveryCompanyConfig[] {
+  if (!restaurant) return DEFAULT_DELIVERY_COMPANIES;
+
+  // Si ya tiene empresas configuradas
+  if (restaurant.deliveryCompanies && restaurant.deliveryCompanies.length > 0) {
+    return restaurant.deliveryCompanies;
+  }
+
+  // Compatibilidad con deliveryCommissions legacy si existía
+  if (restaurant.deliveryCommissions) {
+    return [
+      { id: 'pedidosya', nombre: 'PedidosYa', comisionPorcentaje: restaurant.deliveryCommissions.pedidosYa ?? 18, activo: true, color: 'red', tiempoPagoDias: 7 },
+      { id: 'ubereats', nombre: 'UberEats', comisionPorcentaje: restaurant.deliveryCommissions.uberEats ?? 20, activo: true, color: 'emerald', tiempoPagoDias: 7 },
+      { id: 'rappi', nombre: 'Rappi', comisionPorcentaje: restaurant.deliveryCommissions.rappi ?? 22, activo: true, color: 'orange', tiempoPagoDias: 7 },
+      { id: 'propio', nombre: 'Reparto Propio', comisionPorcentaje: 0, activo: true, color: 'blue', tiempoPagoDias: 1 },
+    ];
+  }
+
+  return DEFAULT_DELIVERY_COMPANIES;
+}
+
+export async function updateRestaurantDeliveryCompanies(
+  restaurantId: string,
+  companies: DeliveryCompanyConfig[]
+): Promise<void> {
+  const commissionsMap: Record<string, number> = {};
+  companies.forEach(c => {
+    commissionsMap[c.id] = c.comisionPorcentaje;
+    if (c.id === 'pedidosya') commissionsMap.pedidosYa = c.comisionPorcentaje;
+    if (c.id === 'ubereats') commissionsMap.uberEats = c.comisionPorcentaje;
+    if (c.id === 'rappi') commissionsMap.rappi = c.comisionPorcentaje;
+  });
+
+  await updateDoc(doc(db, 'restaurants', restaurantId), {
+    deliveryCompanies: companies,
+    deliveryCommissions: commissionsMap
+  });
 }
 
 export async function updateRestaurantTableCount(
@@ -1067,15 +1128,127 @@ export async function createMenuItem(data: Omit<MenuItem, 'id'>) {
   });
 }
 
-export async function setMenuItem(id: string, data: Omit<MenuItem, 'id'>) {
+export async function setMenuItem(id: string, data: Omit<MenuItem, 'id'> | Record<string, any>) {
+  const cleaned: Record<string, any> = {};
+  for (const [key, val] of Object.entries(data)) {
+    if (val !== undefined) {
+      cleaned[key] = val;
+    }
+  }
+  if (data.controlaStock === false) {
+    delete cleaned.stockActual;
+    delete cleaned.stockMinimo;
+    delete cleaned.unidadMedida;
+  }
   return setDoc(doc(db, 'menuItems', id), {
-    ...data,
+    ...cleaned,
     appId: 'gastro_smart'
   }, { merge: true });
 }
 
-export async function updateMenuItem(id: string, data: Partial<MenuItem>) {
-  return updateDoc(doc(db, 'menuItems', id), data);
+export async function updateMenuItem(id: string, data: Partial<MenuItem> | Record<string, any>) {
+  const cleaned: Record<string, any> = {};
+  for (const [key, val] of Object.entries(data)) {
+    if (val !== undefined) {
+      cleaned[key] = val;
+    }
+  }
+  // Si explícitamente se desactiva el control de stock y no se envió un nuevo valor numérico, eliminar campos de stock
+  if (data.controlaStock === false && !('stockActual' in data)) {
+    cleaned.stockActual = deleteField();
+    cleaned.stockMinimo = deleteField();
+    cleaned.unidadMedida = deleteField();
+  }
+  return updateDoc(doc(db, 'menuItems', id), cleaned);
+}
+
+export async function updateMenuItemStock(id: string, newStock: number, newMin?: number) {
+  const safeStock = Math.max(0, Math.round(newStock * 100) / 100);
+  const updatePayload: Partial<MenuItem> = {
+    stockActual: safeStock,
+    controlaStock: true
+  };
+  if (typeof newMin === 'number') {
+    updatePayload.stockMinimo = Math.max(1, newMin);
+  }
+  if (safeStock <= 0) {
+    updatePayload.disponible = false;
+  } else {
+    updatePayload.disponible = true;
+  }
+  return updateDoc(doc(db, 'menuItems', id), updatePayload);
+}
+
+export async function quickAdjustMenuItemStock(id: string, delta: number) {
+  const itemRef = doc(db, 'menuItems', id);
+  const snap = await getDoc(itemRef);
+  if (!snap.exists()) return;
+  const current = (snap.data().stockActual ?? 0) + delta;
+  const safeStock = Math.max(0, Math.round(current * 100) / 100);
+  const updatePayload: Partial<MenuItem> = {
+    stockActual: safeStock,
+    controlaStock: true
+  };
+  if (safeStock <= 0) {
+    updatePayload.disponible = false;
+  } else if (snap.data().disponible === false && delta > 0) {
+    updatePayload.disponible = true;
+  }
+  return updateDoc(itemRef, updatePayload);
+}
+
+export async function deductStockForOrderItems(items: OrderItem[], businessId?: string, restaurantId?: string) {
+  if (!items || items.length === 0) return;
+  try {
+    for (const item of items) {
+      if (!item.menuItemId) continue;
+      const itemRef = doc(db, 'menuItems', item.menuItemId);
+      const snap = await getDoc(itemRef);
+      if (snap.exists()) {
+        const data = snap.data() as MenuItem;
+        if (data.controlaStock) {
+          const currentStock = typeof data.stockActual === 'number' ? data.stockActual : 0;
+          const qty = item.cantidad || 1;
+          const newStock = Math.max(0, currentStock - qty);
+          const updatePayload: Partial<MenuItem> = { stockActual: newStock };
+          
+          if (newStock <= 0) {
+            updatePayload.disponible = false;
+            try {
+              await createSecurityAlert({
+                businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
+                restaurantId: restaurantId || data.restaurantId,
+                tipo: 'stock_agotado',
+                mensaje: `⚠️ PRODUCTO AGOTADO: "${data.nombre}" se ha quedado sin existencias (0 ${data.unidadMedida || 'unidades'}).`,
+                fecha: new Date().toISOString(),
+                leido: false,
+                severidad: 'alta'
+              });
+            } catch (alertErr) {
+              console.warn('Could not register stock alert:', alertErr);
+            }
+          } else if (newStock <= (data.stockMinimo ?? 5) && currentStock > (data.stockMinimo ?? 5)) {
+            try {
+              await createSecurityAlert({
+                businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
+                restaurantId: restaurantId || data.restaurantId,
+                tipo: 'stock_bajo',
+                mensaje: `⚠️ ALERTA DE STOCK BAJO: "${data.nombre}" tiene solo ${newStock} ${data.unidadMedida || 'unidades'} restantes (Umbral mínimo: ${data.stockMinimo ?? 5}).`,
+                fecha: new Date().toISOString(),
+                leido: false,
+                severidad: 'media'
+              });
+            } catch (alertErr) {
+              console.warn('Could not register stock alert:', alertErr);
+            }
+          }
+          await updateDoc(itemRef, updatePayload);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Error deducting stock for order items:', err);
+  }
 }
 
 export async function deleteMenuItem(id: string) {
@@ -1426,6 +1599,11 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
 
   await batch.commit();
 
+  // Descontar inventario/stock de forma asíncrona para los productos con control de stock
+  deductStockForOrderItems(sanitizedItems, targetBusinessId, data.restaurantId).catch(err => {
+    console.warn('Error descontando stock en createOrder:', err);
+  });
+
   // Incrementar pedidos tomados en el turno del mesero
   try {
     const shiftSnap = await getDocs(query(
@@ -1510,6 +1688,9 @@ export async function appendItemsToExistingOrder(
   }
 
   const orderRef = doc(db, 'orders', orderId);
+  let savedBusinessId = '';
+  let savedRestaurantId = '';
+  let itemsToDeduct: OrderItem[] = [];
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(orderRef);
@@ -1521,6 +1702,9 @@ export async function appendItemsToExistingOrder(
     if (currentOrder.estado === 'cobrado' || currentOrder.estado === 'rechazado') {
       throw new Error('No se puede ampliar una comanda que ya fue cobrada o cancelada.');
     }
+
+    savedBusinessId = currentOrder.businessId || '';
+    savedRestaurantId = currentOrder.restaurantId || '';
 
     const nextRound = (currentOrder.rondaActual || 1) + 1;
     const nowIso = new Date().toISOString();
@@ -1553,6 +1737,8 @@ export async function appendItemsToExistingOrder(
         cobrado: Boolean(it.cobrado)
       };
     });
+
+    itemsToDeduct = sanitizedNewItems;
 
     const mergedItems = [...(currentOrder.items || []), ...sanitizedNewItems];
 
@@ -1634,6 +1820,13 @@ export async function appendItemsToExistingOrder(
       });
     }
   });
+
+  // Descontar inventario/stock para los nuevos platos agregados
+  if (itemsToDeduct.length > 0 && savedBusinessId) {
+    deductStockForOrderItems(itemsToDeduct, savedBusinessId, savedRestaurantId).catch(err => {
+      console.warn('Error descontando stock en appendItemsToExistingOrder:', err);
+    });
+  }
 }
 
 /**
@@ -2608,11 +2801,12 @@ export async function payFixedSalaryExpense(params: {
   monthKey: string; // ej. '2026-09'
   monthLabel: string; // ej. 'Septiembre 2026'
   amount: number;
+  abonoPrevio?: number;
   userDisplayName: string;
   paymentMethod?: PaymentMethod;
   notes?: string;
 }): Promise<{ success: boolean; expenseId?: string; error?: string }> {
-  const { employee, monthKey, monthLabel, amount, userDisplayName, paymentMethod, notes } = params;
+  const { employee, monthKey, monthLabel, amount, abonoPrevio = 0, userDisplayName, paymentMethod, notes } = params;
 
   if (!employee.id || !employee.restaurantId) {
     return { success: false, error: 'Datos de empleado incompletos' };
@@ -2626,24 +2820,36 @@ export async function payFixedSalaryExpense(params: {
 
   try {
     const today = getRestaurantLocalDateString();
-    
-    // 1. Crear Gasto de Sueldo
-    const expenseData: Omit<Expense, 'id'> = {
-      businessId: employee.businessId || UNIQUE_BUSINESS_ID,
-      restaurantId: employee.restaurantId,
-      tipo: 'sueldo',
-      monto: amount,
-      descripcion: `Pago de sueldo mensual fijo a ${employee.nombre} (${monthLabel})`,
-      employeeId: employee.id,
-      employeeName: employee.nombre,
-      metodoPago: paymentMethod || 'transferencia',
-      notas: notes || `Sueldo fijo mensual correspondiente al periodo ${monthLabel}. Procesado por ${userDisplayName}.`,
-      registradoPor: userDisplayName,
-      fecha: today,
-      creadoEn: new Date().toISOString()
-    };
+    const netAmount = Math.max(0, Math.round((amount - abonoPrevio) * 100) / 100);
 
-    const expRef = await createExpense(expenseData);
+    let expRef = null;
+    if (netAmount > 0) {
+      let finalDesc = `Pago de sueldo mensual fijo a ${employee.nombre} (${monthLabel})`;
+      let finalNotes = notes || `Sueldo fijo mensual correspondiente al periodo ${monthLabel}. Procesado por ${userDisplayName}.`;
+      if (abonoPrevio > 0) {
+        finalDesc = `Liquidación final sueldo fijo ${monthLabel} - ${employee.nombre} (Base $${amount.toFixed(2)} - Abonos $${abonoPrevio.toFixed(2)} = Neto $${netAmount.toFixed(2)})`;
+        finalNotes = `Liquidación neta tras deducir abonos previos de $${abonoPrevio.toFixed(2)}. ${notes || ''}`;
+      }
+
+      // 1. Crear Gasto de Sueldo por el neto pendiente
+      const expenseData: Omit<Expense, 'id'> = {
+        businessId: employee.businessId || UNIQUE_BUSINESS_ID,
+        restaurantId: employee.restaurantId,
+        tipo: 'sueldo',
+        monto: netAmount,
+        descripcion: finalDesc,
+        employeeId: employee.id,
+        employeeName: employee.nombre,
+        modalidadPago: 'mes',
+        metodoPago: paymentMethod || 'transferencia',
+        notas: finalNotes,
+        registradoPor: userDisplayName,
+        fecha: today,
+        creadoEn: new Date().toISOString()
+      };
+
+      expRef = await createExpense(expenseData);
+    }
 
     // 2. Actualizar empleado con el mes pagado
     const empRef = doc(db, 'employees', employee.id);
@@ -2656,13 +2862,13 @@ export async function payFixedSalaryExpense(params: {
       businessId: employee.businessId || UNIQUE_BUSINESS_ID,
       restaurantId: employee.restaurantId,
       tipo: 'pago_sueldos_generado',
-      mensaje: `Sueldo fijo de ${monthLabel} pagado a ${employee.nombre} ($${amount.toFixed(2)}) por ${userDisplayName}.`,
+      mensaje: `Sueldo fijo de ${monthLabel} pagado a ${employee.nombre} (Neto $${netAmount.toFixed(2)}, Abonos: $${abonoPrevio.toFixed(2)}) por ${userDisplayName}.`,
       fecha: new Date().toISOString(),
       leido: false,
       severidad: 'info'
     });
 
-    return { success: true, expenseId: expRef.id };
+    return { success: true, expenseId: expRef?.id };
   } catch (err: any) {
     console.error('Error paying fixed salary:', err);
     return { success: false, error: err.message || 'Error al procesar el pago de sueldo fijo' };
@@ -2900,7 +3106,8 @@ export async function deleteBusinessCascade(businessId: string): Promise<void> {
     'cashRegisterCloses',
     'loginAttempts',
     'securityAlerts',
-    'dailyStats'
+    'dailyStats',
+    'menuAuditLogs'
   ];
 
   for (const colName of collections) {
@@ -3350,7 +3557,7 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
  * 2. Registra la plantilla inicial de empleados operativos con PINs y restaurante asignado
  * 3. Siembra la carta inicial de platos y bebidas
  */
-export async function bootstrapNewBusinessDefaults(businessId: string, businessName: string): Promise<{ restaurantId: string }> {
+export async function bootstrapNewBusinessDefaults(businessId: string, businessName: string, logoUrl?: string | null): Promise<{ restaurantId: string }> {
   // 1. Crear sucursal principal
   const restRef = await addDoc(collection(db, 'restaurants'), {
     businessId,
@@ -3359,11 +3566,20 @@ export async function bootstrapNewBusinessDefaults(businessId: string, businessN
     telefono: '+1 (555) 000-0000',
     numeroMesas: 12,
     activo: true,
+    logoUrl: logoUrl || null,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 
   const restaurantId = restRef.id;
+
+  if (logoUrl) {
+    try {
+      await updateDoc(doc(db, 'businesses', businessId), { logoUrl });
+    } catch {
+      // Ignorar si el negocio aún no terminó de escribirse
+    }
+  }
 
   // 2. Generar 12 mesas en estado libre
   const tableBatch = writeBatch(db);
@@ -3914,7 +4130,8 @@ export async function paySalaryBatch(
   periodLabel: string,
   userName: string,
   overtimeMultiplier = 1.5,
-  employeeDataMap?: Record<string, { modalidad?: string; tarifaHora?: number; tarifaDiaria?: number; sueldoMensual?: number }>
+  employeeDataMap?: Record<string, { modalidad?: string; tarifaHora?: number; tarifaDiaria?: number; sueldoMensual?: number }>,
+  abonosMap?: Record<string, number>
 ): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
   const now = new Date().toISOString();
@@ -3967,27 +4184,37 @@ export async function paySalaryBatch(
       description = `Pago de sueldo ${periodLabel} - ${employeeName} (${normalHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${hourlyRate}/h)`;
     }
 
-    totalPaidOverall += totalPay;
+    const abonoPrevio = abonosMap ? (abonosMap[employeeId] || 0) : 0;
+    const netPay = Math.max(0, Math.round((totalPay - abonoPrevio) * 100) / 100);
 
-    // 1. Crear gasto de sueldo
-    await addDoc(collection(db, 'expenses'), {
-      businessId,
-      restaurantId: empShifts[0]?.restaurantId || restaurantId,
-      tipo: 'sueldo',
-      monto: totalPay,
-      descripcion: description,
-      employeeId,
-      employeeName,
-      horasTrabajadas: Math.round((normalHours + overtimeHours) * 10) / 10,
-      horasExtra: Math.round(overtimeHours * 10) / 10,
-      diasTrabajados: daysCount || undefined,
-      modalidadPago: modalidad,
-      tarifaHora: modalidad === 'por_horas' ? (empInfo?.tarifaHora || employeeRateMap[employeeId] || 12) : undefined,
-      tarifaDiaria: modalidad === 'por_dia' ? (empInfo?.tarifaDiaria || 50) : undefined,
-      fecha: today,
-      appId: 'gastro_smart',
-      creadoEn: now
-    });
+    totalPaidOverall += netPay;
+
+    // 1. Crear gasto de sueldo únicamente si hay un saldo neto por liquidar
+    if (netPay > 0) {
+      let finalDescription = description;
+      if (abonoPrevio > 0) {
+        finalDescription = `Liquidación final de sueldo ${periodLabel} - ${employeeName} (Bruto $${totalPay.toFixed(2)} - Abonos $${abonoPrevio.toFixed(2)} = Neto $${netPay.toFixed(2)})`;
+      }
+
+      await createExpense({
+        businessId,
+        restaurantId: empShifts[0]?.restaurantId || restaurantId,
+        tipo: 'sueldo',
+        monto: netPay,
+        descripcion: finalDescription,
+        employeeId,
+        employeeName,
+        horasTrabajadas: Math.round((normalHours + overtimeHours) * 10) / 10,
+        horasExtra: Math.round(overtimeHours * 10) / 10,
+        diasTrabajados: daysCount || undefined,
+        modalidadPago: modalidad,
+        tarifaHora: modalidad === 'por_horas' ? (empInfo?.tarifaHora || employeeRateMap[employeeId] || 12) : undefined,
+        tarifaDiaria: modalidad === 'por_dia' ? (empInfo?.tarifaDiaria || 50) : undefined,
+        fecha: today,
+        appId: 'gastro_smart',
+        creadoEn: now
+      });
+    }
 
     // 2. Marcar cada shift como pagado
     for (const shift of empShifts) {
@@ -4027,3 +4254,149 @@ export async function paySalaryBatch(
     leido: true
   });
 }
+
+// ==========================================
+// REGISTROS DE AUDITORÍA DE MENÚ Y STOCK
+// ==========================================
+
+export async function recordMenuAuditLog(entry: Omit<MenuAuditLog, 'id' | 'appId'>): Promise<string> {
+  try {
+    const docRef = await addDoc(collection(db, 'menuAuditLogs'), {
+      ...entry,
+      appId: 'gastro_smart',
+      fecha: entry.fecha || new Date().toISOString()
+    });
+    return docRef.id;
+  } catch (err) {
+    console.warn('Error al registrar auditoría de menú y stock:', err);
+    return '';
+  }
+}
+
+export function subscribeToMenuAuditLogs(
+  businessId: string | null,
+  callback: (logs: MenuAuditLog[]) => void,
+  maxLimit: number = 200
+) {
+  if (!businessId) {
+    callback([]);
+    return () => {};
+  }
+
+  const q = query(
+    collection(db, 'menuAuditLogs'),
+    where('appId', '==', 'gastro_smart'),
+    where('businessId', '==', businessId),
+    limit(maxLimit)
+  );
+
+  return onSnapshot(q, (snapshot) => {
+    const list = snapshot.docs.map(d => ({
+      id: d.id,
+      ...d.data()
+    } as MenuAuditLog));
+    // Ordenar descendentemente por fecha y hora exacta
+    list.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+    callback(list);
+  }, (err) => {
+    console.warn('Subscription warning (menuAuditLogs):', err);
+  });
+}
+
+export async function seedSampleMenuAuditLogsIfEmpty(
+  businessId: string,
+  employeesList: Employee[],
+  menuItemsList: MenuItem[]
+): Promise<void> {
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'menuAuditLogs'),
+      where('appId', '==', 'gastro_smart'),
+      where('businessId', '==', businessId),
+      limit(1)
+    ));
+
+    if (!snap.empty) return; // Ya existen registros
+
+    if (!menuItemsList || menuItemsList.length === 0) return;
+
+    const sampleEmployees = employeesList.length > 0 
+      ? employeesList 
+      : [{ id: 'emp-admin', nombre: 'Admin General', puesto: 'admin' as Role }];
+
+    const now = Date.now();
+    const batch = writeBatch(db);
+
+    const sampleActions: Array<{
+      itemIndex: number;
+      empIndex: number;
+      tipoAccion: MenuAuditActionType;
+      detalles: string;
+      cambios?: MenuAuditLogChange[];
+      minutesAgo: number;
+    }> = [
+      {
+        itemIndex: 0,
+        empIndex: 0,
+        tipoAccion: 'ajuste_stock',
+        detalles: 'Reposición rápida de stock: +15 unidades añadidas tras llegada de proveedor.',
+        cambios: [{ campo: 'stockActual', valorAnterior: 5, valorNuevo: 20 }],
+        minutesAgo: 25
+      },
+      {
+        itemIndex: 1,
+        empIndex: sampleEmployees.length > 1 ? 1 : 0,
+        tipoAccion: 'modificacion_plato',
+        detalles: 'Actualización de precio de venta: $12.00 → $13.50 por ajuste en costo de ingredientes.',
+        cambios: [
+          { campo: 'precio', valorAnterior: 12, valorNuevo: 13.5 },
+          { campo: 'costoElaboracion', valorAnterior: 4.5, valorNuevo: 5.2 }
+        ],
+        minutesAgo: 70
+      },
+      {
+        itemIndex: 2,
+        empIndex: 0,
+        tipoAccion: 'cambio_disponibilidad',
+        detalles: 'Plato marcado temporalmente como Fuera de Carta por falta de insumos frescos.',
+        cambios: [{ campo: 'disponible', valorAnterior: true, valorNuevo: false }],
+        minutesAgo: 180
+      },
+      {
+        itemIndex: 0,
+        empIndex: sampleEmployees.length > 2 ? 2 : 0,
+        tipoAccion: 'creacion_plato',
+        detalles: 'Alta de nuevo plato en carta con receta y destino de preparación en Cocina.',
+        minutesAgo: 360
+      }
+    ];
+
+    sampleActions.forEach((action, idx) => {
+      const item = menuItemsList[action.itemIndex % menuItemsList.length];
+      const emp = sampleEmployees[action.empIndex % sampleEmployees.length];
+      const logDate = new Date(now - action.minutesAgo * 60 * 1000).toISOString();
+
+      const ref = doc(collection(db, 'menuAuditLogs'));
+      batch.set(ref, {
+        businessId,
+        restaurantId: item.restaurantId || 'central',
+        restaurantNombre: 'Sucursal Principal',
+        platoId: item.id,
+        platoNombre: item.nombre,
+        tipoAccion: action.tipoAccion,
+        detalles: action.detalles,
+        cambios: action.cambios || [],
+        empleadoId: emp.id,
+        empleadoNombre: emp.nombre,
+        empleadoRol: emp.puesto,
+        fecha: logDate,
+        appId: 'gastro_smart'
+      });
+    });
+
+    await batch.commit();
+  } catch (err) {
+    console.warn('Error sembrando registros de auditoría de muestra:', err);
+  }
+}
+

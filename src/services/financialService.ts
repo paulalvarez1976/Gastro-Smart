@@ -17,7 +17,8 @@ import {
   DailyStat, 
   FinancialTimeframe, 
   FinancialSummaryData, 
-  DailyDishSale 
+  DailyDishSale,
+  SupplyPurchaseSummaryItem
 } from '../types';
 
 /**
@@ -493,7 +494,8 @@ export function aggregateFinancialSummary(
   selectedRestaurantId: string | null,
   allMenuItems: MenuItem[],
   allOrders?: Order[],
-  currentDates?: string[]
+  currentDates?: string[],
+  allExpenses?: Expense[]
 ): FinancialSummaryData {
   // 1. Totales Periodo Actual
   let currVentas = 0;
@@ -905,6 +907,88 @@ export function aggregateFinancialSummary(
     };
   });
 
+  // 10. Agregación de Compras de Insumos por Variedad, Cantidades y Costos
+  const supplyMap = new Map<string, {
+    insumo: string;
+    variedadOUnidad: string;
+    cantidadTotal: number;
+    costoTotal: number;
+    comprasCount: number;
+    proveedores: Set<string>;
+  }>();
+
+  if (allExpenses && allExpenses.length > 0) {
+    const datesSet = currentDates && currentDates.length > 0 ? new Set(currentDates) : null;
+    allExpenses.forEach(exp => {
+      if (selectedRestaurantId && exp.restaurantId !== selectedRestaurantId) return;
+      const fechaStr = (exp.fecha || exp.creadoEn || '').split('T')[0];
+      if (datesSet && datesSet.size > 0 && !datesSet.has(fechaStr)) return;
+
+      const provName = exp.proveedor || exp.compraVinculadaProveedor || '';
+
+      if (exp.itemsCompra && exp.itemsCompra.length > 0) {
+        exp.itemsCompra.forEach(it => {
+          if (!it.nombre) return;
+          const cleanName = it.nombre.trim();
+          const cleanUnit = (it.unidad || 'unidades').trim();
+          const key = `${cleanName.toLowerCase()}___${cleanUnit.toLowerCase()}`;
+          const existing = supplyMap.get(key) || {
+            insumo: cleanName,
+            variedadOUnidad: cleanUnit,
+            cantidadTotal: 0,
+            costoTotal: 0,
+            comprasCount: 0,
+            proveedores: new Set<string>()
+          };
+          existing.cantidadTotal += Number(it.cantidad) || 0;
+          existing.costoTotal += Number(it.subtotal) || 0;
+          existing.comprasCount += 1;
+          if (provName) existing.proveedores.add(provName);
+          supplyMap.set(key, existing);
+        });
+      } else if (exp.tipo === 'viveres' || exp.tipo === 'insumos') {
+        const cleanName = (exp.descripcion || 'Víveres e Insumos Generales').trim();
+        const cleanUnit = 'compra';
+        const key = `${cleanName.toLowerCase()}___${cleanUnit}`;
+        const existing = supplyMap.get(key) || {
+          insumo: cleanName,
+          variedadOUnidad: cleanUnit,
+          cantidadTotal: 0,
+          costoTotal: 0,
+          comprasCount: 0,
+          proveedores: new Set<string>()
+        };
+        existing.cantidadTotal += 1;
+        existing.costoTotal += Number(exp.monto) || 0;
+        existing.comprasCount += 1;
+        if (provName) existing.proveedores.add(provName);
+        supplyMap.set(key, existing);
+      }
+    });
+  }
+
+  const montoTotalComprasInsumos = Array.from(supplyMap.values()).reduce((sum, item) => sum + item.costoTotal, 0);
+
+  const comprasInsumosDetalle: SupplyPurchaseSummaryItem[] = Array.from(supplyMap.values())
+    .map(item => {
+      const costoTotal = Math.round(item.costoTotal * 100) / 100;
+      const cantidadTotal = Math.round(item.cantidadTotal * 100) / 100;
+      const costoPromedioUnitario = cantidadTotal > 0 ? Math.round((costoTotal / cantidadTotal) * 100) / 100 : 0;
+      const porcentajeDelTotalInsumos = montoTotalComprasInsumos > 0 ? Math.round((costoTotal / montoTotalComprasInsumos) * 1000) / 10 : 0;
+
+      return {
+        insumo: item.insumo,
+        variedadOUnidad: item.variedadOUnidad,
+        cantidadTotal,
+        costoPromedioUnitario,
+        costoTotal,
+        comprasCount: item.comprasCount,
+        proveedores: Array.from(item.proveedores),
+        porcentajeDelTotalInsumos
+      };
+    })
+    .sort((a, b) => b.costoTotal - a.costoTotal);
+
   return {
     ventasTotales: {
       actual: Math.round(currVentas * 100) / 100,
@@ -939,6 +1023,8 @@ export function aggregateFinancialSummary(
     ventasPorCanal,
     gastosPorTipo,
     topPlatos,
+    comprasInsumosDetalle,
+    montoTotalComprasInsumos: Math.round(montoTotalComprasInsumos * 100) / 100,
     horasTrabajadas: Math.round(currHoras * 10) / 10,
     costoLaboral: Math.round(currCostoLaboral * 100) / 100,
     ratioCostoLaboral: Math.round(ratioCostoLaboral * 10) / 10,

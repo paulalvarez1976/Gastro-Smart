@@ -70,7 +70,7 @@ Extrae con la máxima fidelidad:
 2. Teléfono: teléfono de contacto del proveedor si está impreso.
 3. Fecha: fecha de la transacción en formato ISO YYYY-MM-DD (si no es legible, usa la fecha de hoy).
 4. Método de pago: si se indica efectivo, tarjeta, transferencia o crédito.
-5. Items comprados: cada insumo adquirido con nombre claro (ej. "Pescado fresco", "Limón", "Aceite vegetal"), cantidad numérica precisa, unidad normalizada ('kg', 'litros', 'unidades' o 'cajas'), precio unitario y subtotal.
+5. Items comprados: cada insumo adquirido con nombre claro (ej. "Pescado fresco", "Limón", "Aceite vegetal"), cantidad numérica precisa, unidad normalizada ('kg', 'libra', 'quintal', 'litros', 'unidades', 'cajas', 'sacos', 'gramos', 'galones' o 'paquetes'), precio unitario y subtotal.
 6. Total general y notas adicionales como número de comprobante o RUC/RIF/NIT si existe.`;
 
       const receiptSchema = {
@@ -108,7 +108,7 @@ Extrae con la máxima fidelidad:
                 },
                 unidad: {
                   type: Type.STRING,
-                  enum: ["kg", "litros", "unidades", "cajas"],
+                  enum: ["kg", "libra", "quintal", "litros", "unidades", "cajas", "sacos", "gramos", "galones", "paquetes"],
                   description: "Unidad de medida del insumo",
                 },
                 precioUnitario: {

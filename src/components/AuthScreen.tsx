@@ -326,14 +326,29 @@ export const AuthScreen: React.FC = () => {
 
       {/* Brand Header */}
       <div className="w-full max-w-md text-center mb-5">
-        <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-500/20 mb-3 transform hover:scale-105 transition-all">
-          <UtensilsCrossed className="w-8 h-8 sm:w-10 sm:h-10" />
-        </div>
+        {(activeRest?.logoUrl || activeBiz?.logoUrl || currentBusiness?.logoUrl) ? (
+          <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white border border-neutral-200 shadow-lg shadow-orange-500/10 mb-3 transform hover:scale-105 transition-all p-2 overflow-hidden">
+            <img
+              src={(activeRest?.logoUrl || activeBiz?.logoUrl || currentBusiness?.logoUrl)!}
+              alt={activeRest?.nombre || activeBiz?.nombre || 'Logo'}
+              className="w-full h-full object-contain"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        ) : (
+          <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-500/20 mb-3 transform hover:scale-105 transition-all">
+            <UtensilsCrossed className="w-8 h-8 sm:w-10 sm:h-10" />
+          </div>
+        )}
         <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-neutral-900 flex items-center justify-center gap-2">
-          Gastro <span className="text-orange-600">Smart</span>
+          {activeBiz?.nombre || activeRest?.nombre || (
+            <>Gastro <span className="text-orange-600">Smart</span></>
+          )}
         </h1>
         <p className="text-neutral-600 font-medium text-xs sm:text-sm mt-0.5">
-          Plataforma Multi-sucursal para Restaurantes & Bares
+          {activeRest?.nombre && activeBiz?.nombre && activeRest.nombre !== activeBiz.nombre
+            ? `${activeRest.nombre} • Sistema de Gestión`
+            : 'Plataforma Multi-sucursal para Restaurantes & Bares'}
         </p>
         <div className="flex items-center justify-center gap-2 mt-2.5">
           <DeviceBadge />
@@ -496,24 +511,6 @@ export const AuthScreen: React.FC = () => {
             </button>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-neutral-800 text-center space-y-2">
-            <button
-              type="button"
-              onClick={async () => {
-                sounds.playKeypadClick();
-                const res = await loginSuperAdminDemoMode();
-                if (res.success) {
-                  sounds.playCashRegister();
-                } else {
-                  setCreatorFeedback({ type: 'error', text: res.message });
-                }
-              }}
-              className="w-full py-2.5 px-3 rounded-xl bg-purple-950/80 hover:bg-purple-900 border border-purple-700/60 text-purple-200 font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-purple-400" />
-              <span>🚀 Acceso DEMO Instantáneo Creador (SaaS)</span>
-            </button>
-          </div>
         </div>
       )}
 
@@ -626,55 +623,6 @@ export const AuthScreen: React.FC = () => {
                   {adminLoading ? 'Autenticando...' : 'Iniciar Sesión'}
                 </button>
               </form>
-
-              {/* Demostración de Acceso Rápido */}
-              <div className="mt-5 pt-4 border-t border-neutral-100 text-center space-y-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    sounds.playKeypadClick();
-                    const res = await loginDemoMode();
-                    if (res.success) {
-                      sounds.playCashRegister();
-                    } else {
-                      setAdminFeedback({ type: 'error', text: res.message });
-                    }
-                  }}
-                  className="w-full py-2.5 px-3 rounded-xl bg-orange-50 hover:bg-orange-100 border border-orange-200 text-orange-900 font-extrabold text-xs transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Sparkles className="w-4 h-4 text-orange-600" />
-                  <span>🚀 Acceso DEMO Restaurante Instantáneo</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    sounds.playKeypadClick();
-                    const res = await loginSuperAdminDemoMode();
-                    if (res.success) {
-                      sounds.playCashRegister();
-                    } else {
-                      setAdminFeedback({ type: 'error', text: res.message });
-                    }
-                  }}
-                  className="w-full py-2.5 px-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-xs cursor-pointer"
-                >
-                  <ShieldCheck className="w-4 h-4 text-white" />
-                  <span>👑 Acceso Creador / SuperAdmin (SaaS)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAdminEmail('admin@gastrosmart.com');
-                    setAdminPassword('admin1234');
-                  }}
-                  className="w-full text-center text-[11px] text-neutral-500 hover:text-orange-600 font-semibold py-1 transition flex items-center justify-center gap-1.5"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                  Rellenar con credenciales demo (admin@gastrosmart.com / admin1234)
-                </button>
-              </div>
             </div>
           )}
 
@@ -937,9 +885,20 @@ export const AuthScreen: React.FC = () => {
               ) : (
                 <div className="flex items-center justify-between px-3 py-2 bg-white rounded-xl border border-orange-200 shadow-2xs">
                   <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shrink-0">
-                      🏢
-                    </div>
+                    {(activeRest?.logoUrl || activeBiz?.logoUrl) ? (
+                      <div className="w-8 h-8 rounded-lg bg-neutral-50 border border-orange-200 p-0.5 flex items-center justify-center shrink-0 overflow-hidden shadow-2xs">
+                        <img
+                          src={(activeRest?.logoUrl || activeBiz?.logoUrl)!}
+                          alt={activeRest?.nombre || 'Logo'}
+                          className="w-full h-full object-contain"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shrink-0">
+                        🏢
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <div className="text-xs font-black text-neutral-800 truncate">
                         {activeRest?.nombre || 'Restaurante Principal'}

@@ -18,6 +18,8 @@ export interface PayrollEmployeeRow {
   horasTotales: number;
   totalNormal: number;
   totalExtra: number;
+  sueldoCalculado: number;
+  totalAbonado: number;
   totalPagar: number;
   turnosContados: number;
   estadoPago: string;
@@ -111,7 +113,18 @@ export function exportFinancialReportToExcel(params: {
     [],
     ['TOP 5 PLATOS MÁS VENDIDOS'],
     ['Plato', 'Unidades Vendidas', 'Monto Total'],
-    ...(summary.topPlatos || []).slice(0, 5).map(p => [p.nombre, p.cantidad, p.total])
+    ...(summary.topPlatos || []).slice(0, 5).map(p => [p.nombre, p.cantidad, p.total]),
+    [],
+    ['COMPRAS DE INSUMOS POR VARIEDAD (Materia Prima)'],
+    ['Insumo / Variedad', 'Cantidad Total', 'Unidad', 'Costo Unit. Prom ($)', 'Costo Total ($)', '% del Insumo'],
+    ...(summary.comprasInsumosDetalle || []).map(i => [
+      i.insumo,
+      i.cantidadTotal,
+      i.variedadOUnidad,
+      i.costoPromedioUnitario,
+      i.costoTotal,
+      `${i.porcentajeDelTotalInsumos}%`
+    ])
   ];
 
   const wsResumen = XLSX.utils.aoa_to_sheet(resumenRows);
@@ -214,33 +227,80 @@ export function exportFinancialReportToExcel(params: {
   XLSX.utils.book_append_sheet(wb, wsGastos, 'Gastos detallados');
 
   // -------------------------------------------------------------
+  // HOJA: COMPRAS POR INSUMO (VARIEDADES, CANTIDADES Y COSTOS)
+  // -------------------------------------------------------------
+  if (summary.comprasInsumosDetalle && summary.comprasInsumosDetalle.length > 0) {
+    const insumosHeaders = ['#', 'Insumo / Variedad', 'Cantidad Total', 'Unidad de Medida', 'Costo Unitario Promedio ($)', 'Costo Total Invertido ($)', '% Inversión Insumos', 'Nº Compras', 'Proveedor(es)'];
+    const insumosRows = summary.comprasInsumosDetalle.map((item, idx) => [
+      idx + 1,
+      item.insumo,
+      item.cantidadTotal,
+      item.variedadOUnidad,
+      item.costoPromedioUnitario,
+      item.costoTotal,
+      `${item.porcentajeDelTotalInsumos}%`,
+      item.comprasCount,
+      item.proveedores.join(', ') || 'Sin especificar'
+    ]);
+
+    const wsInsumos = XLSX.utils.aoa_to_sheet([
+      ['REPORTE DE COMPRAS DE INSUMOS POR VARIEDAD, CANTIDADES Y COSTOS'],
+      [`Periodo: ${periodLabel} | Sucursal: ${selectedBranchName}`],
+      [`Monto Total Insumos: $${summary.montoTotalComprasInsumos?.toFixed(2) || '0.00'}`],
+      [],
+      insumosHeaders,
+      ...insumosRows
+    ]);
+    wsInsumos['!cols'] = [
+      { wch: 6 },
+      { wch: 28 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 22 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 30 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsInsumos, 'Compras por Insumo');
+  }
+
+  // -------------------------------------------------------------
   // HOJA 4: DELIVERY
   // -------------------------------------------------------------
   const deliveryOrders = orders.filter(o => o.tipo === 'delivery' && o.estado === 'cobrado');
   
   // Agrupar por empresa
-  const deliveryCompanies = ['PedidosYa', 'UberEats', 'Rappi', 'Propio', 'Otro'];
+  const detectedCompanies = new Set<string>(['PedidosYa', 'UberEats', 'Rappi', 'Propio']);
+  deliveryOrders.forEach(o => {
+    if (o.empresaDelivery && o.empresaDelivery.trim()) {
+      detectedCompanies.add(o.empresaDelivery.trim());
+    }
+  });
+
+  const deliveryCompanies = Array.from(detectedCompanies);
   const defaultCommissions: Record<string, number> = {
-    PedidosYa: 18,
-    UberEats: 20,
-    Rappi: 22,
-    Propio: 0,
-    Otro: 10
+    pedidosya: 18,
+    ubereats: 20,
+    rappi: 22,
+    propio: 0,
+    otro: 10
   };
 
   const deliveryData = deliveryCompanies.map(comp => {
+    const compLower = comp.toLowerCase();
     const compOrders = deliveryOrders.filter(o => {
       const c = (o.empresaDelivery || '').toLowerCase();
-      if (comp === 'PedidosYa') return c.includes('pedidos') || c.includes('ya');
-      if (comp === 'UberEats') return c.includes('uber');
-      if (comp === 'Rappi') return c.includes('rappi');
-      if (comp === 'Propio') return c.includes('propio');
-      return !c.includes('pedidos') && !c.includes('ya') && !c.includes('uber') && !c.includes('rappi') && !c.includes('propio');
+      if (compLower === 'pedidosya') return c.includes('pedidos') || c.includes('ya');
+      if (compLower === 'ubereats') return c.includes('uber');
+      if (compLower === 'rappi') return c.includes('rappi');
+      if (compLower === 'propio') return c.includes('propio');
+      return c === compLower || c.includes(compLower);
     });
 
     const pedidosCount = compOrders.length;
     const ventasBrutas = compOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-    const commRate = defaultCommissions[comp] || 0;
+    const commRate = defaultCommissions[compLower] ?? (compLower.includes('propio') ? 0 : 18);
     const montoComision = (ventasBrutas * commRate) / 100;
     const netoRecibir = ventasBrutas - montoComision;
 

@@ -162,8 +162,8 @@ const MainAppContent: React.FC = () => {
 
         {/* Modal Secundario de Onboarding para nueva sucursal */}
         {showNewBranchModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
-            <div className="bg-white rounded-3xl max-w-lg w-full p-2 relative shadow-2xl">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-150 overflow-y-auto">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-2 relative shadow-2xl max-h-[92vh] overflow-y-auto overscroll-contain">
               <RestaurantOnboarding 
                 isSecondaryModal={true} 
                 onCloseModal={() => setShowNewBranchModal(false)} 
