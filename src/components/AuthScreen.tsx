@@ -326,29 +326,14 @@ export const AuthScreen: React.FC = () => {
 
       {/* Brand Header */}
       <div className="w-full max-w-md text-center mb-5">
-        {(activeRest?.logoUrl || activeBiz?.logoUrl || currentBusiness?.logoUrl) ? (
-          <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-white border border-neutral-200 shadow-lg shadow-orange-500/10 mb-3 transform hover:scale-105 transition-all p-2 overflow-hidden">
-            <img
-              src={(activeRest?.logoUrl || activeBiz?.logoUrl || currentBusiness?.logoUrl)!}
-              alt={activeRest?.nombre || activeBiz?.nombre || 'Logo'}
-              className="w-full h-full object-contain"
-              referrerPolicy="no-referrer"
-            />
-          </div>
-        ) : (
-          <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-500/20 mb-3 transform hover:scale-105 transition-all">
-            <UtensilsCrossed className="w-8 h-8 sm:w-10 sm:h-10" />
-          </div>
-        )}
+        <div className="inline-flex items-center justify-center w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-500 text-white shadow-lg shadow-orange-500/20 mb-3 transform hover:scale-105 transition-all">
+          <UtensilsCrossed className="w-8 h-8 sm:w-10 sm:h-10" />
+        </div>
         <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-neutral-900 flex items-center justify-center gap-2">
-          {activeBiz?.nombre || activeRest?.nombre || (
-            <>Gastro <span className="text-orange-600">Smart</span></>
-          )}
+          Gastro <span className="text-orange-600">Smart</span>
         </h1>
         <p className="text-neutral-600 font-medium text-xs sm:text-sm mt-0.5">
-          {activeRest?.nombre && activeBiz?.nombre && activeRest.nombre !== activeBiz.nombre
-            ? `${activeRest.nombre} • Sistema de Gestión`
-            : 'Plataforma Multi-sucursal para Restaurantes & Bares'}
+          Plataforma Multi-sucursal para Restaurantes & Bares
         </p>
         <div className="flex items-center justify-center gap-2 mt-2.5">
           <DeviceBadge />

@@ -655,7 +655,7 @@ export function subscribeToActiveShift(employeeId: string, callback: (shift: Shi
 export function subscribeToShifts(
   arg1?: string | null | ((shifts: Shift[]) => void),
   arg2?: string | null | ((shifts: Shift[]) => void),
-  arg3?: (shifts: Shift[]) => void
+  arg3?: ((shifts: Shift[]) => void) | string | null
 ) {
   let businessId: string | null = null;
   let restaurantId: string | null = null;
@@ -663,13 +663,15 @@ export function subscribeToShifts(
 
   if (typeof arg1 === 'function') {
     callback = arg1;
+    if (typeof arg2 === 'string') businessId = arg2;
   } else if (typeof arg2 === 'function') {
     restaurantId = arg1 || null;
     callback = arg2;
+    if (typeof arg3 === 'string') businessId = arg3;
   } else {
     businessId = arg1 || null;
     restaurantId = arg2 || null;
-    callback = arg3 || (() => {});
+    callback = typeof arg3 === 'function' ? arg3 : (() => {});
   }
 
   const colRef = collection(db, 'shifts');
@@ -1081,7 +1083,7 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
 export function subscribeToMenuItems(
   arg1?: string | null | ((items: MenuItem[]) => void),
   arg2?: string | null | ((items: MenuItem[]) => void),
-  arg3?: (items: MenuItem[]) => void
+  arg3?: ((items: MenuItem[]) => void) | string | null
 ) {
   let businessId: string | null = null;
   let restaurantId: string | null = null;
@@ -1089,13 +1091,15 @@ export function subscribeToMenuItems(
 
   if (typeof arg1 === 'function') {
     callback = arg1;
+    if (typeof arg2 === 'string') businessId = arg2;
   } else if (typeof arg2 === 'function') {
     restaurantId = arg1 || null;
     callback = arg2;
+    if (typeof arg3 === 'string') businessId = arg3;
   } else {
     businessId = arg1 || null;
     restaurantId = arg2 || null;
-    callback = arg3 || (() => {});
+    callback = typeof arg3 === 'function' ? arg3 : (() => {});
   }
 
   const colRef = collection(db, 'menuItems');
@@ -1268,6 +1272,7 @@ export function subscribeToTables(
   if (typeof arg2 === 'function') {
     callback = arg2;
   } else {
+    restaurantId = arg2;
     callback = arg3 || (() => {});
   }
 
@@ -1381,7 +1386,7 @@ export async function revertOrderToReady(orderId: string, userName: string) {
 export function subscribeToOrders(
   arg1?: string | null | ((orders: Order[]) => void),
   arg2?: string | null | ((orders: Order[]) => void),
-  arg3?: (orders: Order[]) => void
+  arg3?: ((orders: Order[]) => void) | string | null
 ) {
   let businessId: string | null = null;
   let restaurantId: string | null = null;
@@ -1389,13 +1394,15 @@ export function subscribeToOrders(
 
   if (typeof arg1 === 'function') {
     callback = arg1;
+    if (typeof arg2 === 'string') businessId = arg2;
   } else if (typeof arg2 === 'function') {
     restaurantId = arg1 || null;
     callback = arg2;
+    if (typeof arg3 === 'string') businessId = arg3;
   } else {
     businessId = arg1 || null;
     restaurantId = arg2 || null;
-    callback = arg3 || (() => {});
+    callback = typeof arg3 === 'function' ? arg3 : (() => {});
   }
 
   const colRef = collection(db, 'orders');
@@ -2486,16 +2493,17 @@ export async function markOrderDelivered(orderId: string, userName: string): Pro
 
 export function subscribeToClients(
   arg1?: string | null | ((clients: Client[]) => void),
-  arg2?: (clients: Client[]) => void
+  arg2?: ((clients: Client[]) => void) | string | null
 ) {
   let businessId: string | null = null;
   let callback: (clients: Client[]) => void = () => {};
 
   if (typeof arg1 === 'function') {
     callback = arg1;
+    if (typeof arg2 === 'string') businessId = arg2;
   } else {
     businessId = arg1 || null;
-    callback = arg2 || (() => {});
+    callback = typeof arg2 === 'function' ? arg2 : (() => {});
   }
 
   const colRef = collection(db, 'clients');
