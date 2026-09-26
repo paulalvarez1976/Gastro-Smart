@@ -182,12 +182,18 @@ Extrae con la máxima fidelidad:
   }
 });
 
-// Servir archivos estáticos del frontend en producción
+// Servir archivos estáticos del frontend en producción (permitiendo /.well-known para Digital Asset Links)
 const distPath = path.join(process.cwd(), 'dist');
-app.use(express.static(distPath));
+const publicWellKnownPath = path.join(process.cwd(), 'public', '.well-known');
+app.use('/.well-known', express.static(path.join(distPath, '.well-known'), { dotfiles: 'allow' }));
+app.use('/.well-known', express.static(publicWellKnownPath, { dotfiles: 'allow' }));
+app.use(express.static(distPath, { dotfiles: 'allow' }));
 
-// Fallback para SPA (Single Page Application)
-app.get('*', (req, res) => {
+// Fallback para SPA (Single Page Application), excluyendo /.well-known
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/.well-known/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   res.sendFile(path.join(distPath, 'index.html'));
 });
 

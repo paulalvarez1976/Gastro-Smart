@@ -102,30 +102,6 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
   // Fullscreen Modal State (Expands to 100vw / 100vh on open with z-index, restored upon Aceptar)
   const [isFullScreenModal, setIsFullScreenModal] = useState<boolean>(true);
 
-  // Native Fullscreen API tracking
-  const [isNativeFullscreen, setIsNativeFullscreen] = useState<boolean>(false);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsNativeFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
-
-  const toggleFullscreen = () => {
-    sounds.playKeypadClick();
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.().catch((err) => {
-        console.warn('Error entering fullscreen:', err);
-      });
-    } else {
-      document.exitFullscreen?.().catch((err) => {
-        console.warn('Error exiting fullscreen:', err);
-      });
-    }
-  };
-
   // Categories list & counts
   const categories = useMemo(() => {
     const cats = Array.from(new Set(menuItems.map(m => m.categoria).filter(Boolean)));

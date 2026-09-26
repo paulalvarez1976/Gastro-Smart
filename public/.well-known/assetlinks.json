@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "studio.ai.gastro_smart.twa",
+    "sha256_cert_fingerprints": ["7F:49:1E:4B:A3:CC:D8:3D:A3:C5:B7:7B:E0:E2:21:36:AC:33:08:88:BB:49:74:5E:8F:4E:9D:35:01:23:E4:D9"]
+  }
+}]

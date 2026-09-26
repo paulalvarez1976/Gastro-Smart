@@ -212,12 +212,20 @@ export const KeyIndicatorsPanel: React.FC<KeyIndicatorsPanelProps> = ({
       });
     });
 
+    const todaySales = todayOrders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+    const activeOrdersCount = orders.filter(o => {
+      if (selectedBranchId !== 'all' && o.restaurantId !== selectedBranchId) return false;
+      return o.estado !== 'cobrado' && o.estado !== 'rechazado';
+    }).length;
+
     const dishList = Object.values(dishMap).sort((a, b) => b.quantity - a.quantity);
     const topDish = dishList.length > 0 ? dishList[0] : null;
 
     return {
       totalSales,
+      todaySales,
       totalOrdersCount,
+      activeOrdersCount,
       paidOrdersCount: paidOrders.length,
       avgTicket,
       salesChangePercent,
@@ -227,7 +235,7 @@ export const KeyIndicatorsPanel: React.FC<KeyIndicatorsPanelProps> = ({
       topDish,
       dishList
     };
-  }, [filteredOrders, yesterdayOrders]);
+  }, [filteredOrders, yesterdayOrders, todayOrders, orders, selectedBranchId]);
 
   // 3. DATOS DE VENTAS POR HORA (Para el gráfico interactivo de Ventas del Día)
   const hourlySalesData = useMemo(() => {
@@ -571,10 +579,10 @@ export const KeyIndicatorsPanel: React.FC<KeyIndicatorsPanelProps> = ({
       {/* FILA 1: TARJETAS KPI RESUMEN */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         
-        {/* KPI 1: Ventas del Día */}
+        {/* KPI 1: Ventas Totales Diarias */}
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs relative overflow-hidden group">
           <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase tracking-wider">
-            <span>Ventas del Periodo</span>
+            <span>Ventas Totales Diarias</span>
             <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
               <DollarSign className="w-4 h-4" />
             </div>
@@ -583,7 +591,7 @@ export const KeyIndicatorsPanel: React.FC<KeyIndicatorsPanelProps> = ({
             ${kpis.totalSales.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </div>
           <div className="mt-2 pt-2 border-t border-neutral-100 flex items-center justify-between text-xs">
-            <span className="text-neutral-500">{kpis.totalOrdersCount} comandas ({kpis.paidOrdersCount} cobradas)</span>
+            <span className="text-neutral-500">Hoy: ${kpis.todaySales.toFixed(2)}</span>
             {kpis.salesChangePercent !== 0 && (
               <span className={`inline-flex items-center font-bold text-[11px] ${
                 kpis.salesChangePercent >= 0 ? 'text-emerald-600' : 'text-rose-600'
@@ -595,22 +603,22 @@ export const KeyIndicatorsPanel: React.FC<KeyIndicatorsPanelProps> = ({
           </div>
         </div>
 
-        {/* KPI 2: Ticket Promedio */}
-        <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
+        {/* KPI 2: Pedidos Activos */}
+        <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs relative overflow-hidden">
           <div className="flex items-center justify-between text-neutral-500 text-xs font-bold uppercase tracking-wider">
-            <span>Ticket Promedio</span>
-            <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-              <ShoppingBag className="w-4 h-4" />
+            <span>Pedidos Activos</span>
+            <div className="w-8 h-8 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center relative">
+              <span className="animate-ping absolute inline-flex h-2.5 w-2.5 rounded-full bg-orange-400 opacity-75"></span>
+              <ChefHat className="w-4 h-4 relative" />
             </div>
           </div>
-          <div className="text-2xl sm:text-3xl font-black text-neutral-900 mt-2 font-mono tracking-tight">
-            ${kpis.avgTicket.toFixed(2)}
+          <div className="text-2xl sm:text-3xl font-black text-neutral-900 mt-2 font-mono tracking-tight flex items-center gap-2">
+            <span>{kpis.activeOrdersCount}</span>
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-800">En curso</span>
           </div>
           <div className="mt-2 pt-2 border-t border-neutral-100 text-xs text-neutral-500 flex items-center justify-between">
-            <span>Consumo medio / mesa</span>
-            <span className="font-bold text-neutral-700 font-mono">
-              {kpis.totalOrdersCount > 0 ? (kpis.totalSales / kpis.totalOrdersCount).toFixed(2) : '$0.00'}
-            </span>
+            <span>Total comandas</span>
+            <span className="font-bold text-neutral-700 font-mono">{kpis.totalOrdersCount}</span>
           </div>
         </div>
 

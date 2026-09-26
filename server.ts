@@ -180,6 +180,14 @@ Extrae con la máxima fidelidad:
     }
   });
 
+  // Servir /.well-known directamente como estático con soporte para dotfiles (Android Digital Asset Links)
+  app.use(
+    "/.well-known",
+    express.static(path.join(process.cwd(), "public", ".well-known"), {
+      dotfiles: "allow",
+    })
+  );
+
   // Configuración de Vite como Middleware en Desarrollo o Archivos Estáticos en Producción
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -189,8 +197,15 @@ Extrae con la máxima fidelidad:
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    app.use(
+      "/.well-known",
+      express.static(path.join(distPath, ".well-known"), { dotfiles: "allow" })
+    );
+    app.use(express.static(distPath, { dotfiles: "allow" }));
     app.get("*", (req, res) => {
+      if (req.path.startsWith("/.well-known/")) {
+        return res.status(404).json({ error: "Not found" });
+      }
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

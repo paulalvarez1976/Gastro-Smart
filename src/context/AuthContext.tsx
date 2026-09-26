@@ -254,11 +254,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const diffHours = (now - startTime) / (1000 * 60 * 60);
 
         if (diffHours >= 14 && shift.estado === 'abierto') {
-          console.warn('Turno excedió 14 horas. Cerrando automáticamente por seguridad.');
+          console.info('Turno excedió 14 horas. Cerrando automáticamente por seguridad.');
           await closeShift(shift.id, 'Cierre automático preventivo por exceder 14 horas continuas');
           setCurrentShift(null);
           setCurrentEmployee(null);
-          alert('Tu turno anterior excedió las 14 horas y fue cerrado automáticamente por seguridad.');
           return;
         }
 
@@ -292,24 +291,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (!currentEmployee) return;
 
-    let inactivityTimeout: NodeJS.Timeout;
+    let inactivityTimeout: ReturnType<typeof setTimeout>;
 
     const resetInactivityTimer = () => {
       clearTimeout(inactivityTimeout);
       // 15 minutos
       inactivityTimeout = setTimeout(() => {
-        alert('Sesión cerrada por inactividad (15 minutos sin interacción). Introduce tu PIN para reanudar.');
         setCurrentEmployee(null);
       }, 15 * 60 * 1000);
     };
 
-    const events = ['mousedown', 'mousemove', 'keydown', 'touchstart', 'scroll'];
-    events.forEach(ev => window.addEventListener(ev, resetInactivityTimer));
+    window.addEventListener('pointerdown', resetInactivityTimer, { passive: true });
     resetInactivityTimer();
 
     return () => {
       clearTimeout(inactivityTimeout);
-      events.forEach(ev => window.removeEventListener(ev, resetInactivityTimer));
+      window.removeEventListener('pointerdown', resetInactivityTimer);
     };
   }, [currentEmployee]);
 

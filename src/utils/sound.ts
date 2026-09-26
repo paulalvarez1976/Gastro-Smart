@@ -11,21 +11,17 @@ class SoundEffects {
         this.muted = storedMute === 'true';
       }
 
-      // Auto-unlock audio on user's first click/touch
+      // Auto-unlock audio on user's first pointer interaction
       const unlockAudio = () => {
         this.init();
         if (this.ctx && this.ctx.state === 'suspended') {
           this.ctx.resume().catch(() => {});
         }
         this.unlocked = true;
-        window.removeEventListener('click', unlockAudio);
-        window.removeEventListener('touchstart', unlockAudio);
-        window.removeEventListener('keydown', unlockAudio);
+        window.removeEventListener('pointerdown', unlockAudio);
       };
 
-      window.addEventListener('click', unlockAudio, { once: true, passive: true });
-      window.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
-      window.addEventListener('keydown', unlockAudio, { once: true, passive: true });
+      window.addEventListener('pointerdown', unlockAudio, { once: true, passive: true });
     }
   }
 
@@ -96,17 +92,16 @@ class SoundEffects {
       }
     };
 
-    // Tocar de inmediato
+    // Tocar aviso inicial sin bloquear ni crear bucles infinitos de audio
     playByType();
 
-    // Repetir en loop continuo hasta confirmación
-    const intervalId = setInterval(() => {
-      if (this.muted) {
-        this.stopRepeatingAlarm(alarmKey);
-        return;
+    // Un único recordatorio suave tras el intervalo para evitar detección de bloqueo de navegador (Browser Locker)
+    const intervalId = setTimeout(() => {
+      if (!this.muted && this.activeAlarms.has(alarmKey)) {
+        playByType();
       }
-      playByType();
-    }, intervalMs);
+      this.activeAlarms.delete(alarmKey);
+    }, Math.max(intervalMs, 4500));
 
     this.activeAlarms.set(alarmKey, { intervalId, type });
   }
@@ -117,6 +112,7 @@ class SoundEffects {
   public stopRepeatingAlarm(alarmKey: string) {
     const existing = this.activeAlarms.get(alarmKey);
     if (existing) {
+      clearTimeout(existing.intervalId);
       clearInterval(existing.intervalId);
       this.activeAlarms.delete(alarmKey);
     }
@@ -127,6 +123,7 @@ class SoundEffects {
    */
   public stopAllAlarms() {
     this.activeAlarms.forEach(alarm => {
+      clearTimeout(alarm.intervalId);
       clearInterval(alarm.intervalId);
     });
     this.activeAlarms.clear();

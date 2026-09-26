@@ -2,8 +2,6 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   initializeFirestore, 
   getFirestore,
-  persistentLocalCache, 
-  persistentMultipleTabManager,
   setLogLevel
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
@@ -15,23 +13,14 @@ setLogLevel('silent');
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Robust Firestore initialization with resilient multi-tab persistent cache and forced long-polling for iframe/cloud sandboxes
+// Initialize Firestore with forced long-polling without multi-tab Web Locks to prevent Browser Locker detection in iframes
 let firestoreDb;
 try {
   firestoreDb = initializeFirestore(app, {
-    experimentalForceLongPolling: true,
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager()
-    })
+    experimentalForceLongPolling: true
   }, firebaseConfig.firestoreDatabaseId);
 } catch {
-  try {
-    firestoreDb = initializeFirestore(app, {
-      experimentalForceLongPolling: true
-    }, firebaseConfig.firestoreDatabaseId);
-  } catch {
-    firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-  }
+  firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 }
 
 export const db = firestoreDb;
