@@ -112,9 +112,19 @@ service cloud.firestore {
     }
 
     // ==========================================
-    // 7. MENU ITEMS COLLECTION
+    // 7. MENU ITEMS COLLECTION (Lectura pública habilitada para Menú Digital QR de solo lectura)
     // ==========================================
     match /menuItems/{menuItemId} {
+      allow read: if true;
+      allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow delete: if isGastroSmart(resource.data) || isAuthenticated();
+    }
+
+    // ==========================================
+    // 7b. RESERVATIONS COLLECTION (RESERVAS DE MESAS)
+    // ==========================================
+    match /reservations/{reservationId} {
       allow read: if isGastroSmart(resource.data) || isAuthenticated();
       allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
       allow update: if isGastroSmart(request.resource.data) || isAuthenticated();

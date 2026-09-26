@@ -36,6 +36,7 @@ import { Order, Restaurant, Employee, OrderItem, PartialPayment } from '../types
 import { sounds } from '../utils/sound';
 import { fetchHistoricalOrders } from '../services/dataService';
 import { ThermalReceiptModal } from './ThermalReceiptModal';
+import { getOrderTaxBreakdown } from '../utils/taxCalculator';
 
 interface OrderHistoryAdminViewProps {
   restaurants: Restaurant[];
@@ -1198,28 +1199,45 @@ export const OrderHistoryAdminView: React.FC<OrderHistoryAdminViewProps> = ({
             )}
 
             {/* Financial Summary */}
-            <div className="bg-neutral-900 text-white rounded-2xl p-4 space-y-2 font-mono text-xs">
-              <div className="flex justify-between text-neutral-400">
-                <span>Subtotal Base:</span>
-                <span>${(inspectingOrder.subtotal || inspectingOrder.total).toFixed(2)}</span>
-              </div>
-              {(inspectingOrder.descuento || 0) > 0 && (
-                <div className="flex justify-between text-orange-400">
-                  <span>Descuento Aplicado:</span>
-                  <span>-${inspectingOrder.descuento?.toFixed(2)}</span>
+            {(() => {
+              const breakdown = getOrderTaxBreakdown(inspectingOrder);
+              return (
+                <div className="bg-neutral-900 text-white rounded-2xl p-4 space-y-2 font-mono text-xs">
+                  <div className="flex justify-between text-neutral-400">
+                    <span>Subtotal Base:</span>
+                    <span>${breakdown.subtotal.toFixed(2)}</span>
+                  </div>
+                  {breakdown.descuento > 0 && (
+                    <div className="flex justify-between text-orange-400">
+                      <span>Descuento Aplicado:</span>
+                      <span>-${breakdown.descuento.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {breakdown.impuesto > 0 && (
+                    <div className="flex justify-between text-amber-400">
+                      <span>
+                        {breakdown.porcentajeImpuesto > 0
+                          ? `Impuesto (${breakdown.porcentajeImpuesto}%${breakdown.impuestoIncluidoEnPrecio ? ' incl.' : ''}):`
+                          : 'Impuesto / IVA:'}
+                      </span>
+                      <span>
+                        {breakdown.impuestoIncluidoEnPrecio ? '(incl.) ' : '+'}${breakdown.impuesto.toFixed(2)}
+                      </span>
+                    </div>
+                  )}
+                  {breakdown.propina > 0 && (
+                    <div className="flex justify-between text-blue-400">
+                      <span>Propina / Servicio:</span>
+                      <span>+${breakdown.propina.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-base font-black text-white pt-2 border-t border-neutral-800">
+                    <span>Total Facturado:</span>
+                    <span className="text-emerald-400">${breakdown.total.toFixed(2)}</span>
+                  </div>
                 </div>
-              )}
-              {(inspectingOrder.propina || 0) > 0 && (
-                <div className="flex justify-between text-blue-400">
-                  <span>Propina / Servicio:</span>
-                  <span>+${inspectingOrder.propina?.toFixed(2)}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-base font-black text-white pt-2 border-t border-neutral-800">
-                <span>Total Facturado:</span>
-                <span className="text-emerald-400">${inspectingOrder.total.toFixed(2)}</span>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Actions Footer */}
             <div className="flex gap-2 pt-2">

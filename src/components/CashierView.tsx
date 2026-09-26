@@ -64,7 +64,10 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
 
   // Modal de Cobro & División de Cuenta
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [splitMode, setSplitMode] = useState<'total' | 'comensal' | 'partes_iguales' | 'fuga'>('total');
+  const [splitMode, setSplitMode] = useState<'total' | 'cuenta_compartida' | 'comensal' | 'partes_iguales' | 'fuga'>('total');
+  const [sharedStep, setSharedStep] = useState<'cliente1' | 'cliente2'>('cliente1');
+  const [sharedClient1Amount, setSharedClient1Amount] = useState<string>('');
+  const [sharedSplitFeedback, setSharedSplitFeedback] = useState<string | null>(null);
   const [selectedDinerId, setSelectedDinerId] = useState<string | null>(null);
   const [sharesCount, setSharesCount] = useState<number>(2);
   const [fugaReason, setFugaReason] = useState<string>('');
@@ -253,11 +256,31 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
     return Math.round((currentPendingBalance / sharesCount) * 100) / 100;
   }, [selectedOrder, currentPendingBalance, sharesCount]);
 
+  // Cuenta Compartida (Cliente 1 y Saldo para Cliente 2)
+  const sharedClient1AmountNum = useMemo(() => {
+    if (!currentPendingBalance) return 0;
+    const parsed = parseFloat(sharedClient1Amount);
+    if (isNaN(parsed) || parsed <= 0) {
+      return Math.round((currentPendingBalance / 2) * 100) / 100;
+    }
+    return Math.min(currentPendingBalance, Math.round(parsed * 100) / 100);
+  }, [sharedClient1Amount, currentPendingBalance]);
+
+  const sharedClient2RemainingNum = useMemo(() => {
+    return Math.max(0, Math.round((currentPendingBalance - sharedClient1AmountNum) * 100) / 100);
+  }, [currentPendingBalance, sharedClient1AmountNum]);
+
   // Cálculos dinámicos en cobro
   const discountNum = Math.max(0, parseFloat(discount) || 0);
   const tipNum = Math.max(0, parseFloat(tip) || 0);
 
   const baseChargeAmount = useMemo(() => {
+    if (splitMode === 'cuenta_compartida') {
+      if (sharedStep === 'cliente1') {
+        return sharedClient1AmountNum;
+      }
+      return currentPendingBalance; // Para el segundo cliente cobra el saldo restante
+    }
     if (splitMode === 'comensal' && activeSelectedDiner) {
       return activeSelectedDiner.pending;
     }
@@ -265,7 +288,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       return equalShareAmount;
     }
     return currentPendingBalance;
-  }, [splitMode, activeSelectedDiner, equalShareAmount, currentPendingBalance]);
+  }, [splitMode, sharedStep, sharedClient1AmountNum, activeSelectedDiner, equalShareAmount, currentPendingBalance]);
 
   const finalChargeAmount = Math.max(0, baseChargeAmount - discountNum + tipNum);
   const cashGivenNum = parseFloat(cashGiven) || 0;
@@ -281,6 +304,9 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
     setCashGiven(balance.toString());
     setDiscount('0');
     setTip('0');
+    setSharedStep('cliente1');
+    setSharedClient1Amount((Math.round((balance / 2) * 100) / 100).toString());
+    setSharedSplitFeedback(null);
     if (order.comensales && order.comensales.length > 0) {
       setSelectedDinerId(order.comensales[0].id);
     } else {
@@ -367,6 +393,113 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       setSelectedOrder(null);
     } catch (err: any) {
       alert('Error al procesar cobro total: ' + err.message);
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  // Confirmar cobro CUENTA COMPARTIDA (Resta el pago del primer cliente y deja el saldo para el segundo cliente)
+  const handleConfirmSharedPayment = async () => {
+    if (isCashShiftClosed) {
+      alert('El turno de caja está cerrado. No se pueden procesar cobros hasta iniciar un nuevo turno.');
+      return;
+    }
+    if (!selectedOrder || !currentEmployee) return;
+    setIsProcessingPayment(true);
+
+    try {
+      sounds.playCashRegister();
+      haptics.success();
+
+      const isFirst = sharedStep === 'cliente1';
+      const chargeAmount = finalChargeAmount;
+      const clientLabel = isFirst ? 'Cliente 1 (Cuenta Compartida)' : 'Cliente 2 (Saldo Restante)';
+
+      const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
+        tipo: 'cuenta_compartida',
+        comensalNombre: clientLabel,
+        monto: chargeAmount,
+        subtotal: chargeAmount,
+        metodoPago: paymentMethod,
+        montoRecibido: paymentMethod === 'efectivo' ? cashGivenNum : chargeAmount,
+        vuelto: paymentMethod === 'efectivo' ? changeDue : 0,
+        cajeroNombre: currentEmployee.nombre,
+        descuento: discountNum,
+        propina: tipNum,
+        total: chargeAmount,
+        saldoPendiente: isFirst ? sharedClient2RemainingNum : 0,
+        fecha: new Date().toISOString()
+      };
+
+      const result = await registerPartialPayment(selectedOrder.id, partialPaymentPayload);
+
+      if (result.orderCompleted) {
+        confetti({
+          particleCount: 70,
+          spread: 80,
+          origin: { y: 0.7 }
+        });
+
+        if (selectedOrder.mesaId) {
+          const releaseResult = await releaseTableIfAllOrdersPaid(selectedOrder.mesaId, selectedOrder.id);
+          setTableReleaseFeedback({
+            mesaNumero: selectedOrder.mesaNumero || 0,
+            released: releaseResult.released,
+            pendingCount: releaseResult.pendingOrdersCount
+          });
+          setTimeout(() => setTableReleaseFeedback(null), 6000);
+        }
+
+        const paidOrderSnapshot: Order = {
+          ...selectedOrder,
+          estado: 'cobrado',
+          metodoPago: paymentMethod,
+          cajeroNombre: currentEmployee.nombre,
+          cobradoEn: new Date().toISOString()
+        };
+        setThermalPrintOrder(paidOrderSnapshot);
+        setSelectedOrder(null);
+        setSharedStep('cliente1');
+        setSharedSplitFeedback(null);
+      } else {
+        // First client payment registered: now the remainder is for Client 2
+        const updatedCobros = [
+          ...(selectedOrder.cobros || []),
+          { ...partialPaymentPayload, id: `p_${Date.now()}`, creadoEn: new Date().toISOString() }
+        ];
+
+        setSelectedOrder(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            saldoPendiente: result.saldoRestante,
+            montoCobradoAcumulado: (prev.montoCobradoAcumulado || 0) + chargeAmount,
+            cobros: updatedCobros
+          };
+        });
+
+        // Instant ticket offer for Client 1
+        const partialSnapshot: Order = {
+          ...selectedOrder,
+          subtotal: chargeAmount,
+          total: chargeAmount,
+          saldoPendiente: result.saldoRestante,
+          clienteNombre: 'Cliente 1 (Cuenta Compartida)',
+          metodoPago: paymentMethod,
+          cajeroNombre: currentEmployee.nombre,
+          cobradoEn: new Date().toISOString()
+        };
+        setThermalPrintOrder(partialSnapshot);
+
+        // Switch to Step 2: Cliente 2
+        setSharedStep('cliente2');
+        setCashGiven(result.saldoRestante.toString());
+        setDiscount('0');
+        setTip('0');
+        setSharedSplitFeedback(`✅ Pago de Cliente 1 registrado ($${chargeAmount.toFixed(2)}). Restan $${result.saldoRestante.toFixed(2)} para cobrar a Cliente 2.`);
+      }
+    } catch (err: any) {
+      alert('Error al registrar cobro de cuenta compartida: ' + err.message);
     } finally {
       setIsProcessingPayment(false);
     }
@@ -1548,14 +1681,14 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
             </div>
 
             {/* Split Mode Selector Tabs */}
-            <div className="grid grid-cols-4 gap-1 p-1 bg-neutral-100 rounded-2xl border border-neutral-200 text-xs font-bold">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 p-1 bg-neutral-100 rounded-2xl border border-neutral-200 text-xs font-bold">
               <button
                 type="button"
                 onClick={() => {
                   setSplitMode('total');
                   setCashGiven(currentPendingBalance.toString());
                 }}
-                className={`py-2 px-1 rounded-xl transition flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                className={`py-2 px-1 rounded-xl transition flex flex-col items-center justify-center gap-1 ${
                   splitMode === 'total' ? 'bg-white text-neutral-900 shadow-xs' : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
@@ -1566,16 +1699,33 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
               <button
                 type="button"
                 onClick={() => {
+                  setSplitMode('cuenta_compartida');
+                  setSharedStep('cliente1');
+                  const half = Math.round((currentPendingBalance / 2) * 100) / 100;
+                  setSharedClient1Amount(half.toString());
+                  setCashGiven(half.toString());
+                }}
+                className={`py-2 px-1 rounded-xl transition flex flex-col items-center justify-center gap-1 ${
+                  splitMode === 'cuenta_compartida' ? 'bg-white text-blue-900 shadow-xs ring-1 ring-blue-400/40' : 'text-neutral-600 hover:text-neutral-900'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5 text-blue-600" />
+                <span>Compartida</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   setSplitMode('comensal');
                   if (activeSelectedDiner) {
                     setCashGiven(activeSelectedDiner.pending.toString());
                   }
                 }}
-                className={`py-2 px-1 rounded-xl transition flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                className={`py-2 px-1 rounded-xl transition flex flex-col items-center justify-center gap-1 ${
                   splitMode === 'comensal' ? 'bg-white text-neutral-900 shadow-xs' : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
-                <Users className="w-3.5 h-3.5 text-blue-600" />
+                <Utensils className="w-3.5 h-3.5 text-indigo-600" />
                 <span>Por Comensal</span>
               </button>
 
@@ -1585,7 +1735,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                   setSplitMode('partes_iguales');
                   setCashGiven(equalShareAmount.toString());
                 }}
-                className={`py-2 px-1 rounded-xl transition flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                className={`py-2 px-1 rounded-xl transition flex flex-col items-center justify-center gap-1 ${
                   splitMode === 'partes_iguales' ? 'bg-white text-neutral-900 shadow-xs' : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
@@ -1596,7 +1746,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
               <button
                 type="button"
                 onClick={() => setSplitMode('fuga')}
-                className={`py-2 px-1 rounded-xl transition flex flex-col sm:flex-row items-center justify-center gap-1 ${
+                className={`py-2 px-1 rounded-xl transition flex flex-col items-center justify-center gap-1 sm:col-span-1 col-span-2 ${
                   splitMode === 'fuga' ? 'bg-red-50 text-red-900 shadow-xs border border-red-200' : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
@@ -1622,6 +1772,119 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                 <span className="font-black text-amber-700 text-sm ml-1.5">${currentPendingBalance.toFixed(2)}</span>
               </div>
             </div>
+
+            {/* MODE: CUENTA COMPARTIDA (CLIENTE 1 / CLIENTE 2) */}
+            {splitMode === 'cuenta_compartida' && (
+              <div className="space-y-3 p-3.5 bg-blue-50/60 rounded-2xl border border-blue-200">
+                <div className="flex items-center justify-between pb-2 border-b border-blue-200/60">
+                  <div className="flex items-center gap-2 text-blue-950 font-bold text-xs">
+                    <Users className="w-4 h-4 text-blue-600" />
+                    <span>Cuenta Compartida: Cliente 1 & Saldo para Cliente 2</span>
+                  </div>
+                  <span className={`text-[10px] font-black px-2.5 py-0.5 rounded-full ${
+                    sharedStep === 'cliente1' ? 'bg-blue-600 text-white' : 'bg-emerald-600 text-white'
+                  }`}>
+                    {sharedStep === 'cliente1' ? '1️⃣ Paso 1: Cobrar a Cliente 1' : '2️⃣ Paso 2: Cobrar Saldo a Cliente 2'}
+                  </span>
+                </div>
+
+                {sharedSplitFeedback && (
+                  <div className="p-2.5 rounded-xl bg-emerald-100 border border-emerald-300 text-emerald-900 text-xs font-semibold animate-in fade-in">
+                    {sharedSplitFeedback}
+                  </div>
+                )}
+
+                {sharedStep === 'cliente1' ? (
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <label className="block text-xs font-bold text-neutral-800">
+                        Monto a abonar por el Primer Cliente ($):
+                      </label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0.01"
+                        max={currentPendingBalance}
+                        value={sharedClient1Amount}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSharedClient1Amount(val);
+                          const p = parseFloat(val) || 0;
+                          setCashGiven(p > 0 ? p.toString() : '');
+                        }}
+                        className="w-full h-10 px-3 rounded-xl border border-blue-300 bg-white font-black text-sm text-neutral-900 outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                        placeholder="0.00"
+                      />
+
+                      {/* Presets rápidos */}
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const half = Math.round((currentPendingBalance / 2) * 100) / 100;
+                            setSharedClient1Amount(half.toString());
+                            setCashGiven(half.toString());
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-blue-200 text-blue-900 text-[11px] font-bold hover:bg-blue-100 cursor-pointer"
+                        >
+                          50% ($${(currentPendingBalance / 2).toFixed(2)})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const part = Math.round((currentPendingBalance * 0.6) * 100) / 100;
+                            setSharedClient1Amount(part.toString());
+                            setCashGiven(part.toString());
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-blue-200 text-blue-900 text-[11px] font-bold hover:bg-blue-100 cursor-pointer"
+                        >
+                          60% ($${(currentPendingBalance * 0.6).toFixed(2)})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const part = Math.round((currentPendingBalance * 0.7) * 100) / 100;
+                            setSharedClient1Amount(part.toString());
+                            setCashGiven(part.toString());
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-blue-200 text-blue-900 text-[11px] font-bold hover:bg-blue-100 cursor-pointer"
+                        >
+                          70% ($${(currentPendingBalance * 0.7).toFixed(2)})
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Desglose en vivo de resta para segundo cliente */}
+                    <div className="grid grid-cols-2 gap-2 p-2.5 bg-white rounded-xl border border-blue-200 text-xs font-mono">
+                      <div className="p-2 rounded-lg bg-blue-50 border border-blue-100">
+                        <span className="text-[10px] text-blue-700 font-bold block">1️⃣ Pago Cliente 1</span>
+                        <strong className="text-sm text-blue-950 font-black">${sharedClient1AmountNum.toFixed(2)}</strong>
+                      </div>
+                      <div className="p-2 rounded-lg bg-amber-50 border border-amber-200">
+                        <span className="text-[10px] text-amber-800 font-bold block">2️⃣ Saldo para Cliente 2</span>
+                        <strong className="text-sm text-amber-900 font-black">${sharedClient2RemainingNum.toFixed(2)}</strong>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-neutral-600 leading-snug">
+                      ✓ Al registrar el pago de Cliente 1, se resta automáticamente y el sistema dejará preparado el saldo restante ($${sharedClient2RemainingNum.toFixed(2)}) para cobrar al segundo cliente.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="p-3 bg-white rounded-xl border border-emerald-300 space-y-1 font-mono">
+                      <span className="text-[10px] text-emerald-700 font-bold block uppercase tracking-wider">
+                        Saldo Restante a Liquidar por Cliente 2:
+                      </span>
+                      <strong className="text-2xl font-black text-emerald-900">${currentPendingBalance.toFixed(2)}</strong>
+                      <p className="text-[11px] text-neutral-600 font-sans pt-1">
+                        El importe del primer cliente ya fue cobrado. Elige el método de pago y confirma para liquidar la comanda.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* MODE 1: POR COMENSAL */}
             {splitMode === 'comensal' && (
@@ -1931,6 +2194,8 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                     onClick={() => {
                       if (splitMode === 'total') {
                         handleConfirmTotalPayment();
+                      } else if (splitMode === 'cuenta_compartida') {
+                        handleConfirmSharedPayment();
                       } else if (splitMode === 'comensal') {
                         handleConfirmDinerPayment();
                       } else if (splitMode === 'partes_iguales') {
@@ -1946,11 +2211,15 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                     <CheckCircle2 className="w-5 h-5" />
                     {isProcessingPayment 
                       ? 'Procesando...' 
-                      : splitMode === 'comensal' 
-                        ? `Cobrar ${activeSelectedDiner?.nombre || 'Comensal'}` 
-                        : splitMode === 'partes_iguales' 
-                          ? 'Cobrar Cuota' 
-                          : 'Registrar Cobro Total'}
+                      : splitMode === 'cuenta_compartida'
+                        ? (sharedStep === 'cliente1'
+                            ? `Cobrar Cliente 1 ($${finalChargeAmount.toFixed(2)})`
+                            : `Cobrar Saldo Cliente 2 ($${finalChargeAmount.toFixed(2)}) y Finalizar`)
+                        : splitMode === 'comensal' 
+                          ? `Cobrar ${activeSelectedDiner?.nombre || 'Comensal'}` 
+                          : splitMode === 'partes_iguales' 
+                            ? 'Cobrar Cuota' 
+                            : 'Registrar Cobro Total'}
                   </button>
                 </div>
               </>

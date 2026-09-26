@@ -49,6 +49,7 @@ import {
   clearAllSecurityAlerts
 } from '../services/dataService';
 import { seedInitialDataIfEmpty } from '../utils/seed';
+import { setGlobalBusinessTaxConfig } from '../utils/taxCalculator';
 
 interface AuthContextType {
   // Estado de usuario y negocio
@@ -181,6 +182,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!activeTenantBusinessId) return;
     const unsubBiz = subscribeToBusiness(activeTenantBusinessId, (biz) => {
       setCurrentBusiness(biz);
+      if (biz) {
+        setGlobalBusinessTaxConfig(biz);
+      }
     });
     const unsubAlerts = subscribeToSecurityAlerts(activeTenantBusinessId, (alerts) => {
       setSecurityAlerts(alerts);

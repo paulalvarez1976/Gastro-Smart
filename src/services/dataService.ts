@@ -53,8 +53,16 @@ import {
   DeliveryCompanyConfig,
   InventoryItem,
   DishIngredient,
-  DeductedSupplyRecord
+  DeductedSupplyRecord,
+  Reservation,
+  ReservationStatus
 } from '../types';
+import {
+  calculateTaxBreakdown,
+  calculateLoyaltyPointsForAmount,
+  setGlobalBusinessTaxConfig,
+  getGlobalBusinessTaxConfig
+} from '../utils/taxCalculator';
 import { 
   getDailyStatDocId, 
   formatDateKey, 
@@ -77,7 +85,9 @@ export function subscribeToBusiness(businessId: string, callback: (data: Busines
   const docRef = doc(db, 'businesses', businessId);
   return onSnapshot(docRef, (snapshot) => {
     if (snapshot.exists()) {
-      callback({ id: snapshot.id, ...snapshot.data() } as Business);
+      const biz = { id: snapshot.id, ...snapshot.data() } as Business;
+      setGlobalBusinessTaxConfig(biz);
+      callback(biz);
     } else {
       callback(null);
     }
@@ -2331,16 +2341,18 @@ export async function updateOrderItemStatus(
 export async function registerPartialPayment(
   orderId: string,
   paymentData: {
-    tipo: 'comensal' | 'partes_iguales' | 'total' | 'general';
+    tipo: 'comensal' | 'partes_iguales' | 'cuenta_compartida' | 'total' | 'general';
     comensalId?: string;
     comensalNombre?: string;
     comensalNumero?: number;
     items?: OrderItem[];
     monto: number;
     subtotal?: number;
+    impuesto?: number;
     descuento?: number;
     propina?: number;
     total: number;
+    saldoPendiente?: number;
     metodoPago: string;
     montoRecibido?: number;
     vuelto?: number;
@@ -2612,9 +2624,14 @@ export interface CambiarEstadoPedidoOptions {
   vuelto?: number;
   cajeroNombre?: string;
   subtotal?: number;
+  impuesto?: number;
+  porcentajeImpuesto?: number;
+  impuestoIncluidoEnPrecio?: boolean;
   total?: number;
   descuento?: number;
   propina?: number;
+  clienteNombre?: string;
+  clienteTelefono?: string;
   montoCobradoAcumulado?: number;
   saldoPendiente?: number;
   estadoEntrega?: 'pendiente' | 'entregado';
@@ -2686,9 +2703,14 @@ export async function cambiarEstadoPedido(
   };
 
   if (options?.subtotal !== undefined) updatePayload.subtotal = options.subtotal;
+  if (options?.impuesto !== undefined) updatePayload.impuesto = options.impuesto;
+  if (options?.porcentajeImpuesto !== undefined) updatePayload.porcentajeImpuesto = options.porcentajeImpuesto;
+  if (options?.impuestoIncluidoEnPrecio !== undefined) updatePayload.impuestoIncluidoEnPrecio = options.impuestoIncluidoEnPrecio;
   if (options?.total !== undefined) updatePayload.total = options.total;
   if (options?.descuento !== undefined) updatePayload.descuento = options.descuento;
   if (options?.propina !== undefined) updatePayload.propina = options.propina;
+  if (options?.clienteNombre !== undefined) updatePayload.clienteNombre = options.clienteNombre;
+  if (options?.clienteTelefono !== undefined) updatePayload.clienteTelefono = options.clienteTelefono;
   if (options?.estadoEntrega !== undefined) updatePayload.estadoEntrega = options.estadoEntrega;
   if (options?.estadoPago !== undefined) updatePayload.estadoPago = options.estadoPago;
   if (options?.ruta !== undefined) updatePayload.ruta = options.ruta;
@@ -2779,6 +2801,26 @@ export async function cambiarEstadoPedido(
     if (options?.montoPagado !== undefined) updatePayload.montoPagado = options.montoPagado;
     if (options?.vuelto !== undefined) updatePayload.vuelto = options.vuelto;
     if (options?.cajeroNombre) updatePayload.cajeroNombre = options.cajeroNombre;
+
+    // Acumulación automática de puntos de fidelidad si hay cliente identificado por teléfono
+    const targetPhone = (options?.clienteTelefono || orderData.clienteTelefono || '').trim();
+    const targetClientName = (options?.clienteNombre || orderData.clienteNombre || '').trim();
+    const finalTotalOrder = options?.total !== undefined ? options.total : (orderData.total || 0);
+    if (targetPhone && finalTotalOrder > 0) {
+      try {
+        const loyaltyRes = await awardLoyaltyPointsToClient({
+          businessId: orderData.businessId || UNIQUE_BUSINESS_ID,
+          telefono: targetPhone,
+          nombre: targetClientName || 'Cliente',
+          montoGastado: finalTotalOrder
+        });
+        if (loyaltyRes.pointsAdded > 0) {
+          updatePayload.puntosFidelidadOtorgados = loyaltyRes.pointsAdded;
+        }
+      } catch (loyaltyErr) {
+        console.warn('Error acumulando puntos de fidelidad al cerrar pedido:', loyaltyErr);
+      }
+    }
 
     if (orderData.mesaId) {
       await releaseTableIfAllOrdersPaid(orderData.mesaId, orderId);
@@ -2937,8 +2979,10 @@ export function subscribeToClients(
   return onSnapshot(q, (snapshot) => {
     const list = snapshot.docs.map(d => ({
       id: d.id,
-      ...d.data()
+      ...d.data(),
+      puntosFidelidad: Number(d.data().puntosFidelidad) || 0
     } as Client));
+    list.sort((a, b) => (b.puntosFidelidad || 0) - (a.puntosFidelidad || 0));
     callback(list);
   }, (err) => {
     console.warn('Subscription warning (clients):', err);
@@ -5250,5 +5294,319 @@ export async function seedDefaultInventoryItemsAndLinkDishes(
   await batch.commit();
   return { createdCount, linkedDishesCount };
 }
+
+// ==========================================
+// CONFIGURACIÓN DEL NEGOCIO (IMPUESTOS, FIDELIZACIÓN, IDIOMA)
+// ==========================================
+
+export async function updateBusinessSettings(
+  businessId: string,
+  settings: Partial<Pick<Business, 'porcentajeImpuesto' | 'impuestoIncluidoEnPrecio' | 'fidelidadMontoPorPunto' | 'fidelidadPuntosPorUnidad' | 'idioma' | 'nombre' | 'telefono' | 'direccion'>>
+): Promise<void> {
+  const targetBizId = businessId || UNIQUE_BUSINESS_ID;
+  const ref = doc(db, 'businesses', targetBizId);
+  const snap = await getDoc(ref);
+  const cleaned = limpiarDatosUndefined({
+    ...settings,
+    appId: 'gastro_smart'
+  });
+  if (snap.exists()) {
+    await updateDoc(ref, cleaned);
+  } else {
+    await setDoc(ref, {
+      id: targetBizId,
+      nombre: settings.nombre || 'Gastro Smart',
+      rif_o_ruc: 'J-00000000-0',
+      plan: 'enterprise',
+      activo: true,
+      creadoEn: new Date().toISOString(),
+      ownerUid: targetBizId,
+      ...cleaned
+    }, { merge: true });
+  }
+  setGlobalBusinessTaxConfig(settings);
+}
+
+// ==========================================
+// PROGRAMA DE FIDELIZACIÓN / PUNTOS DE CLIENTES
+// ==========================================
+
+export function normalizePhoneForLoyalty(phone: string): string {
+  return (phone || '').replace(/[^\d+]/g, '').trim();
+}
+
+export async function findClientByPhone(
+  businessId: string,
+  phone: string
+): Promise<Client | null> {
+  const cleanPhone = normalizePhoneForLoyalty(phone);
+  if (!cleanPhone) return null;
+
+  const targetBizId = businessId || UNIQUE_BUSINESS_ID;
+  const snap = await getDocs(
+    query(
+      collection(db, 'clients'),
+      where('appId', '==', 'gastro_smart'),
+      where('businessId', '==', targetBizId)
+    )
+  );
+
+  for (const d of snap.docs) {
+    const data = d.data() as Client;
+    const docPhone = normalizePhoneForLoyalty(data.telefono || '');
+    if (docPhone && (docPhone === cleanPhone || docPhone.endsWith(cleanPhone) || cleanPhone.endsWith(docPhone))) {
+      return {
+        id: d.id,
+        ...data,
+        puntosFidelidad: Number(data.puntosFidelidad) || 0
+      };
+    }
+  }
+  return null;
+}
+
+export async function upsertClientLoyaltyProfile(params: {
+  businessId: string;
+  nombre: string;
+  telefono: string;
+  email?: string;
+  puntosFidelidad?: number;
+}): Promise<Client> {
+  const targetBizId = params.businessId || UNIQUE_BUSINESS_ID;
+  const cleanPhone = (params.telefono || '').trim();
+  const existing = await findClientByPhone(targetBizId, cleanPhone);
+  const nowIso = new Date().toISOString();
+
+  if (existing) {
+    const updatedPoints =
+      typeof params.puntosFidelidad === 'number'
+        ? Math.max(0, params.puntosFidelidad)
+        : existing.puntosFidelidad || 0;
+    await updateDoc(doc(db, 'clients', existing.id), limpiarDatosUndefined({
+      nombre: params.nombre.trim() || existing.nombre,
+      telefono: cleanPhone,
+      email: params.email !== undefined ? params.email.trim() : existing.email,
+      puntosFidelidad: updatedPoints,
+      appId: 'gastro_smart'
+    }));
+    return {
+      ...existing,
+      nombre: params.nombre.trim() || existing.nombre,
+      telefono: cleanPhone,
+      email: params.email !== undefined ? params.email.trim() : existing.email,
+      puntosFidelidad: updatedPoints
+    };
+  }
+
+  const newRef = doc(collection(db, 'clients'));
+  const newClient: Client = {
+    id: newRef.id,
+    businessId: targetBizId,
+    nombre: params.nombre.trim() || 'Cliente',
+    telefono: cleanPhone,
+    email: (params.email || '').trim(),
+    puntosFidelidad: Math.max(0, Number(params.puntosFidelidad) || 0),
+    totalGastadoAcumulado: 0,
+    creadoEn: nowIso
+  };
+  await setDoc(newRef, {
+    ...newClient,
+    appId: 'gastro_smart'
+  });
+  return newClient;
+}
+
+export async function awardLoyaltyPointsToClient(params: {
+  businessId: string;
+  telefono: string;
+  nombre?: string;
+  email?: string;
+  montoGastado: number;
+}): Promise<{ client: Client | null; pointsAdded: number; newBalance: number }> {
+  const cleanPhone = (params.telefono || '').trim();
+  if (!cleanPhone || params.montoGastado <= 0) {
+    return { client: null, pointsAdded: 0, newBalance: 0 };
+  }
+
+  const targetBizId = params.businessId || UNIQUE_BUSINESS_ID;
+  let bizData: Partial<Business> | null = null;
+  try {
+    const bizSnap = await getDoc(doc(db, 'businesses', targetBizId));
+    if (bizSnap.exists()) {
+      bizData = bizSnap.data() as Business;
+    }
+  } catch {
+    // fallback to defaults
+  }
+
+  const pointsAdded = calculateLoyaltyPointsForAmount(params.montoGastado, bizData);
+  const existing = await findClientByPhone(targetBizId, cleanPhone);
+  const nowIso = new Date().toISOString();
+
+  if (existing) {
+    const prevPoints = Number(existing.puntosFidelidad) || 0;
+    const newBalance = prevPoints + pointsAdded;
+    const prevSpent = Number(existing.totalGastadoAcumulado) || 0;
+    await updateDoc(doc(db, 'clients', existing.id), limpiarDatosUndefined({
+      nombre: params.nombre?.trim() || existing.nombre || 'Cliente',
+      telefono: existing.telefono || cleanPhone,
+      email: params.email?.trim() || existing.email || '',
+      puntosFidelidad: newBalance,
+      totalGastadoAcumulado: Number((prevSpent + params.montoGastado).toFixed(2)),
+      ultimaCompraEn: nowIso,
+      appId: 'gastro_smart'
+    }));
+    return {
+      client: { ...existing, puntosFidelidad: newBalance },
+      pointsAdded,
+      newBalance
+    };
+  } else {
+    const newRef = doc(collection(db, 'clients'));
+    const newClient: Client = {
+      id: newRef.id,
+      businessId: targetBizId,
+      nombre: params.nombre?.trim() || 'Cliente Frecuente',
+      telefono: cleanPhone,
+      email: params.email?.trim() || '',
+      puntosFidelidad: pointsAdded,
+      totalGastadoAcumulado: Number(params.montoGastado.toFixed(2)),
+      ultimaCompraEn: nowIso,
+      creadoEn: nowIso
+    };
+    await setDoc(newRef, {
+      ...newClient,
+      appId: 'gastro_smart'
+    });
+    return {
+      client: newClient,
+      pointsAdded,
+      newBalance: pointsAdded
+    };
+  }
+}
+
+// ==========================================
+// MENÚ DIGITAL PÚBLICO (SOLO LECTURA PARA QR EN MESA)
+// ==========================================
+
+export interface PublicMenuDish {
+  id: string;
+  nombre: string;
+  descripcion: string;
+  precio: number;
+  categoria: string;
+  disponible: boolean;
+  fotoUrl?: string | null;
+  imagenUrl?: string | null;
+  restaurantId: string;
+}
+
+/**
+ * Obtiene únicamente los campos públicos del menú (nombre, descripción, precio, categoría, foto, disponibilidad)
+ * para una sede específica sin exponer costos de elaboración ni datos internos del negocio.
+ */
+export async function fetchPublicMenuForRestaurant(
+  restaurantId: string,
+  businessIdHint?: string | null
+): Promise<PublicMenuDish[]> {
+  const snap = await getDocs(collection(db, 'menuItems'));
+  const allDocs = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }));
+
+  // Identificar el businessId de la sede a partir de los platos de esa sede o del hint
+  const inferredBizId =
+    businessIdHint ||
+    allDocs.find(item => item.restaurantId === restaurantId && item.businessId)?.businessId ||
+    null;
+
+  const filtered = allDocs.filter(item => {
+    if (item.eliminadoDeCarta === true) return false;
+    if (item.disponible === false) return false;
+    if (item.restaurantId === restaurantId) return true;
+    if (item.restaurantId === 'all') {
+      return inferredBizId ? item.businessId === inferredBizId : true;
+    }
+    return false;
+  });
+
+  return filtered.map(item => ({
+    id: item.id,
+    nombre: item.nombre || 'Plato',
+    descripcion: item.descripcion || '',
+    precio: Number(item.precio) || 0,
+    categoria: item.categoria || 'General',
+    disponible: item.disponible !== false,
+    fotoUrl: item.fotoUrl || item.imagenUrl || null,
+    imagenUrl: item.imagenUrl || item.fotoUrl || null,
+    restaurantId: item.restaurantId || restaurantId
+  }));
+}
+
+// ==========================================
+// MÓDULO DE RESERVAS DE MESAS (reservations)
+// ==========================================
+
+export function subscribeToReservations(
+  businessId: string | null,
+  callback: (reservations: Reservation[]) => void
+) {
+  const colRef = collection(db, 'reservations');
+  const q = businessId
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const list: Reservation[] = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      } as Reservation));
+      list.sort((a, b) => {
+        const dateA = `${a.fecha || ''}T${a.hora || '00:00'}`;
+        const dateB = `${b.fecha || ''}T${b.hora || '00:00'}`;
+        return dateA.localeCompare(dateB);
+      });
+      callback(list);
+    },
+    (err) => {
+      console.warn('Subscription warning (reservations):', err);
+    }
+  );
+}
+
+export async function createReservation(
+  data: Omit<Reservation, 'id' | 'appId' | 'creadoEn'>
+): Promise<string> {
+  const nowIso = new Date().toISOString();
+  const payload = limpiarDatosUndefined({
+    ...data,
+    businessId: data.businessId || UNIQUE_BUSINESS_ID,
+    cantidadPersonas: Math.max(1, Number(data.cantidadPersonas) || 2),
+    mesaAsignada: data.mesaAsignada ? Number(data.mesaAsignada) : null,
+    estado: data.estado || 'pendiente',
+    creadoEn: nowIso,
+    appId: 'gastro_smart' as const
+  });
+  const docRef = await addDoc(collection(db, 'reservations'), payload);
+  return docRef.id;
+}
+
+export async function updateReservationStatus(
+  reservationId: string,
+  estado: ReservationStatus,
+  mesaAsignada?: number | null
+): Promise<void> {
+  const payload: Record<string, any> = { estado };
+  if (mesaAsignada !== undefined) {
+    payload.mesaAsignada = mesaAsignada ? Number(mesaAsignada) : null;
+  }
+  await updateDoc(doc(db, 'reservations', reservationId), payload);
+}
+
+export async function deleteReservation(reservationId: string): Promise<void> {
+  await deleteDoc(doc(db, 'reservations', reservationId));
+}
+
 
 

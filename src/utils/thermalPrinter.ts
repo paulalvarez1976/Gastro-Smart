@@ -22,9 +22,16 @@ export interface ReceiptData {
     notas?: string;
   }>;
   subtotal: number;
+  baseImponible?: number;
+  impuesto?: number;
+  porcentajeImpuesto?: number;
+  impuestoIncluidoEnPrecio?: boolean;
   descuento?: number;
   propina?: number;
   total: number;
+  saldoPendiente?: number;
+  esPagoParcial?: boolean;
+  tituloComprobante?: string;
   metodoPago?: string;
   montoRecibido?: number;
   vuelto?: number;
@@ -98,7 +105,8 @@ export function generateEscPosBytes(data: ReceiptData, rollWidth: '58mm' | '80mm
     push(ESC_POS.DOUBLE_SIZE_OFF, ESC_POS.BOLD_OFF);
   } else {
     push(ESC_POS.BOLD_ON);
-    pushText(`COMPROBANTE DE PAGO`);
+    const title = data.tituloComprobante || (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO');
+    pushText(title);
     push(ESC_POS.BOLD_OFF);
   }
 
@@ -152,12 +160,22 @@ export function generateEscPosBytes(data: ReceiptData, rollWidth: '58mm' | '80mm
     if (data.descuento && data.descuento > 0) {
       pushText(`Descuento: -$${data.descuento.toFixed(2)}`);
     }
+    if (typeof data.impuesto === 'number' && data.impuesto > 0) {
+      const pctLabel = data.porcentajeImpuesto ? ` (${data.porcentajeImpuesto}%${data.impuestoIncluidoEnPrecio ? ' incl.' : ''})` : '';
+      pushText(`Impuesto${pctLabel}: $${data.impuesto.toFixed(2)}`);
+    }
     if (data.propina && data.propina > 0) {
       pushText(`Propina: +$${data.propina.toFixed(2)}`);
     }
     push(ESC_POS.BOLD_ON, ESC_POS.DOUBLE_SIZE_ON);
-    pushText(`TOTAL: $${data.total.toFixed(2)}`);
+    pushText(`${data.esPagoParcial ? 'PAGADO: ' : 'TOTAL: '}$${data.total.toFixed(2)}`);
     push(ESC_POS.DOUBLE_SIZE_OFF, ESC_POS.BOLD_OFF);
+
+    if (typeof data.saldoPendiente === 'number' && data.saldoPendiente > 0) {
+      push(ESC_POS.BOLD_ON);
+      pushText(`SALDO PENDIENTE: $${data.saldoPendiente.toFixed(2)}`);
+      push(ESC_POS.BOLD_OFF);
+    }
 
     if (data.metodoPago) {
       pushText(`Método: ${data.metodoPago.toUpperCase()}`);

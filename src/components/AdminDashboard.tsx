@@ -52,11 +52,12 @@ import {
   quickAdjustInventoryItemStock,
   subscribeToExpenses,
   subscribeToArchivedMenuItems,
+  subscribeToDailyStats,
   getOperationalDateString
 } from '../services/dataService';
-import { getDailyStatsForRange } from '../services/financialService';
 import { uploadDishPhoto, migrateBase64MenuItemsToStorage } from '../services/storageService';
 import { sounds } from '../utils/sound';
+import { setGlobalBusinessTaxConfig, calculateTaxBreakdown } from '../utils/taxCalculator';
 import { LogoUploader } from './LogoUploader';
 import { FinancialDashboard } from './FinancialDashboard';
 import { DeliveryReconciliation } from './DeliveryReconciliation';
@@ -122,7 +123,9 @@ import {
   PackageX,
   FileDown,
   ClipboardList,
-  Info
+  Info,
+  Building2,
+  Sparkles
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -158,8 +161,78 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   
-  // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión, inventario y pruebas)
-  const [activeTab, setActiveTab] = useState<'indicadores' | 'inventario' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'peligro'>('indicadores');
+  // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión, inventario, configuración de negocio y pruebas)
+  const [activeTab, setActiveTab] = useState<'indicadores' | 'inventario' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'negocio' | 'peligro'>('indicadores');
+
+  // Configuración del Negocio & Parámetros Fiscales (Impuestos, IVA, RIF, Fidelización, Datos Empresa)
+  const [bizForm, setBizForm] = useState({
+    nombre: currentBusiness?.nombre || '',
+    rif_o_ruc: currentBusiness?.rif_o_ruc || '',
+    email: currentBusiness?.email || currentBusiness?.ownerEmail || '',
+    telefono: currentBusiness?.telefono || '',
+    direccion: currentBusiness?.direccion || '',
+    logoUrl: currentBusiness?.logoUrl || '',
+    porcentajeImpuesto: currentBusiness?.porcentajeImpuesto ?? 0,
+    impuestoIncluidoEnPrecio: currentBusiness?.impuestoIncluidoEnPrecio !== false,
+    fidelidadMontoPorPunto: currentBusiness?.fidelidadMontoPorPunto ?? 10,
+    fidelidadPuntosPorUnidad: currentBusiness?.fidelidadPuntosPorUnidad ?? 1,
+    idioma: currentBusiness?.idioma || 'es'
+  });
+  const [isSavingBiz, setIsSavingBiz] = useState(false);
+  const [bizSavedToast, setBizSavedToast] = useState<string | null>(null);
+
+  // Sincronizar formulario de negocio con los datos reactivos de Firestore
+  useEffect(() => {
+    if (currentBusiness) {
+      setBizForm({
+        nombre: currentBusiness.nombre || '',
+        rif_o_ruc: currentBusiness.rif_o_ruc || '',
+        email: currentBusiness.email || currentBusiness.ownerEmail || '',
+        telefono: currentBusiness.telefono || '',
+        direccion: currentBusiness.direccion || '',
+        logoUrl: currentBusiness.logoUrl || '',
+        porcentajeImpuesto: typeof currentBusiness.porcentajeImpuesto === 'number' ? currentBusiness.porcentajeImpuesto : 0,
+        impuestoIncluidoEnPrecio: currentBusiness.impuestoIncluidoEnPrecio !== false,
+        fidelidadMontoPorPunto: typeof currentBusiness.fidelidadMontoPorPunto === 'number' ? currentBusiness.fidelidadMontoPorPunto : 10,
+        fidelidadPuntosPorUnidad: typeof currentBusiness.fidelidadPuntosPorUnidad === 'number' ? currentBusiness.fidelidadPuntosPorUnidad : 1,
+        idioma: currentBusiness.idioma || 'es'
+      });
+    }
+  }, [currentBusiness]);
+
+  const handleSaveBusinessSettings = async () => {
+    if (!bizForm.nombre.trim()) {
+      alert('El nombre de la empresa / negocio es requerido.');
+      return;
+    }
+    setIsSavingBiz(true);
+    try {
+      const payload = {
+        nombre: bizForm.nombre.trim(),
+        rif_o_ruc: bizForm.rif_o_ruc.trim(),
+        email: bizForm.email.trim(),
+        telefono: bizForm.telefono.trim(),
+        direccion: bizForm.direccion.trim(),
+        logoUrl: bizForm.logoUrl || null,
+        porcentajeImpuesto: Math.max(0, Number(bizForm.porcentajeImpuesto) || 0),
+        impuestoIncluidoEnPrecio: bizForm.impuestoIncluidoEnPrecio === true,
+        fidelidadMontoPorPunto: Math.max(1, Number(bizForm.fidelidadMontoPorPunto) || 10),
+        fidelidadPuntosPorUnidad: Math.max(0, Number(bizForm.fidelidadPuntosPorUnidad) || 1),
+        idioma: (bizForm.idioma || 'es') as 'es' | 'en'
+      };
+
+      await updateBusiness(activeBizId, payload);
+      setGlobalBusinessTaxConfig(payload);
+      sounds.playCashRegister();
+      setBizSavedToast('¡Configuración del negocio, porcentaje de impuesto y políticas fiscales guardadas con éxito!');
+      setTimeout(() => setBizSavedToast(null), 6000);
+    } catch (err: any) {
+      console.error('Error al guardar configuración del negocio:', err);
+      alert('Error al guardar la configuración: ' + (err.message || err));
+    } finally {
+      setIsSavingBiz(false);
+    }
+  };
 
   // Registros de Auditoría de Menú y Stock
   const [menuAuditLogs, setMenuAuditLogs] = useState<MenuAuditLog[]>([]);
@@ -201,17 +274,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     );
     const unsubArchived = subscribeToArchivedMenuItems(activeBizId, setArchivedMenuItems);
     const unsubExp = subscribeToExpenses('all', setAdminExpenses, activeBizId);
-    const now = new Date();
-    const start30 = new Date(now);
-    start30.setDate(now.getDate() - 31);
-    getDailyStatsForRange('all', getOperationalDateString(start30), getOperationalDateString(now), activeBizId)
-      .then(setAdminDailyStats)
-      .catch(() => {});
+    const unsubDaily = subscribeToDailyStats(activeBizId, null, setAdminDailyStats);
     return () => {
       if (unsub) unsub();
       if (unsubInv) unsubInv();
       if (unsubArchived) unsubArchived();
       if (unsubExp) unsubExp();
+      if (unsubDaily) unsubDaily();
     };
   }, [activeBizId, currentRestaurant?.id]);
 
@@ -1146,6 +1215,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             { id: 'empleados', label: 'Empleados & PINs', icon: Users },
             { id: 'menu', label: 'Menú & Platos', icon: UtensilsCrossed },
             { id: 'auditoria_menu', label: 'Auditoría de Menú & Stock', icon: ShieldCheck },
+            { id: 'negocio', label: 'Configuración del Negocio', icon: Building2 },
             { id: 'peligro', label: 'Seguridad & Mantenimiento', icon: ShieldCheck },
           ].map(tab => {
             const Icon = tab.icon;
@@ -1155,6 +1225,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             const isIndicator = tab.id === 'indicadores' || tab.id === 'historial_pedidos';
             const isInventory = tab.id === 'inventario';
             const isAudit = tab.id === 'auditoria_menu';
+            const isBiz = tab.id === 'negocio';
             const criticalSupplyCount = isInventory
               ? inventoryItems.filter(i => (Number(i.stockActual) || 0) <= (Number(i.stockMinimo) || 5)).length +
                 menuItems.filter(m => m.controlaStock && (m.stockActual ?? 0) <= (m.stockMinimo ?? 5)).length
@@ -1176,7 +1247,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             ? 'bg-blue-600 text-white shadow-xs' 
                             : isAudit
                               ? 'bg-purple-700 text-white shadow-xs'
-                              : 'bg-white text-neutral-900 shadow-xs' 
+                              : isBiz
+                                ? 'bg-indigo-600 text-white shadow-xs'
+                                : 'bg-white text-neutral-900 shadow-xs' 
                     : isIndicator
                       ? 'text-orange-700 hover:bg-orange-50 font-black'
                       : isInventory
@@ -1187,7 +1260,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             ? 'text-blue-700 hover:bg-blue-50 font-black'
                             : isAudit
                               ? 'text-purple-700 hover:bg-purple-50 font-bold'
-                              : 'text-neutral-600 hover:text-neutral-900'
+                              : isBiz
+                                ? 'text-indigo-700 hover:bg-indigo-50 font-bold'
+                                : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 ${
@@ -1203,7 +1278,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             ? 'text-blue-600' 
                             : isAudit
                               ? 'text-purple-600'
-                              : 'text-neutral-400'
+                              : isBiz
+                                ? 'text-indigo-600'
+                                : 'text-neutral-400'
                 }`} />
                 <span>{tab.label}</span>
                 {isInventory && criticalSupplyCount > 0 && (
@@ -2443,6 +2520,424 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 await seedSampleMenuAuditLogsIfEmpty(activeBizId, employees, menuItems);
               }}
             />
+          </div>
+        )}
+
+        {/* VIEW: Configuración del Negocio & Parámetros Fiscales */}
+        {activeTab === 'negocio' && (
+          <div className="max-w-4xl mx-auto space-y-6">
+            
+            {/* Header Card */}
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 shadow-2xs">
+                  <Building2 className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-black text-neutral-900">
+                      Configuración del Negocio & Parámetros Fiscales
+                    </h3>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      {currentBusiness?.suscripcion?.plan?.toUpperCase() || currentBusiness?.plan?.toUpperCase() || 'PRO'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-neutral-500 mt-0.5">
+                    Configura la razón social, porcentaje de impuesto (IVA/ITBIS/IGV), desglose de precios en tickets y programas de fidelidad.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={isSavingBiz}
+                onClick={handleSaveBusinessSettings}
+                className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md transition flex items-center gap-2 shrink-0 disabled:opacity-50 cursor-pointer"
+              >
+                {isSavingBiz ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Guardando...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Guardar Cambios</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* SECCIÓN 1: Configuración de Impuestos & Régimen Fiscal */}
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 shadow-xs space-y-5">
+              <div className="flex items-center gap-2.5 pb-3 border-b border-neutral-100">
+                <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
+                  <Percent className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm text-neutral-900">
+                    Régimen de Impuestos (IVA / ITBIS / IGV / Impoconsumo)
+                  </h4>
+                  <p className="text-[11px] text-neutral-500">
+                    Define la tasa porcentual impositiva y el comportamiento de cálculo en tickets y reportes
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* 1. Porcentaje de Impuesto */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-neutral-700">
+                    Porcentaje de Impuesto (%):
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      value={bizForm.porcentajeImpuesto}
+                      onChange={(e) => {
+                        const val = Math.max(0, Math.min(100, parseFloat(e.target.value) || 0));
+                        setBizForm(prev => ({ ...prev, porcentajeImpuesto: val }));
+                      }}
+                      className="w-full h-11 px-3.5 pr-10 rounded-2xl border border-neutral-300 font-mono font-black text-sm text-neutral-900 outline-none focus:ring-2 focus:ring-indigo-500 bg-neutral-50/50"
+                      placeholder="Ej: 12, 16, 18, 21"
+                    />
+                    <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-neutral-400 font-bold text-xs">
+                      %
+                    </div>
+                  </div>
+
+                  {/* Botones de Tasas Rápidas Habituales */}
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {[
+                      { label: '0% Exento', val: 0 },
+                      { label: '12% IVA', val: 12 },
+                      { label: '16% IVA (MX)', val: 16 },
+                      { label: '18% IGV (PE)', val: 18 },
+                      { label: '19% IVA (CO/CL)', val: 19 },
+                      { label: '21% IVA (ES/AR)', val: 21 },
+                    ].map(preset => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => {
+                          sounds.playKeypadClick();
+                          setBizForm(prev => ({ ...prev, porcentajeImpuesto: preset.val }));
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition border cursor-pointer ${
+                          bizForm.porcentajeImpuesto === preset.val
+                            ? 'bg-indigo-50 border-indigo-400 text-indigo-700 shadow-2xs'
+                            : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Modalidad de Impuesto Incluido vs Adicional */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-neutral-700">
+                    Modalidad de Aplicación en Menú y Precios:
+                  </label>
+                  
+                  <div className="grid grid-cols-1 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sounds.playKeypadClick();
+                        setBizForm(prev => ({ ...prev, impuestoIncluidoEnPrecio: true }));
+                      }}
+                      className={`p-3 rounded-2xl border text-left transition flex items-start gap-3 cursor-pointer ${
+                        bizForm.impuestoIncluidoEnPrecio === true
+                          ? 'bg-emerald-50/70 border-emerald-500 ring-2 ring-emerald-500/20 shadow-2xs'
+                          : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                        bizForm.impuestoIncluidoEnPrecio === true ? 'bg-emerald-600 text-white' : 'bg-neutral-300 text-transparent'
+                      }`}>
+                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-neutral-900">
+                          Impuesto Incluido en Precios de Carta
+                        </div>
+                        <p className="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                          El precio de los platos ya incluye el impuesto. En el ticket y reportes se desglosa la base imponible y el IVA contenido sin sumar extra al cliente.
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sounds.playKeypadClick();
+                        setBizForm(prev => ({ ...prev, impuestoIncluidoEnPrecio: false }));
+                      }}
+                      className={`p-3 rounded-2xl border text-left transition flex items-start gap-3 cursor-pointer ${
+                        bizForm.impuestoIncluidoEnPrecio === false
+                          ? 'bg-blue-50/70 border-blue-500 ring-2 ring-blue-500/20 shadow-2xs'
+                          : 'bg-neutral-50 border-neutral-200 text-neutral-600 hover:bg-neutral-100'
+                      }`}
+                    >
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                        bizForm.impuestoIncluidoEnPrecio === false ? 'bg-blue-600 text-white' : 'bg-neutral-300 text-transparent'
+                      }`}>
+                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-neutral-900">
+                          Impuesto NO Incluido (Se Suma Aparte al Subtotal)
+                        </div>
+                        <p className="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                          Los precios del menú son netos. El sistema calcula el porcentaje impositivo sobre el subtotal y lo suma al total facturado en cada comanda.
+                        </p>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Simulador en Vivo de Desglose Fiscal */}
+              {(() => {
+                const sampleBreakdown = calculateTaxBreakdown({
+                  subtotal: 100,
+                  porcentajeImpuesto: bizForm.porcentajeImpuesto,
+                  impuestoIncluidoEnPrecio: bizForm.impuestoIncluidoEnPrecio,
+                  propina: 10
+                });
+                return (
+                  <div className="p-4 rounded-2xl bg-neutral-900 text-white space-y-2.5 text-xs">
+                    <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
+                      <div className="flex items-center gap-2">
+                        <Calculator className="w-4 h-4 text-amber-400" />
+                        <span className="font-bold uppercase tracking-wider text-[11px] text-neutral-300">
+                          Simulador en Vivo · Ejemplo con Consumo de $100.00 + Propina de $10.00
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 text-amber-300 font-bold">
+                        Tasa: {bizForm.porcentajeImpuesto}% · {bizForm.impuestoIncluidoEnPrecio ? 'IVA Incluido' : 'IVA Adicional'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-neutral-300 font-mono">
+                      <div className="p-2.5 rounded-xl bg-neutral-800/80 border border-neutral-700/60">
+                        <span className="text-[10px] text-neutral-400 block">Subtotal Carta</span>
+                        <strong className="text-sm text-white">${sampleBreakdown.subtotal.toFixed(2)}</strong>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-neutral-800/80 border border-neutral-700/60">
+                        <span className="text-[10px] text-neutral-400 block">Base Imponible</span>
+                        <strong className="text-sm text-neutral-200">${sampleBreakdown.baseImponible.toFixed(2)}</strong>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-neutral-800/80 border border-neutral-700/60">
+                        <span className="text-[10px] text-neutral-400 block">
+                          Impuesto ({bizForm.porcentajeImpuesto}%)
+                        </span>
+                        <strong className="text-sm text-amber-300">
+                          {bizForm.impuestoIncluidoEnPrecio ? '(incl.) ' : '+'}${sampleBreakdown.impuesto.toFixed(2)}
+                        </strong>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-neutral-800/80 border border-neutral-700/60">
+                        <span className="text-[10px] text-neutral-400 block">Total a Pagar</span>
+                        <strong className="text-base text-emerald-400 font-black">${sampleBreakdown.total.toFixed(2)}</strong>
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-neutral-400 italic">
+                      {bizForm.impuestoIncluidoEnPrecio
+                        ? `✓ El cliente pagará $${sampleBreakdown.total.toFixed(2)}. El ticket térmico y los reportes PDF mostrarán claramente el desglose del IVA ($${sampleBreakdown.impuesto.toFixed(2)}) ya contenido en el precio.`
+                        : `✓ El cliente pagará $${sampleBreakdown.total.toFixed(2)} ($100 subtotal + $${sampleBreakdown.impuesto.toFixed(2)} de impuesto + $10 de propina).`}
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* SECCIÓN 2: Identidad Comercial y Datos Fiscales */}
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 shadow-xs space-y-4">
+              <div className="flex items-center gap-2.5 pb-3 border-b border-neutral-100">
+                <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center">
+                  <Store className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm text-neutral-900">
+                    Identidad Comercial & Datos Fiscales
+                  </h4>
+                  <p className="text-[11px] text-neutral-500">
+                    Información que aparece en encabezados de comandas, comprobantes y reportes
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Razón Social / Nombre Comercial *
+                  </label>
+                  <input
+                    type="text"
+                    value={bizForm.nombre}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, nombre: e.target.value }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Ej: Gastro Smart Restaurante C.A."
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    RIF / NIT / RUT / RFC / RUC
+                  </label>
+                  <input
+                    type="text"
+                    value={bizForm.rif_o_ruc}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, rif_o_ruc: e.target.value }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-900 outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    placeholder="Ej: J-12345678-9"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Correo Electrónico de Facturación / Contacto
+                  </label>
+                  <input
+                    type="email"
+                    value={bizForm.email}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, email: e.target.value }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium text-neutral-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="contacto@restaurante.com"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Teléfono Principal
+                  </label>
+                  <input
+                    type="text"
+                    value={bizForm.telefono}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, telefono: e.target.value }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium text-neutral-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="+58 412 1234567"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Dirección Fiscal / Sede Principal
+                  </label>
+                  <input
+                    type="text"
+                    value={bizForm.direccion}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, direccion: e.target.value }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-medium text-neutral-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Av. Principal, Edificio Central, Piso 1"
+                  />
+                </div>
+              </div>
+
+              {/* Logo Corporativo */}
+              <div className="pt-2 border-t border-neutral-100">
+                <label className="block text-xs font-bold text-neutral-700 mb-2">
+                  Logo Oficial del Negocio (Aparece en tickets térmicos y reportes):
+                </label>
+                <LogoUploader
+                  currentLogoUrl={bizForm.logoUrl}
+                  restaurantId={`biz_${activeBizId}`}
+                  onLogoUploaded={(url) => setBizForm(prev => ({ ...prev, logoUrl: url }))}
+                />
+              </div>
+            </div>
+
+            {/* SECCIÓN 3: Fidelización de Clientes & Preferencias */}
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 shadow-xs space-y-4">
+              <div className="flex items-center gap-2.5 pb-3 border-b border-neutral-100">
+                <div className="w-8 h-8 rounded-xl bg-purple-100 text-purple-600 flex items-center justify-center">
+                  <Sparkles className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-extrabold text-sm text-neutral-900">
+                    Programa de Puntos de Fidelidad & Idioma
+                  </h4>
+                  <p className="text-[11px] text-neutral-500">
+                    Otorga puntos automáticos a clientes registrados al cobrar comandas
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Monto Requerido por Tramo ($):
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={bizForm.fidelidadMontoPorPunto}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, fidelidadMontoPorPunto: Math.max(1, parseFloat(e.target.value) || 10) }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold font-mono outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-[10px] text-neutral-400 mt-0.5 block">Ej: $10 de consumo</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Puntos Otorgados por Tramo:
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={bizForm.fidelidadPuntosPorUnidad}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, fidelidadPuntosPorUnidad: Math.max(0, parseInt(e.target.value) || 1) }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold font-mono outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <span className="text-[10px] text-neutral-400 mt-0.5 block">Ej: 1 punto por cada $10</span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">
+                    Idioma Predeterminado:
+                  </label>
+                  <select
+                    value={bizForm.idioma}
+                    onChange={(e) => setBizForm(prev => ({ ...prev, idioma: e.target.value as 'es' | 'en' }))}
+                    className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                  >
+                    <option value="es">Español (ES/LATAM)</option>
+                    <option value="en">English (US/UK)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Save Action Button */}
+            <div className="flex justify-end pt-2 pb-6">
+              <button
+                type="button"
+                disabled={isSavingBiz}
+                onClick={handleSaveBusinessSettings}
+                className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs shadow-lg hover:shadow-indigo-500/20 active:scale-95 transition flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+              >
+                {isSavingBiz ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Guardando configuración...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Guardar Configuración del Negocio</span>
+                  </>
+                )}
+              </button>
+            </div>
+
           </div>
         )}
 

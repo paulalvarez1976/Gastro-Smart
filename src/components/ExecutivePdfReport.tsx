@@ -14,6 +14,7 @@ import {
   DailyStat, 
   Restaurant 
 } from '../types';
+import { calculateTaxBreakdown, getGlobalBusinessTaxConfig } from '../utils/taxCalculator';
 import { 
   Printer, 
   X, 
@@ -23,7 +24,8 @@ import {
   TrendingUp, 
   TrendingDown, 
   FileText,
-  DollarSign
+  DollarSign,
+  Percent
 } from 'lucide-react';
 
 interface ExecutivePdfReportProps {
@@ -237,6 +239,43 @@ export const ExecutivePdfReport: React.FC<ExecutivePdfReportProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Desglose Fiscal & Impuestos (IVA / Base Imponible) */}
+          {(() => {
+            const taxConfig = getGlobalBusinessTaxConfig();
+            const taxBreakdown = calculateTaxBreakdown({
+              subtotal: summary.ventasTotales.actual,
+              porcentajeImpuesto: taxConfig.porcentajeImpuesto,
+              impuestoIncluidoEnPrecio: taxConfig.impuestoIncluidoEnPrecio
+            });
+            return (
+              <div className="border border-black p-4 text-xs space-y-2 bg-neutral-50">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                    <Percent className="w-3.5 h-3.5 text-neutral-700" />
+                    Estructura Fiscal & Desglose de Impuestos
+                  </h4>
+                  <span className="font-mono font-bold text-[10px] text-neutral-600">
+                    Tasa Configurada: {taxConfig.porcentajeImpuesto}% ({taxConfig.impuestoIncluidoEnPrecio ? 'IVA Incluido' : 'IVA Adicional'})
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-4 text-neutral-800 pt-1 border-t border-neutral-300">
+                  <div>
+                    <span className="text-neutral-500 block">Base Imponible Neta:</span>
+                    <strong className="text-sm font-mono">${taxBreakdown.baseImponible.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500 block">Impuesto / IVA Estimado:</span>
+                    <strong className="text-sm font-mono text-neutral-900">${taxBreakdown.impuesto.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
+                  </div>
+                  <div>
+                    <span className="text-neutral-500 block">Total Facturado Bruto:</span>
+                    <strong className="text-sm font-mono text-emerald-700">${summary.ventasTotales.actual.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </section>
 
         {/* ==================== PÁGINA 2: VENTAS VS GASTOS ==================== */}

@@ -17,6 +17,8 @@ import { downloadReceiptPdf } from '../utils/pdfTicket';
 import { openWhatsAppReceipt, sanitizeWhatsAppPhone } from '../utils/whatsappTicket';
 import { Order, OrderItem } from '../types';
 import { haptics } from '../utils/haptics';
+import { getOrderTaxBreakdown } from '../utils/taxCalculator';
+import { useAuth } from '../context/AuthContext';
 
 export interface ThermalReceiptModalProps {
   data?: ReceiptData;
@@ -47,6 +49,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
   itemsOverride,
   onClose,
 }) => {
+  const { currentBusiness } = useAuth();
   const [rollWidth, setRollWidth] = useState<'58mm' | '80mm'>('58mm');
   const [isBluetoothPrinting, setIsBluetoothPrinting] = useState(false);
   const [btStatus, setBtStatus] = useState<{ success?: boolean; error?: string } | null>(null);
@@ -81,11 +84,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
         notas: item.notas || undefined,
       }));
 
-      const calculatedSubtotal = mappedItems.reduce((acc, it) => acc + it.subtotal, 0);
-      const subtotalVal = order.subtotal ?? (calculatedSubtotal > 0 ? calculatedSubtotal : (order.total || 0));
-      const discountVal = order.descuento || 0;
-      const tipVal = order.propina || 0;
-      const totalVal = order.total ?? Math.max(0, subtotalVal - discountVal + tipVal);
+      const taxBreakdown = getOrderTaxBreakdown(order, currentBusiness);
 
       // Clean order number for display
       let displayOrderNum: string | number = 1;
@@ -108,10 +107,13 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
         cajeroNombre: (order as any).cajeroNombre,
         fecha: order.creadoEn || new Date().toISOString(),
         items: mappedItems,
-        subtotal: subtotalVal,
-        descuento: discountVal > 0 ? discountVal : undefined,
-        propina: tipVal > 0 ? tipVal : undefined,
-        total: totalVal,
+        subtotal: taxBreakdown.subtotal,
+        descuento: taxBreakdown.descuento > 0 ? taxBreakdown.descuento : undefined,
+        impuesto: taxBreakdown.impuesto > 0 ? taxBreakdown.impuesto : undefined,
+        porcentajeImpuesto: taxBreakdown.porcentajeImpuesto > 0 ? taxBreakdown.porcentajeImpuesto : undefined,
+        impuestoIncluidoEnPrecio: taxBreakdown.impuestoIncluidoEnPrecio,
+        propina: taxBreakdown.propina > 0 ? taxBreakdown.propina : undefined,
+        total: taxBreakdown.total,
         metodoPago: order.metodoPago || undefined,
         montoRecibido: (order as any).montoRecibido,
         vuelto: order.vuelto,
@@ -145,7 +147,8 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
     initialPhone, 
     mode, 
     roundNumber, 
-    itemsOverride
+    itemsOverride,
+    currentBusiness
   ]);
 
   // Standard browser print
@@ -326,7 +329,9 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
                 <span className={`inline-block px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-black uppercase ${
                   data.isKitchenTicket ? 'bg-black text-white' : 'bg-neutral-200 text-neutral-800'
                 }`}>
-                  {data.isKitchenTicket ? '*** COMANDA COCINA ***' : 'COMPROBANTE DE PAGO'}
+                  {data.isKitchenTicket 
+                    ? '*** COMANDA COCINA ***' 
+                    : (data.tituloComprobante || (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO'))}
                 </span>
               </div>
             </div>
@@ -385,6 +390,18 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
                     <span>-${data.descuento.toFixed(2)}</span>
                   </div>
                 ) : null}
+                {typeof data.impuesto === 'number' && data.impuesto > 0 ? (
+                  <div className="flex justify-between text-neutral-600">
+                    <span>
+                      {data.porcentajeImpuesto
+                        ? `Impuesto (${data.porcentajeImpuesto}%${data.impuestoIncluidoEnPrecio ? ' incl.' : ''}):`
+                        : 'Impuesto:'}
+                    </span>
+                    <span>
+                      {data.impuestoIncluidoEnPrecio ? '(incl.) ' : '+'}${data.impuesto.toFixed(2)}
+                    </span>
+                  </div>
+                ) : null}
                 {data.propina && data.propina > 0 ? (
                   <div className="flex justify-between text-blue-700 font-medium">
                     <span>Propina:</span>
@@ -392,9 +409,15 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
                   </div>
                 ) : null}
                 <div className="flex justify-between font-black text-xs sm:text-sm text-black pt-1 border-t border-neutral-300">
-                  <span>TOTAL:</span>
+                  <span>{data.esPagoParcial ? 'PAGADO:' : 'TOTAL:'}</span>
                   <span>${data.total.toFixed(2)}</span>
                 </div>
+                {typeof data.saldoPendiente === 'number' && data.saldoPendiente > 0 ? (
+                  <div className="flex justify-between text-amber-700 font-bold text-[10px]">
+                    <span>Saldo Pendiente:</span>
+                    <span>${data.saldoPendiente.toFixed(2)}</span>
+                  </div>
+                ) : null}
 
                 {data.metodoPago && (
                   <div className="flex justify-between text-neutral-600 text-[9px] pt-1">

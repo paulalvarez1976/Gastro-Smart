@@ -48,6 +48,10 @@ export function formatWhatsAppTicketMessage(data: ReceiptData): string {
     if (data.descuento && data.descuento > 0) {
       lines.push(`*Descuento:* -$${data.descuento.toFixed(2)}`);
     }
+    if (typeof data.impuesto === 'number' && data.impuesto > 0) {
+      const taxLabel = data.porcentajeImpuesto ? `IVA/Impuesto (${data.porcentajeImpuesto}%${data.impuestoIncluidoEnPrecio ? ' incl.' : ''})` : 'IVA/Impuesto';
+      lines.push(`*${taxLabel}:* ${data.impuestoIncluidoEnPrecio ? '(incl.) ' : '+'}$${data.impuesto.toFixed(2)}`);
+    }
     if (data.propina && data.propina > 0) {
       lines.push(`*Propina:* +$${data.propina.toFixed(2)}`);
     }

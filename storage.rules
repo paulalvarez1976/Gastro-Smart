@@ -1,28 +1,69 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    
+
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isImageBelow5MB() {
-      return request.resource.size < 5 * 1024 * 1024
-        && request.resource.contentType.matches('image/(jpeg|png|webp|jpg)');
+    function userExists() {
+      return firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
     }
 
-    // Carpeta de fotos de menú de platos por restaurante
-    match /restaurants/{restaurantId}/menu/{fileName} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && isImageBelow5MB();
-      allow delete: if isAuthenticated();
+    function getUserData() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
     }
 
-    // Carpeta de comprobantes de gastos por restaurante
-    match /restaurants/{restaurantId}/receipts/{fileName} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated() && isImageBelow5MB();
-      allow delete: if isAuthenticated();
+    function getUserBusinessId() {
+      return userExists() && ('businessId' in getUserData()) ? getUserData().businessId : null;
+    }
+
+    function isBusinessOwner(businessId) {
+      return firestore.exists(/databases/(default)/documents/businesses/$(businessId)) &&
+             ('ownerUid' in firestore.get(/databases/(default)/documents/businesses/$(businessId)).data) &&
+             firestore.get(/databases/(default)/documents/businesses/$(businessId)).data.ownerUid == request.auth.uid;
+    }
+
+    function isUserInBusiness(businessId) {
+      return isAuthenticated() && businessId != null && (
+        getUserBusinessId() == businessId ||
+        isBusinessOwner(businessId) ||
+        request.auth.uid == businessId
+      );
+    }
+
+    // Verifica que el restaurantId de la ruta pertenezca a uno de los restaurantes del negocio del usuario autenticado
+    function belongsToUserRestaurant(restaurantId) {
+      return isAuthenticated() &&
+             firestore.exists(/databases/(default)/documents/restaurants/$(restaurantId)) &&
+             isUserInBusiness(firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)).data.businessId);
+    }
+
+    // Fotos de platos e inventario: restaurants/{restaurantId}/dishes/{dishId}/{fileName}
+    match /restaurants/{restaurantId}/dishes/{dishId}/{fileName} {
+      allow read: if belongsToUserRestaurant(restaurantId);
+      allow write: if belongsToUserRestaurant(restaurantId)
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if belongsToUserRestaurant(restaurantId);
+    }
+
+    // Logos de restaurantes: restaurants/{restaurantId}/branding/{fileName}
+    match /restaurants/{restaurantId}/branding/{fileName} {
+      allow read: if belongsToUserRestaurant(restaurantId);
+      allow write: if belongsToUserRestaurant(restaurantId)
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|png|webp|svg\\+xml)');
+      allow delete: if belongsToUserRestaurant(restaurantId);
+    }
+
+    // Regla general para cualquier otro archivo bajo restaurants/{restaurantId}/
+    match /restaurants/{restaurantId}/{allPaths=**} {
+      allow read: if belongsToUserRestaurant(restaurantId);
+      allow write: if belongsToUserRestaurant(restaurantId)
+                   && request.resource.size < 5 * 1024 * 1024
+                   && request.resource.contentType.matches('image/(jpeg|png|webp|svg\\+xml)');
+      allow delete: if belongsToUserRestaurant(restaurantId);
     }
   }
 }

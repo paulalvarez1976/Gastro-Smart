@@ -51,7 +51,9 @@ export function downloadReceiptPdf(data: ReceiptData, rollWidth: '58mm' | '80mm'
   y += 1;
   doc.setFont('courier', 'bold');
   doc.setFontSize(9);
-  const bannerText = data.isKitchenTicket ? '*** COMANDA COCINA ***' : 'COMPROBANTE DE PAGO';
+  const bannerText = data.isKitchenTicket 
+    ? '*** COMANDA COCINA ***' 
+    : (data.tituloComprobante || (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO'));
   doc.text(bannerText, centerX, y, { align: 'center' });
   y += 4;
 
@@ -147,6 +149,15 @@ export function downloadReceiptPdf(data: ReceiptData, rollWidth: '58mm' | '80mm'
       y += 3.5;
     }
 
+    if (typeof data.impuesto === 'number' && data.impuesto > 0) {
+      const taxLabel = data.porcentajeImpuesto
+        ? `Impuesto (${data.porcentajeImpuesto}%${data.impuestoIncluidoEnPrecio ? ' incl.' : ''}):`
+        : 'Impuesto:';
+      doc.text(taxLabel, margin, y);
+      doc.text(`${data.impuestoIncluidoEnPrecio ? '' : '+'}$${data.impuesto.toFixed(2)}`, widthMm - margin, y, { align: 'right' });
+      y += 3.5;
+    }
+
     if (data.propina && data.propina > 0) {
       doc.text('Propina:', margin, y);
       doc.text(`+$${data.propina.toFixed(2)}`, widthMm - margin, y, { align: 'right' });
@@ -157,9 +168,18 @@ export function downloadReceiptPdf(data: ReceiptData, rollWidth: '58mm' | '80mm'
     y += 0.5;
     doc.setFont('courier', 'bold');
     doc.setFontSize(10);
-    doc.text('TOTAL:', margin, y);
+    const totalLabel = data.esPagoParcial ? 'PAGADO:' : 'TOTAL:';
+    doc.text(totalLabel, margin, y);
     doc.text(`$${data.total.toFixed(2)}`, widthMm - margin, y, { align: 'right' });
     y += 4.5;
+
+    if (typeof data.saldoPendiente === 'number' && data.saldoPendiente > 0) {
+      doc.setFont('courier', 'bold');
+      doc.setFontSize(8.5);
+      doc.text('SALDO PENDIENTE:', margin, y);
+      doc.text(`$${data.saldoPendiente.toFixed(2)}`, widthMm - margin, y, { align: 'right' });
+      y += 4;
+    }
 
     doc.setFont('courier', 'normal');
     doc.setFontSize(8);

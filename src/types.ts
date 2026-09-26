@@ -35,6 +35,11 @@ export interface Business {
   direccion?: string;
   codigoSede?: string;
   modoPruebas?: boolean;
+  porcentajeImpuesto?: number; // ej: 12 para 12% (IVA/ITBIS/IGV)
+  impuestoIncluidoEnPrecio?: boolean; // true si el precio del menú ya incluye impuesto; false si se suma aparte
+  fidelidadMontoPorPunto?: number; // ej: 10 para otorgar puntos por cada $10 gastados
+  fidelidadPuntosPorUnidad?: number; // ej: 1 punto por cada unidad/tramo configurado
+  idioma?: 'es' | 'en'; // Idioma de la interfaz ('es' por defecto)
 }
 
 export interface UserAccount {
@@ -206,7 +211,29 @@ export interface Client {
   telefono?: string;
   email?: string;
   direccion?: string;
+  puntosFidelidad?: number;
+  totalGastadoAcumulado?: number;
+  ultimaCompraEn?: string;
   creadoEn?: string;
+}
+
+export type ReservationStatus = 'pendiente' | 'confirmada' | 'cancelada' | 'completada';
+
+export interface Reservation {
+  id: string;
+  businessId?: string;
+  restaurantId: string;
+  restaurantNombre?: string;
+  nombreCliente: string;
+  telefono: string;
+  fecha: string; // YYYY-MM-DD
+  hora: string; // HH:mm
+  cantidadPersonas: number;
+  mesaAsignada?: number | null;
+  estado: ReservationStatus;
+  notas?: string;
+  creadoEn?: string;
+  appId?: 'gastro_smart';
 }
 
 export interface Table {
@@ -275,7 +302,7 @@ export interface OrderDiner {
 
 export interface PartialPayment {
   id: string;
-  tipo: 'comensal' | 'partes_iguales' | 'total' | 'general';
+  tipo: 'comensal' | 'partes_iguales' | 'cuenta_compartida' | 'total' | 'general';
   comensalId?: string;
   comensalNombre?: string;
   comensalNumero?: number;
@@ -283,9 +310,11 @@ export interface PartialPayment {
   monto: number;
   montoEntregado?: number;
   subtotal?: number;
+  impuesto?: number;
   descuento?: number;
   propina?: number;
   total: number;
+  saldoPendiente?: number;
   metodoPago: 'efectivo' | 'tarjeta' | 'transferencia' | string;
   montoRecibido?: number;
   vuelto?: number;
@@ -335,9 +364,13 @@ export interface Order {
   empresaDelivery?: DeliveryCompany | string | null;
   items: OrderItem[];
   subtotal?: number;
+  impuesto?: number | null;
+  porcentajeImpuesto?: number | null;
+  impuestoIncluidoEnPrecio?: boolean | null;
   descuento?: number | null;
   propina?: number | null;
   total: number;
+  puntosFidelidadOtorgados?: number;
   estado: OrderStatus;
   ruta?: OrderRoute; // express (sin cocina), cocina (preparación estándar), mixto (ambos)
   estadoPago?: 'pendiente' | 'parcial' | 'cobrado'; // Control independiente de cobro vs entrega
