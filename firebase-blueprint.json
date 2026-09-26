@@ -42,6 +42,7 @@
         "nombre": { "type": "string" },
         "direccion": { "type": "string" },
         "telefono": { "type": "string" },
+        "codigoSede": { "type": "string" },
         "numeroMesas": { "type": "number" },
         "activo": { "type": "boolean" },
         "appId": { "type": "string", "enum": ["gastro_smart"] },
@@ -252,6 +253,44 @@
         "appId": { "type": "string", "enum": ["gastro_smart"] }
       },
       "required": ["businessId", "platoId", "platoNombre", "tipoAccion", "detalles", "empleadoNombre", "fecha", "appId"]
+    },
+    "FcmToken": {
+      "title": "FcmToken",
+      "description": "Tokens de dispositivos registrados para notificaciones push nativas mediante Firebase Cloud Messaging",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "token": { "type": "string" },
+        "isNativeFcmToken": { "type": "boolean" },
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" },
+        "userAgent": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["token", "businessId", "userRole", "updatedAt", "appId"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "Insumos y materias primas del inventario con descuento automático al entregar pedidos y umbral crítico",
+      "type": "object",
+      "properties": {
+        "businessId": { "type": "string" },
+        "restaurantId": { "type": "string" },
+        "nombre": { "type": "string" },
+        "categoria": { "type": "string" },
+        "stockActual": { "type": "number" },
+        "stockMinimo": { "type": "number" },
+        "unidadMedida": { "type": "string" },
+        "costoUnitario": { "type": "number" },
+        "proveedor": { "type": "string" },
+        "ultimaActualizacion": { "type": "string" },
+        "appId": { "type": "string", "enum": ["gastro_smart"] }
+      },
+      "required": ["businessId", "restaurantId", "nombre", "stockActual", "stockMinimo", "unidadMedida", "appId"]
     }
   },
   "firestore": {
@@ -314,6 +353,14 @@
     "/menuAuditLogs/{logId}": {
       "schema": "MenuAuditLog",
       "description": "Historial de auditoría de cambios de menú y stock por empleado"
+    },
+    "/fcmTokens/{tokenId}": {
+      "schema": "FcmToken",
+      "description": "Tokens de dispositivos registrados para notificaciones push en segundo plano (FCM)"
+    },
+    "/inventoryItems/{itemId}": {
+      "schema": "InventoryItem",
+      "description": "Insumos y materias primas del inventario"
     }
   }
 }

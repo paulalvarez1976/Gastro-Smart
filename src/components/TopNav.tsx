@@ -25,7 +25,8 @@ import {
   Flame,
   ArrowRight,
   Pause,
-  Play
+  Play,
+  BellRing
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
 import { getShiftSessionSummary, pauseShift, resumeShift } from '../services/dataService';
@@ -33,6 +34,8 @@ import { PWAInstallButton } from './PWAInstallButton';
 import { KioskControls } from './KioskControls';
 import { DeviceBadge } from './DeviceBadge';
 import { AdminMessageCenterModal } from './AdminMessageCenterModal';
+import { PushNotificationModal } from './PushNotificationModal';
+import { pushNotificationService } from '../services/pushNotificationService';
 
 interface TopNavProps {
   orders?: Order[];
@@ -91,12 +94,21 @@ export const TopNav: React.FC<TopNavProps> = ({
   } | null>(null);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showAlertsModal, setShowAlertsModal] = useState(false);
+  const [showPushModal, setShowPushModal] = useState(false);
+  const [pushPermission, setPushPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    pushNotificationService.getPermissionStatus()
+  );
+  const [pushEnabled, setPushEnabled] = useState<boolean>(() =>
+    pushNotificationService.getPreferences().enabled
+  );
+  const [pushBannerDismissed, setPushBannerDismissed] = useState<boolean>(false);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(() => sounds.isMuted());
   const [activeToast, setActiveToast] = useState<NotificationToast | null>(null);
 
   // Refs para rastrear cambios en tiempo real y evitar sonidos en la carga inicial
   const isInitialMount = useRef(true);
   const prevReadyOrdersMapRef = useRef<Map<string, string>>(new Map());
+  const prevOrderRoundsCountRef = useRef<Map<string, number>>(new Map());
   const prevSecurityAlertsCountRef = useRef<number>(0);
 
   // Toggle de Sonido
@@ -196,21 +208,83 @@ export const TopNav: React.FC<TopNavProps> = ({
 
   const unreadAlerts = securityAlerts.filter(a => !a.leido);
 
-  // ================= NOTIFICACIONES SONORAS EN TIEMPO REAL =================
-  // Sincronización de alarmas sonoras con Regla 1 (Cocina lista -> Mesero + Mostrador) y Regla 2 (100% mostrador -> Solo Mostrador)
+  // ================= NOTIFICACIONES SONORAS Y PUSH NATIVAS (FCM) EN TIEMPO REAL =================
+  // Registrar Service Worker FCM y sincronizar token automáticamente si el permiso ya fue otorgado
   useEffect(() => {
-    // Cocina gestiona sus alarmas en KitchenDisplay; no duplicar en TopNav
-    if (isCocina) {
-      sounds.stopAllAlarms();
-      return;
-    }
+    const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || currentBusiness?.id;
+    const activeUserId = currentUserAccount?.uid || currentEmployee?.id;
+    const activeUserName = currentUserAccount?.nombre || currentEmployee?.nombre;
+    const activeRole = currentUserAccount?.rol || currentEmployee?.puesto;
 
+    pushNotificationService.registerServiceWorker();
+
+    if (pushNotificationService.getPermissionStatus() === 'granted' && activeBizId) {
+      pushNotificationService.requestPermissionAndRegister({
+        businessId: activeBizId,
+        restaurantId: currentRestaurant?.id || null,
+        userId: activeUserId,
+        userName: activeUserName,
+        userRole: activeRole
+      }).then((res) => {
+        setPushPermission(res.permission);
+      });
+    }
+  }, [
+    currentUserAccount?.uid,
+    currentUserAccount?.businessId,
+    currentEmployee?.id,
+    currentEmployee?.businessId,
+    currentBusiness?.id,
+    currentRestaurant?.id
+  ]);
+
+  // Escuchar clics sobre notificaciones nativas del sistema operativo (Service Worker -> App)
+  useEffect(() => {
+    const handlePushClick = (e: Event) => {
+      const customEvt = e as CustomEvent<{ orderId?: string; notifType?: string }>;
+      const orderId = customEvt.detail?.orderId;
+      if (orderId) {
+        sounds.stopRepeatingAlarm('ord-ready-' + orderId);
+        sounds.stopRepeatingAlarm('ord-mostrador-' + orderId);
+        sounds.stopRepeatingAlarm('ord-rej-' + orderId);
+        const found = orders.find((o) => o.id === orderId);
+        if (found && onOrderClick) {
+          onOrderClick(found);
+        }
+      }
+    };
+
+    const handlePushDismiss = (e: Event) => {
+      const customEvt = e as CustomEvent<{ orderId?: string }>;
+      const orderId = customEvt.detail?.orderId;
+      if (orderId) {
+        sounds.stopRepeatingAlarm('ord-ready-' + orderId);
+        sounds.stopRepeatingAlarm('ord-mostrador-' + orderId);
+        sounds.stopRepeatingAlarm('ord-rej-' + orderId);
+      }
+    };
+
+    window.addEventListener('gastro-push-order-click', handlePushClick);
+    window.addEventListener('gastro-push-order-dismiss', handlePushDismiss);
+    return () => {
+      window.removeEventListener('gastro-push-order-click', handlePushClick);
+      window.removeEventListener('gastro-push-order-dismiss', handlePushDismiss);
+    };
+  }, [orders, onOrderClick]);
+
+  // Sincronización de alarmas sonoras y Notificaciones Push Nativas (FCM) en 2do plano
+  useEffect(() => {
     const currentMap = new Map<string, string>();
+    const currentRoundsMap = new Map<string, number>();
     const activeAlarmKeys = new Set<string>();
 
     orders.forEach(o => {
       if (o.restaurantId !== currentRestaurant?.id) return;
       currentMap.set(o.id, o.estado);
+      currentRoundsMap.set(o.id, o.rondas?.length || 1);
+
+      // Cocina gestiona sus alarmas sonoras continuas en KitchenDisplay
+      if (isCocina) return;
 
       const restUsesKitchen = currentRestaurant?.usaCocina !== false;
       const hasKitchen = restUsesKitchen && o.ruta !== 'express' && (o.items || []).some(it => it.requiereCocina !== false);
@@ -259,86 +333,146 @@ export const TopNav: React.FC<TopNavProps> = ({
       }
     });
 
-    // Detener cualquier alarma de pedidos que ya no estén activos
-    sounds.getActiveAlarmKeys().forEach(key => {
-      if ((key.startsWith('ord-ready-') || key.startsWith('ord-mostrador-') || key.startsWith('ord-rej-')) && !activeAlarmKeys.has(key)) {
-        sounds.stopRepeatingAlarm(key);
-      }
-    });
+    if (!isCocina) {
+      // Detener cualquier alarma de pedidos que ya no estén activos
+      sounds.getActiveAlarmKeys().forEach(key => {
+        if ((key.startsWith('ord-ready-') || key.startsWith('ord-mostrador-') || key.startsWith('ord-rej-')) && !activeAlarmKeys.has(key)) {
+          sounds.stopRepeatingAlarm(key);
+        }
+      });
+    }
 
     if (isInitialMount.current) {
       prevReadyOrdersMapRef.current = currentMap;
+      prevOrderRoundsCountRef.current = currentRoundsMap;
       prevSecurityAlertsCountRef.current = unreadAlerts.length;
       isInitialMount.current = false;
       return;
     }
 
-    // Verificar transiciones de estado para mostrar toasts visuales contextuales
+    // Verificar transiciones de estado para disparar Toasts y Notificaciones Push Nativas (FCM)
     orders.forEach(ord => {
       if (ord.restaurantId !== currentRestaurant?.id) return;
       const prevStatus = prevReadyOrdersMapRef.current.get(ord.id);
+      const prevRounds = prevOrderRoundsCountRef.current.get(ord.id) || 0;
+      const currentRounds = ord.rondas?.length || 1;
       const restUsesKitchen = currentRestaurant?.usaCocina !== false;
       const hasKitchen = restUsesKitchen && ord.ruta !== 'express' && (ord.items || []).some(it => it.requiereCocina !== false);
       const is100Mostrador = !hasKitchen || ord.ruta === 'express';
       const targetDesc = ord.tipo === 'local' ? `Mesa #${ord.mesaNumero}` : `Delivery (${ord.empresaDelivery || 'Reparto'})`;
+      const itemsSummary = (ord.items || []).map(i => `${i.cantidad}x ${i.nombre}`).join(', ');
 
-      // Regla 1: Transición a "listo" (Cocina completó pedido) -> Alerta a Mesero y Mostrador
-      if (ord.estado === 'listo' && prevStatus !== 'listo' && !is100Mostrador) {
-        const toastId = 'ord-ready-' + ord.id;
-        if (isMostrador) {
-          setActiveToast({
-            id: toastId,
-            title: `✅ ¡Cocina lista para ${targetDesc}!`,
-            desc: `La cocina completó el pedido. Despachar productos de mostrador para entrega conjunta con el mesero.`,
-            type: 'ready',
-            order: ord
-          });
-        } else if (isMesero || isAdminOrOwner) {
-          setActiveToast({
-            id: toastId,
-            title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
-            desc: `La cocina completó el pedido con ${ord.items.length} plato(s). Listo para retirar y entregar.`,
-            type: 'ready',
-            order: ord
+      // Evento A: NUEVO PEDIDO o NUEVA RONDA con platos de Cocina -> Push Nativa para Cocina y Admin
+      const isNewKitchenOrder = hasKitchen && prevStatus === undefined && ord.estado === 'pendiente_cocina';
+      const isNewKitchenRound = hasKitchen && prevStatus !== undefined && currentRounds > prevRounds;
+
+      if (isNewKitchenOrder || isNewKitchenRound) {
+        if (isCocina || isAdminOrOwner) {
+          const roundLabel = isNewKitchenRound ? ` (Ronda #${currentRounds})` : '';
+          pushNotificationService.notifyOrderEvent({
+            eventKey: `push-new-kitchen-${ord.id}-r${currentRounds}`,
+            eventType: 'new_order',
+            order: ord,
+            title: `🔥 ¡Nuevo Pedido en Cocina! • ${targetDesc}${roundLabel}`,
+            body: `${itemsSummary} (${ord.meseroNombre || 'Mesero'})`,
+            targetRoles: ['cocina', 'ayudante_cocina', 'admin', 'owner']
           });
         }
       }
 
-      // Regla 2: Nuevo pedido 100% Mostrador entrante -> Notificación solo a Mostrador
+      // Evento B: Regla 1 - Transición a "listo" (Cocina completó pedido) -> Alerta a Mesero y Mostrador
+      if (ord.estado === 'listo' && prevStatus !== 'listo' && !is100Mostrador) {
+        const toastId = 'ord-ready-' + ord.id;
+        if (!isCocina) {
+          if (isMostrador) {
+            setActiveToast({
+              id: toastId,
+              title: `✅ ¡Cocina lista para ${targetDesc}!`,
+              desc: `La cocina completó el pedido. Despachar productos de mostrador para entrega conjunta con el mesero.`,
+              type: 'ready',
+              order: ord
+            });
+          } else if (isMesero || isAdminOrOwner) {
+            setActiveToast({
+              id: toastId,
+              title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
+              desc: `La cocina completó el pedido con ${ord.items.length} plato(s). Listo para retirar y entregar.`,
+              type: 'ready',
+              order: ord
+            });
+          }
+        }
+
+        if (isMesero || isMostrador || isAdminOrOwner) {
+          pushNotificationService.notifyOrderEvent({
+            eventKey: `push-ready-${ord.id}`,
+            eventType: 'order_ready',
+            order: ord,
+            title: `🍽️ ¡Pedido Listo para ${targetDesc}!`,
+            body: `Cocina terminó de preparar: ${itemsSummary}. Listo para entregar.`,
+            targetRoles: ['mesero', 'mostrador', 'caja', 'admin', 'owner']
+          });
+        }
+      }
+
+      // Evento C: Regla 2 - Nuevo pedido 100% Mostrador entrante -> Notificación a Mostrador y Admin
       if (is100Mostrador && prevStatus === undefined && ord.estadoPago !== 'cobrado' && ord.estadoEntrega !== 'entregado') {
         if (isMostrador || isAdminOrOwner) {
           const toastId = 'ord-mostrador-' + ord.id;
-          const itemsDesc = ord.items.map(i => `${i.cantidad}x ${i.nombre}`).join(', ');
-          setActiveToast({
-            id: toastId,
-            title: `⚡ ¡Nuevo Pedido en Mostrador para ${targetDesc}!`,
-            desc: `Despachar productos de mostrador: ${itemsDesc}`,
-            type: 'general',
-            order: ord
+          if (!isCocina) {
+            setActiveToast({
+              id: toastId,
+              title: `⚡ ¡Nuevo Pedido en Mostrador para ${targetDesc}!`,
+              desc: `Despachar productos de mostrador: ${itemsSummary}`,
+              type: 'general',
+              order: ord
+            });
+          }
+
+          pushNotificationService.notifyOrderEvent({
+            eventKey: `push-mostrador-${ord.id}`,
+            eventType: 'new_order',
+            order: ord,
+            title: `⚡ ¡Nuevo Pedido en Mostrador! • ${targetDesc}`,
+            body: `Despachar: ${itemsSummary}`,
+            targetRoles: ['mostrador', 'caja', 'admin', 'owner']
           });
         }
       }
 
-      // Rechazado por Cocina
+      // Evento D: Rechazado por Cocina -> Alerta a Mesero y Admin
       if (ord.estado === 'rechazado' && prevStatus !== 'rechazado' && !is100Mostrador) {
         if (isMesero || isAdminOrOwner) {
           const toastId = 'ord-rej-' + ord.id;
-          setActiveToast({
-            id: toastId,
-            title: `⚠️ Pedido rechazado para ${targetDesc}`,
-            desc: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina no pudo preparar este pedido.',
-            type: 'rejected',
-            order: ord
+          if (!isCocina) {
+            setActiveToast({
+              id: toastId,
+              title: `⚠️ Pedido rechazado para ${targetDesc}`,
+              desc: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina no pudo preparar este pedido.',
+              type: 'rejected',
+              order: ord
+            });
+          }
+
+          pushNotificationService.notifyOrderEvent({
+            eventKey: `push-rejected-${ord.id}`,
+            eventType: 'order_rejected',
+            order: ord,
+            title: `⚠️ Pedido Rechazado • ${targetDesc}`,
+            body: ord.motivoRechazo ? `Motivo: ${ord.motivoRechazo}` : 'La cocina rechazó el pedido.',
+            targetRoles: ['mesero', 'admin', 'owner']
           });
         }
       }
     });
 
     prevReadyOrdersMapRef.current = currentMap;
+    prevOrderRoundsCountRef.current = currentRoundsMap;
 
     return () => {
-      // Limpiar alarmas al desmontar o cambiar de restaurante/negocio
-      sounds.stopAllAlarms();
+      if (!isCocina) {
+        sounds.stopAllAlarms();
+      }
     };
   }, [orders, currentRestaurant?.id, isCocina, isMesero, isMostrador, isAdminOrOwner, currentEmployee]);
 
@@ -349,12 +483,17 @@ export const TopNav: React.FC<TopNavProps> = ({
     if (unreadAlerts.length > prevSecurityAlertsCountRef.current) {
       const latestAlert = unreadAlerts[0];
       const toastId = 'sec-alert-' + (latestAlert?.id || Date.now());
-      sounds.startRepeatingAlarm(toastId, 'security', 4200);
+      const isStockAlert = latestAlert?.tipo === 'stock_bajo' || latestAlert?.tipo === 'stock_agotado';
+      sounds.startRepeatingAlarm(toastId, isStockAlert ? 'warning' : 'security', 4200);
       setActiveToast({
         id: toastId,
-        title: '🛡️ ¡Alerta de Seguridad Registrada!',
+        title: latestAlert?.tipo === 'stock_agotado'
+          ? '🚨 ¡Insumo Agotado tras Entrega de Pedido!'
+          : latestAlert?.tipo === 'stock_bajo'
+          ? '📦 ¡Alerta de Stock Crítico en Inventario!'
+          : '🛡️ ¡Alerta de Seguridad Registrada!',
         desc: latestAlert?.mensaje || 'Se detectó un incidente de seguridad en el sistema.',
-        type: 'security'
+        type: isStockAlert ? 'rejected' : 'security'
       });
     }
 
@@ -547,6 +686,23 @@ export const TopNav: React.FC<TopNavProps> = ({
               </span>
             </div>
 
+            {/* Botón acceso rápido a Push Nativas en móviles */}
+            <button
+              type="button"
+              onClick={() => setShowPushModal(true)}
+              className={`sm:hidden relative p-2 rounded-xl border transition flex items-center justify-center cursor-pointer ${
+                pushPermission === 'granted' && pushEnabled
+                  ? 'bg-orange-50 text-orange-600 border-orange-200'
+                  : 'bg-neutral-100 text-neutral-600 border-neutral-200'
+              }`}
+              title="Notificaciones Push en 2do Plano (FCM)"
+            >
+              <BellRing className="w-4 h-4" />
+              <span className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${
+                pushPermission === 'granted' && pushEnabled ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'
+              }`} />
+            </button>
+
             {currentUserAccount ? (
               <button
                 onClick={logoutAdmin}
@@ -623,6 +779,24 @@ export const TopNav: React.FC<TopNavProps> = ({
                 <Volume2 className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
               )}
               <span className="hidden md:inline">{isAudioMuted ? 'Silencio' : 'Sonido'}</span>
+            </button>
+
+            {/* Botón de Notificaciones Push Nativas (FCM - 2do Plano) */}
+            <button
+              type="button"
+              onClick={() => setShowPushModal(true)}
+              className={`px-2.5 py-1 rounded-lg transition border flex items-center gap-1.5 text-xs font-bold cursor-pointer ${
+                pushPermission === 'granted' && pushEnabled
+                  ? 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100'
+                  : 'bg-white text-neutral-600 border-neutral-200 hover:text-neutral-900 hover:bg-neutral-100'
+              }`}
+              title="Configurar Notificaciones Push Nativas (Firebase Cloud Messaging) para recibir alertas en segundo plano"
+            >
+              <BellRing className={`w-3.5 h-3.5 ${pushPermission === 'granted' && pushEnabled ? 'text-orange-600' : 'text-neutral-400'}`} />
+              <span className="hidden lg:inline">Push 2do Plano</span>
+              <span className={`w-2 h-2 rounded-full ${
+                pushPermission === 'granted' && pushEnabled ? 'bg-emerald-500' : 'bg-amber-500 animate-ping'
+              }`} />
             </button>
           </div>
 
@@ -838,6 +1012,51 @@ export const TopNav: React.FC<TopNavProps> = ({
 
         </div>
 
+        {/* Banner rápido para activar Push Nativas en 2do plano si aún no se ha concedido permiso */}
+        {pushPermission === 'default' && !pushBannerDismissed && (
+          <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-600 text-white px-3 sm:px-6 py-1.5 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <BellRing className="w-3.5 h-3.5 shrink-0 animate-bounce" />
+              <span className="font-bold truncate">
+                Activa las Notificaciones Push Nativas (FCM) para recibir alertas de nuevos pedidos en segundo plano.
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={async () => {
+                  const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || currentBusiness?.id;
+                  const res = await pushNotificationService.requestPermissionAndRegister({
+                    businessId: activeBizId,
+                    restaurantId: currentRestaurant?.id || null,
+                    userId: currentUserAccount?.uid || currentEmployee?.id,
+                    userName: currentUserAccount?.nombre || currentEmployee?.nombre,
+                    userRole: currentUserAccount?.rol || currentEmployee?.puesto
+                  });
+                  setPushPermission(res.permission);
+                  if (res.success) {
+                    setPushEnabled(true);
+                    sounds.playNotification();
+                  } else {
+                    setShowPushModal(true);
+                  }
+                }}
+                className="px-2.5 py-0.5 rounded-lg bg-white text-orange-700 hover:bg-orange-50 font-black text-[11px] shadow-xs transition cursor-pointer"
+              >
+                Activar Ahora
+              </button>
+              <button
+                type="button"
+                onClick={() => setPushBannerDismissed(true)}
+                className="text-white/80 hover:text-white p-0.5 cursor-pointer"
+                title="Ocultar aviso"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
       </header>
 
       {/* Floating Notification Toast en tiempo real con repetición de sonido hasta marcar leído */}
@@ -1042,6 +1261,22 @@ export const TopNav: React.FC<TopNavProps> = ({
         onDeleteAlert={deleteAlert}
         onClearReadAlerts={clearReadAlerts}
         onClearAllAlerts={clearAllAlerts}
+      />
+
+      {/* Modal de Configuración de Notificaciones Push Nativas (Firebase Cloud Messaging) */}
+      <PushNotificationModal
+        isOpen={showPushModal}
+        onClose={() => setShowPushModal(false)}
+        businessId={currentUserAccount?.businessId || currentEmployee?.businessId || currentBusiness?.id}
+        restaurantId={currentRestaurant?.id || null}
+        restaurantName={currentRestaurant?.nombre || currentBusiness?.nombre}
+        userId={currentUserAccount?.uid || currentEmployee?.id}
+        userName={userDisplayName}
+        userRole={userRole}
+        onStatusChange={(perm, enabled) => {
+          setPushPermission(perm);
+          setPushEnabled(enabled);
+        }}
       />
     </>
   );

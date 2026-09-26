@@ -6,6 +6,7 @@ import {
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
+import { getMessaging, isSupported, Messaging } from 'firebase/messaging';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Silence internal Firestore connection retry & offline notices from polluting the console
@@ -26,6 +27,21 @@ try {
 export const db = firestoreDb;
 export const auth = getAuth(app);
 export const storage = getStorage(app);
+
+let messagingInstance: Messaging | null = null;
+
+export async function getFirebaseMessaging(): Promise<Messaging | null> {
+  if (messagingInstance) return messagingInstance;
+  try {
+    if (typeof window === 'undefined') return null;
+    const supported = await isSupported();
+    if (!supported) return null;
+    messagingInstance = getMessaging(app);
+    return messagingInstance;
+  } catch {
+    return null;
+  }
+}
 
 export default app;
 

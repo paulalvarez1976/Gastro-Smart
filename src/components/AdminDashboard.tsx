@@ -1,7 +1,18 @@
 import { UNIQUE_BUSINESS_ID } from '../config/business';
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ReferenceLine
+} from 'recharts';
 import { useAuth } from '../context/AuthContext';
-import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType, CashRegisterClose, MenuAuditLog, MenuAuditActionType, MenuAuditLogChange } from '../types';
+import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType, CashRegisterClose, MenuAuditLog, MenuAuditActionType, MenuAuditLogChange, InventoryItem, Expense, DailyStat } from '../types';
 import { 
   createRestaurant, 
   updateRestaurant, 
@@ -36,8 +47,14 @@ import {
   subscribeToCashCloses,
   recordMenuAuditLog,
   subscribeToMenuAuditLogs,
-  seedSampleMenuAuditLogsIfEmpty
+  seedSampleMenuAuditLogsIfEmpty,
+  subscribeToInventoryItems,
+  quickAdjustInventoryItemStock,
+  subscribeToExpenses,
+  subscribeToArchivedMenuItems,
+  getOperationalDateString
 } from '../services/dataService';
+import { getDailyStatsForRange } from '../services/financialService';
 import { uploadDishPhoto, migrateBase64MenuItemsToStorage } from '../services/storageService';
 import { sounds } from '../utils/sound';
 import { LogoUploader } from './LogoUploader';
@@ -54,6 +71,7 @@ import { LowStockNotificationBanner } from './LowStockNotificationBanner';
 import { QuickRestockModal } from './QuickRestockModal';
 import { AdminPdfReportsModal } from './AdminPdfReportsModal';
 import { MenuAuditLogsTable } from './MenuAuditLogsTable';
+import { InventoryManager } from './InventoryManager';
 import { 
   ShieldCheck, 
   ShieldAlert,
@@ -140,14 +158,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   
-  // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión y pruebas)
-  const [activeTab, setActiveTab] = useState<'indicadores' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'peligro'>('indicadores');
+  // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión, inventario y pruebas)
+  const [activeTab, setActiveTab] = useState<'indicadores' | 'inventario' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'peligro'>('indicadores');
 
   // Registros de Auditoría de Menú y Stock
   const [menuAuditLogs, setMenuAuditLogs] = useState<MenuAuditLog[]>([]);
   const [isAuditLogsLoading, setIsAuditLogsLoading] = useState(true);
 
-  // Suscripción en tiempo real a auditoría de menú y stock
+  // Inventario de Insumos y Materias Primas
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [archivedMenuItems, setArchivedMenuItems] = useState<MenuItem[]>([]);
+
+  // Modal de confirmación para borrar plato del menú sin afectar historial de ventas
+  const [dishToDeleteModal, setDishToDeleteModal] = useState<MenuItem | null>(null);
+  const [isDeletingDish, setIsDeletingDish] = useState(false);
+  const [dishDeletedToast, setDishDeletedToast] = useState<string | null>(null);
+
+  // Estados para Gráfico de Líneas Dinámico de Evolución Diaria de Ventas (Recharts)
+  const [adminExpenses, setAdminExpenses] = useState<Expense[]>([]);
+  const [adminDailyStats, setAdminDailyStats] = useState<DailyStat[]>([]);
+  const [salesChartDaysRange, setSalesChartDaysRange] = useState<'7d' | '14d' | '30d'>('14d');
+  const [salesChartBranchFilter, setSalesChartBranchFilter] = useState<string>('all');
+  const [showAdminSalesLine, setShowAdminSalesLine] = useState<boolean>(true);
+  const [showAdminProfitLine, setShowAdminProfitLine] = useState<boolean>(true);
+  const [showAdminExpensesLine, setShowAdminExpensesLine] = useState<boolean>(true);
+  const [showAdminTicketLine, setShowAdminTicketLine] = useState<boolean>(false);
+
+  // Suscripción en tiempo real a auditoría de menú y stock + insumos de inventario + estadísticas diarias
   useEffect(() => {
     if (!activeBizId) return;
     setIsAuditLogsLoading(true);
@@ -155,10 +192,113 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setMenuAuditLogs(data);
       setIsAuditLogsLoading(false);
     });
+    const unsubInv = subscribeToInventoryItems(
+      currentRestaurant?.id || 'all',
+      (items) => {
+        setInventoryItems(items);
+      },
+      activeBizId
+    );
+    const unsubArchived = subscribeToArchivedMenuItems(activeBizId, setArchivedMenuItems);
+    const unsubExp = subscribeToExpenses('all', setAdminExpenses, activeBizId);
+    const now = new Date();
+    const start30 = new Date(now);
+    start30.setDate(now.getDate() - 31);
+    getDailyStatsForRange('all', getOperationalDateString(start30), getOperationalDateString(now), activeBizId)
+      .then(setAdminDailyStats)
+      .catch(() => {});
     return () => {
       if (unsub) unsub();
+      if (unsubInv) unsubInv();
+      if (unsubArchived) unsubArchived();
+      if (unsubExp) unsubExp();
     };
-  }, [activeBizId]);
+  }, [activeBizId, currentRestaurant?.id]);
+
+  // Evolución diaria de las ventas calculada dinámicamente para Recharts LineChart
+  const dailySalesEvolutionData = useMemo(() => {
+    const daysCount = salesChartDaysRange === '7d' ? 7 : salesChartDaysRange === '14d' ? 14 : 30;
+    const now = new Date();
+    const effectiveBranch = salesChartBranchFilter !== 'all' ? salesChartBranchFilter : (currentRestaurant?.id || 'all');
+
+    const branchOrders = effectiveBranch === 'all'
+      ? orders
+      : orders.filter(o => o.restaurantId === effectiveBranch);
+    const branchExpenses = effectiveBranch === 'all'
+      ? adminExpenses
+      : adminExpenses.filter(e => e.restaurantId === effectiveBranch);
+    const branchStats = effectiveBranch === 'all'
+      ? adminDailyStats
+      : adminDailyStats.filter(s => s.restaurantId === effectiveBranch);
+
+    const points: {
+      fecha: string;
+      label: string;
+      ventas: number;
+      gastos: number;
+      ganancia: number;
+      pedidos: number;
+      ticketPromedio: number;
+    }[] = [];
+
+    for (let i = daysCount - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      const dateStr = getOperationalDateString(d);
+
+      const dayOrders = branchOrders.filter(o => {
+        const isPaid = o.estado === 'cobrado' || o.estadoPago === 'cobrado';
+        if (!isPaid) return false;
+        const refDate = o.pagadoEn || o.creadoEn;
+        return refDate && getOperationalDateString(new Date(refDate)) === dateStr;
+      });
+      const liveSales = dayOrders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
+      const liveCount = dayOrders.length;
+
+      const statDocs = branchStats.filter(s => s.fecha === dateStr);
+      const statSales = statDocs.reduce((sum, s) => sum + (Number(s.ventasTotales) || 0), 0);
+      const statCount = statDocs.reduce((sum, s) => sum + (Number(s.pedidosCobrados) || 0), 0);
+
+      const dSales = Math.max(liveSales, statSales);
+      const dCount = Math.max(liveCount, statCount);
+
+      const dExp = branchExpenses
+        .filter(e => e.fecha && getOperationalDateString(new Date(e.fecha)) === dateStr)
+        .reduce((sum, e) => sum + (Number(e.monto) || 0), 0);
+
+      const labelStr = d.toLocaleDateString('es-ES', {
+        weekday: daysCount <= 14 ? 'short' : undefined,
+        day: '2-digit',
+        month: 'short'
+      });
+
+      points.push({
+        fecha: dateStr,
+        label: labelStr,
+        ventas: Math.round(dSales * 100) / 100,
+        gastos: Math.round(dExp * 100) / 100,
+        ganancia: Math.round((dSales - dExp) * 100) / 100,
+        pedidos: dCount,
+        ticketPromedio: dCount > 0 ? Math.round((dSales / dCount) * 100) / 100 : 0
+      });
+    }
+
+    return points;
+  }, [orders, adminExpenses, adminDailyStats, salesChartDaysRange, salesChartBranchFilter, currentRestaurant?.id]);
+
+  const dailySalesEvolutionStats = useMemo(() => {
+    if (dailySalesEvolutionData.length === 0) {
+      return { totalSales: 0, avgDailySales: 0, bestDay: null as null | typeof dailySalesEvolutionData[0], totalOrders: 0 };
+    }
+    const totalSales = dailySalesEvolutionData.reduce((acc, p) => acc + p.ventas, 0);
+    const totalOrders = dailySalesEvolutionData.reduce((acc, p) => acc + p.pedidos, 0);
+    const avgDailySales = totalSales / dailySalesEvolutionData.length;
+    const bestDay = dailySalesEvolutionData.reduce(
+      (best, curr) => (curr.ventas > (best?.ventas ?? -1) ? curr : best),
+      dailySalesEvolutionData[0]
+    );
+    return { totalSales, avgDailySales, bestDay, totalOrders };
+  }, [dailySalesEvolutionData]);
 
   // Modal Centro de Mensajes & Avisos de Seguridad
   const [showMessageCenterModal, setShowMessageCenterModal] = useState(false);
@@ -184,15 +324,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Restaurant Modal State
   const [showRestModal, setShowRestModal] = useState(false);
   const [editingRest, setEditingRest] = useState<Restaurant | null>(null);
+  const [restFormError, setRestFormError] = useState<string | null>(null);
   const [restForm, setRestForm] = useState<{
     nombre: string;
     direccion: string;
     telefono: string;
+    codigoSede: string;
     activo: boolean;
     numeroMesas: number;
     usaCocina: boolean;
     logoUrl?: string | null;
-  }>({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true, logoUrl: '' });
+  }>({ nombre: '', direccion: '', telefono: '', codigoSede: '', activo: true, numeroMesas: 10, usaCocina: true, logoUrl: '' });
+
+  const generateUniqueCodigoSedeForBusiness = (excludeId?: string): string => {
+    const used = new Set(
+      restaurants
+        .filter(r => r.id !== excludeId && r.codigoSede)
+        .map(r => (r.codigoSede || '').trim())
+    );
+    for (let i = 0; i < 200; i++) {
+      const candidate = String(Math.floor(1000 + Math.random() * 9000));
+      if (!used.has(candidate)) return candidate;
+    }
+    return String(Math.floor(1000 + Math.random() * 9000));
+  };
 
   // Modal Gestión de Mesas
   const [tableModalRest, setTableModalRest] = useState<Restaurant | null>(null);
@@ -270,7 +425,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     nombre: '',
     puesto: 'mesero' as any,
     pin: '',
-    modalidadPago: 'por_horas' as EmployeeSalaryType,
+    modalidadPago: 'por_dia' as EmployeeSalaryType,
     tarifaHora: 12.0,
     tarifaDiaria: 50.0,
     sueldoMensual: 1200.0,
@@ -330,9 +485,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Handlers para Restaurantes
   const handleSaveRestaurant = async () => {
-    if (!restForm.nombre.trim()) return;
+    setRestFormError(null);
+    if (!restForm.nombre.trim()) {
+      setRestFormError('Por favor ingresá el nombre del restaurante o sucursal.');
+      return;
+    }
+
+    const rawCodigo = (restForm.codigoSede || '').trim() || generateUniqueCodigoSedeForBusiness(editingRest?.id);
+    if (!/^\d{4}$/.test(rawCodigo)) {
+      setRestFormError('El código de sede debe contener exactamente 4 dígitos numéricos (ej: 2481).');
+      return;
+    }
+
+    const duplicateRest = restaurants.find(
+      r => r.id !== editingRest?.id && (r.codigoSede || '').trim() === rawCodigo
+    );
+    if (duplicateRest) {
+      setRestFormError(`El código de sede ${rawCodigo} ya está asignado a "${duplicateRest.nombre}". Ingresá otro código único de 4 dígitos.`);
+      return;
+    }
+
+    const payload = {
+      ...restForm,
+      codigoSede: rawCodigo
+    };
+
     if (editingRest) {
-      await updateRestaurant(editingRest.id, restForm);
+      await updateRestaurant(editingRest.id, payload);
     } else {
       // Verificar límite de sucursales según plan de suscripción
       const limitSucursales = currentBusiness?.suscripcion?.limiteSucursales || 
@@ -343,10 +522,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return;
       }
 
-      await createRestaurant(restForm, activeBizId);
+      await createRestaurant(payload, activeBizId);
     }
     setShowRestModal(false);
     setEditingRest(null);
+    setRestFormError(null);
   };
 
   // Handler para guardar cambio de número de mesas
@@ -462,19 +642,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Handlers para Empleados
+  // Handlers para Empleados (sin tarifa por hora: modalidad por día o sueldo mensual)
   const handleSaveEmployee = async () => {
     if (!empForm.nombre.trim() || empForm.pin.length !== 4) {
       alert('Por favor ingrese el nombre y un PIN de exactamente 4 dígitos.');
       return;
     }
-    const mod = empForm.modalidadPago || 'por_horas';
-    if (mod === 'por_horas' && (!empForm.tarifaHora || empForm.tarifaHora <= 0)) {
-      alert('La tarifa por hora debe ser un número mayor que cero.');
-      return;
-    }
+    const rawMod = empForm.modalidadPago || 'por_dia';
+    const mod: 'por_dia' | 'mes' = (rawMod === 'mes' || rawMod === 'fijo') ? 'mes' : 'por_dia';
+
     if (mod === 'por_dia' && (!empForm.tarifaDiaria || empForm.tarifaDiaria <= 0)) {
-      alert('La tarifa por día debe ser un número mayor que cero.');
+      alert('El sueldo por día debe ser un número mayor que cero.');
       return;
     }
     if (mod === 'mes' && (!empForm.sueldoMensual || empForm.sueldoMensual <= 0)) {
@@ -485,7 +663,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const targetRestId = empForm.restaurantId || restaurants[0]?.id;
     const payload = {
       ...empForm,
-      tipoSueldo: mod === 'mes' ? 'fijo' : (mod === 'por_dia' ? 'por_dia' : 'por_hora'),
+      modalidadPago: mod,
+      tipoSueldo: (mod === 'mes' ? 'fijo' : 'por_dia') as EmployeeSalaryType,
       restaurantId: targetRestId
     };
 
@@ -719,27 +898,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     sounds.playNotification();
   };
 
-  // Eliminación de plato auditada
-  const handleConfirmDeleteMenuItemWithAudit = async (item: MenuItem) => {
-    if (!confirm(`¿Eliminar plato ${item.nombre}?`)) return;
-    const actor = getAuditActor();
-    const rest = restaurants.find(r => r.id === item.restaurantId);
+  // Abrir modal de confirmación para borrar plato del menú activo sin afectar su historial de ventas
+  const handleConfirmDeleteMenuItemWithAudit = (item: MenuItem) => {
+    sounds.playKeypadClick();
+    setDishToDeleteModal(item);
+  };
 
-    await recordMenuAuditLog({
-      businessId: activeBizId,
-      restaurantId: item.restaurantId,
-      restaurantNombre: rest?.nombre || 'Todas las sedes',
-      platoId: item.id,
-      platoNombre: item.nombre,
-      tipoAccion: 'eliminacion_plato',
-      detalles: `Plato "${item.nombre}" (${item.categoria || 'General'}, precio $${item.precio}) eliminado definitivamente de la carta.`,
-      empleadoId: actor.id,
-      empleadoNombre: actor.nombre,
-      empleadoRol: actor.rol,
-      fecha: new Date().toISOString()
-    });
+  // Ejecutar borrado del plato de la carta activa preservando su historial de ventas
+  const handleExecuteDeleteDish = async () => {
+    if (!dishToDeleteModal) return;
+    setIsDeletingDish(true);
+    const item = dishToDeleteModal;
+    try {
+      const actor = getAuditActor();
+      const rest = restaurants.find(r => r.id === item.restaurantId);
 
-    await deleteMenuItem(item.id);
+      await deleteMenuItem(item.id);
+
+      await recordMenuAuditLog({
+        businessId: activeBizId,
+        restaurantId: item.restaurantId,
+        restaurantNombre: rest?.nombre || 'Todas las sedes',
+        platoId: item.id,
+        platoNombre: item.nombre,
+        tipoAccion: 'eliminacion_plato',
+        detalles: `Plato "${item.nombre}" (${item.categoria || 'General'}, precio $${item.precio}) retirado del menú activo (historial de ventas conservado).`,
+        empleadoId: actor.id,
+        empleadoNombre: actor.nombre,
+        empleadoRol: actor.rol,
+        fecha: new Date().toISOString()
+      });
+
+      sounds.playNotification();
+      setDishToDeleteModal(null);
+      setShowMenuModal(false);
+      setEditingMenu(null);
+      setDishDeletedToast(`Plato "${item.nombre}" borrado del menú activo. Su historial de ventas e ingresos se conserva intacto.`);
+      setTimeout(() => setDishDeletedToast(null), 6000);
+    } catch (err) {
+      console.error('Error al borrar plato del menú:', err);
+    } finally {
+      setIsDeletingDish(false);
+    }
   };
 
   const handleSaveMenuItem = async () => {
@@ -902,10 +1102,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   React.useEffect(() => {
     const handleOpenNewRest = () => {
       setEditingRest(null);
+      setRestFormError(null);
       setRestForm({
         nombre: '',
         direccion: '',
         telefono: '',
+        codigoSede: generateUniqueCodigoSedeForBusiness(),
         activo: true,
         numeroMesas: 10,
         usaCocina: true
@@ -915,7 +1117,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     window.addEventListener('open-new-restaurant-modal', handleOpenNewRest);
     return () => window.removeEventListener('open-new-restaurant-modal', handleOpenNewRest);
-  }, []);
+  }, [restaurants]);
 
   return (
     <div className="flex-1 flex flex-col h-[calc(100dvh-65px)] min-h-0 bg-neutral-100 overflow-hidden">
@@ -932,19 +1134,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Tab Buttons */}
+        {/* Tab Buttons (Unificados: Indicadores & Finanzas P&L en un solo panel, Asistencia & Planilla sin duplicar Turnos) */}
         <div className="flex items-center gap-1.5 p-1 bg-neutral-100 rounded-xl border border-neutral-200 overflow-x-auto">
           {[
-            { id: 'indicadores', label: 'Panel de Indicadores', icon: BarChart3 },
-            { id: 'historial_pedidos', label: 'Historial de Pedidos', icon: ReceiptText },
-            { id: 'financiero', label: 'Finanzas & P&L', icon: DollarSign },
-            { id: 'conciliacion', label: 'Conciliación Delivery', icon: Truck },
+            { id: 'indicadores', label: 'Indicadores & Finanzas (P&L)', icon: BarChart3 },
             { id: 'asistencia', label: 'Asistencia & Planilla', icon: Users },
+            { id: 'inventario', label: 'Inventario & Insumos', icon: Boxes },
+            { id: 'historial_pedidos', label: 'Historial de Pedidos', icon: ReceiptText },
+            { id: 'conciliacion', label: 'Conciliación Delivery', icon: Truck },
             { id: 'restaurantes', label: 'Locales & Mesas', icon: Store },
             { id: 'empleados', label: 'Empleados & PINs', icon: Users },
             { id: 'menu', label: 'Menú & Platos', icon: UtensilsCrossed },
             { id: 'auditoria_menu', label: 'Auditoría de Menú & Stock', icon: ShieldCheck },
-            { id: 'turnos', label: 'Turnos & Sueldos', icon: Clock },
             { id: 'peligro', label: 'Seguridad & Mantenimiento', icon: ShieldCheck },
           ].map(tab => {
             const Icon = tab.icon;
@@ -952,7 +1153,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             const isDanger = tab.id === 'peligro';
             const isFinancial = tab.id === 'financiero' || tab.id === 'conciliacion' || tab.id === 'asistencia';
             const isIndicator = tab.id === 'indicadores' || tab.id === 'historial_pedidos';
+            const isInventory = tab.id === 'inventario';
             const isAudit = tab.id === 'auditoria_menu';
+            const criticalSupplyCount = isInventory
+              ? inventoryItems.filter(i => (Number(i.stockActual) || 0) <= (Number(i.stockMinimo) || 5)).length +
+                menuItems.filter(m => m.controlaStock && (m.stockActual ?? 0) <= (m.stockMinimo ?? 5)).length
+              : 0;
             return (
               <button
                 key={tab.id}
@@ -962,22 +1168,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   isActive 
                     ? isIndicator
                       ? 'bg-orange-600 text-white shadow-xs'
-                      : isDanger 
-                        ? 'bg-red-600 text-white shadow-xs' 
-                        : isFinancial 
-                          ? 'bg-blue-600 text-white shadow-xs' 
-                          : isAudit
-                            ? 'bg-purple-700 text-white shadow-xs'
-                            : 'bg-white text-neutral-900 shadow-xs' 
+                      : isInventory
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : isDanger 
+                          ? 'bg-red-600 text-white shadow-xs' 
+                          : isFinancial 
+                            ? 'bg-blue-600 text-white shadow-xs' 
+                            : isAudit
+                              ? 'bg-purple-700 text-white shadow-xs'
+                              : 'bg-white text-neutral-900 shadow-xs' 
                     : isIndicator
                       ? 'text-orange-700 hover:bg-orange-50 font-black'
-                      : isDanger 
-                        ? 'text-red-600 hover:bg-red-50' 
-                        : isFinancial
-                          ? 'text-blue-700 hover:bg-blue-50 font-black'
-                          : isAudit
-                            ? 'text-purple-700 hover:bg-purple-50 font-bold'
-                            : 'text-neutral-600 hover:text-neutral-900'
+                      : isInventory
+                        ? 'text-amber-800 hover:bg-amber-50 font-black'
+                        : isDanger 
+                          ? 'text-red-600 hover:bg-red-50' 
+                          : isFinancial
+                            ? 'text-blue-700 hover:bg-blue-50 font-black'
+                            : isAudit
+                              ? 'text-purple-700 hover:bg-purple-50 font-bold'
+                              : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 ${
@@ -985,15 +1195,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     ? 'text-white' 
                     : isIndicator
                       ? 'text-orange-600'
-                      : isDanger 
-                        ? 'text-red-500' 
-                        : isFinancial 
-                          ? 'text-blue-600' 
-                          : isAudit
-                            ? 'text-purple-600'
-                            : 'text-neutral-400'
+                      : isInventory
+                        ? 'text-amber-600'
+                        : isDanger 
+                          ? 'text-red-500' 
+                          : isFinancial 
+                            ? 'text-blue-600' 
+                            : isAudit
+                              ? 'text-purple-600'
+                              : 'text-neutral-400'
                 }`} />
                 <span>{tab.label}</span>
+                {isInventory && criticalSupplyCount > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-red-600 text-white text-[10px] font-black animate-pulse">
+                    {criticalSupplyCount}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -1053,28 +1270,307 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="max-w-7xl mx-auto">
           <LowStockNotificationBanner
             menuItems={menuItems}
+            inventoryItems={inventoryItems}
             restaurants={restaurants}
             onOpenRestockModal={() => setShowRestockModal(true)}
             onNavigateToMenu={() => {
               setActiveTab('menu');
               setMenuPrepFilter('stock_bajo');
             }}
+            onNavigateToInventory={() => {
+              setActiveTab('inventario');
+            }}
             onQuickRestock={async (item, amount) => {
               await quickAdjustMenuItemStock(item.id, amount);
+            }}
+            onQuickRestockInventory={async (item, amount) => {
+              await quickAdjustInventoryItemStock(
+                item.id,
+                amount,
+                currentUserAccount?.nombre || currentEmployee?.nombre || 'Administrador',
+                activeBizId
+              );
             }}
           />
         </div>
 
-        {/* VIEW INDICADORES: Panel Unificado de Indicadores con Gráficos Recharts (Operaciones en vivo, Tendencia Ventas vs Gastos, Costos & Rentabilidad) */}
-        {activeTab === 'indicadores' && (
+        {/* VIEW INVENTARIO E INSUMOS: Descuento automático al marcar pedido como entregado y alertas críticas */}
+        {activeTab === 'inventario' && (
+          <InventoryManager
+            inventoryItems={inventoryItems}
+            menuItems={menuItems}
+            restaurants={restaurants}
+            orders={orders}
+            auditLogs={menuAuditLogs}
+            businessId={activeBizId}
+            currentRestaurantId={currentRestaurant?.id || 'all'}
+            userName={currentUserAccount?.nombre || currentEmployee?.nombre || 'Administrador'}
+          />
+        )}
+
+        {/* VIEW UNIFICADO: Indicadores Operativos + Finanzas & P&L (Sin reportes repetidos) */}
+        {(activeTab === 'indicadores' || activeTab === 'financiero') && (
           <div className="max-w-7xl mx-auto space-y-6">
-            <KeyIndicatorsPanel
-              orders={orders}
+            <FinancialDashboard 
               restaurants={restaurants}
+              orders={orders}
+              shifts={shifts}
               menuItems={menuItems}
-              businessId={activeBizId}
-              defaultRestaurantId={currentRestaurant?.id || 'all'}
+              archivedMenuItems={archivedMenuItems}
               onEditDish={handleOpenEditDish}
+              onDeleteDish={handleConfirmDeleteMenuItemWithAudit}
+              customDailySalesChart={
+                <div className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-2xs flex flex-col justify-between">
+                  <div>
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-black text-neutral-900">
+                            Evolución Diaria de las Ventas
+                          </h3>
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase">
+                            Gráfico Dinámico
+                          </span>
+                        </div>
+                        <p className="text-xs text-neutral-500">
+                          Tendencia día a día de ingresos cobrados, utilidad neta y ticket promedio en tiempo real
+                        </p>
+                      </div>
+
+                      {/* Controles de Rango Diario y Sucursal */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {restaurants.length > 1 && (
+                          <select
+                            value={salesChartBranchFilter}
+                            onChange={(e) => setSalesChartBranchFilter(e.target.value)}
+                            className="h-7 px-2.5 rounded-lg border border-neutral-200 bg-neutral-50 text-[11px] font-bold text-neutral-700 outline-none focus:border-neutral-900"
+                          >
+                            <option value="all">Todas las sucursales</option>
+                            {restaurants.map(r => (
+                              <option key={r.id} value={r.id}>{r.nombre}</option>
+                            ))}
+                          </select>
+                        )}
+                        <div className="flex items-center bg-neutral-100 p-1 rounded-xl border border-neutral-200">
+                          {([
+                            { id: '7d', label: '7 Días' },
+                            { id: '14d', label: '14 Días' },
+                            { id: '30d', label: '30 Días' }
+                          ] as const).map(opt => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => {
+                                sounds.playClick();
+                                setSalesChartDaysRange(opt.id);
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                                salesChartDaysRange === opt.id
+                                  ? 'bg-neutral-900 text-white shadow-2xs'
+                                  : 'text-neutral-600 hover:text-neutral-900'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Resumen rápido del periodo diario y toggles de series */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-neutral-100">
+                      <div className="flex flex-wrap items-center gap-4 text-xs">
+                        <div>
+                          <span className="text-neutral-400 font-bold uppercase text-[10px] block">Acumulado Periodo</span>
+                          <span className="font-mono font-black text-emerald-700 text-sm">
+                            ${dailySalesEvolutionStats.totalSales.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="h-6 w-px bg-neutral-200" />
+                        <div>
+                          <span className="text-neutral-400 font-bold uppercase text-[10px] block">Promedio Diario</span>
+                          <span className="font-mono font-black text-neutral-800 text-sm">
+                            ${dailySalesEvolutionStats.avgDailySales.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                        <div className="h-6 w-px bg-neutral-200" />
+                        <div>
+                          <span className="text-neutral-400 font-bold uppercase text-[10px] block">Mejor Día</span>
+                          <span className="font-mono font-bold text-indigo-700 text-xs">
+                            {dailySalesEvolutionStats.bestDay && dailySalesEvolutionStats.bestDay.ventas > 0
+                              ? `${dailySalesEvolutionStats.bestDay.label} ($${dailySalesEvolutionStats.bestDay.ventas.toFixed(0)})`
+                              : 'Sin ventas'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Toggles interactivos de líneas */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminSalesLine(v => !v)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                            showAdminSalesLine
+                              ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                          Ventas Diarias
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminProfitLine(v => !v)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                            showAdminProfitLine
+                              ? 'bg-indigo-50 border-indigo-300 text-indigo-800'
+                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-indigo-600" />
+                          Ganancia Neta
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminExpensesLine(v => !v)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                            showAdminExpensesLine
+                              ? 'bg-red-50 border-red-300 text-red-800'
+                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-red-500" />
+                          Gastos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminTicketLine(v => !v)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
+                            showAdminTicketLine
+                              ? 'bg-amber-50 border-amber-300 text-amber-800'
+                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
+                          }`}
+                        >
+                          <span className="w-2 h-2 rounded-full bg-amber-500" />
+                          Ticket Prom.
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Lienzo Recharts LineChart */}
+                    <div className="h-72 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={dailySalesEvolutionData} margin={{ top: 10, right: 16, left: -10, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f5" />
+                          <XAxis
+                            dataKey="label"
+                            tick={{ fontSize: 11, fill: '#737373', fontWeight: 600 }}
+                            axisLine={{ stroke: '#e5e5e5' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            yAxisId="left"
+                            tick={{ fontSize: 11, fill: '#737373' }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(val) => `$${val}`}
+                          />
+                          {showAdminTicketLine && (
+                            <YAxis
+                              yAxisId="right"
+                              orientation="right"
+                              tick={{ fontSize: 10, fill: '#d97706' }}
+                              axisLine={false}
+                              tickLine={false}
+                              tickFormatter={(val) => `$${val}`}
+                            />
+                          )}
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#171717',
+                              border: 'none',
+                              borderRadius: '12px',
+                              color: '#fff',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)'
+                            }}
+                            formatter={(value: any, name: string) => [
+                              `$${Number(value).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                              name
+                            ]}
+                            labelFormatter={(label, payload) => {
+                              const item = payload?.[0]?.payload;
+                              return item
+                                ? `${label} (${item.fecha}) · ${item.pedidos} pedido(s)`
+                                : label;
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
+                          {dailySalesEvolutionStats.avgDailySales > 0 && showAdminSalesLine && (
+                            <ReferenceLine
+                              yAxisId="left"
+                              y={dailySalesEvolutionStats.avgDailySales}
+                              stroke="#10b981"
+                              strokeDasharray="4 4"
+                              strokeOpacity={0.5}
+                            />
+                          )}
+                          {showAdminSalesLine && (
+                            <Line
+                              yAxisId="left"
+                              type="monotone"
+                              dataKey="ventas"
+                              name="Ventas Diarias"
+                              stroke="#10b981"
+                              strokeWidth={3}
+                              dot={{ r: 4, fill: '#10b981', strokeWidth: 2, stroke: '#ffffff' }}
+                              activeDot={{ r: 6, fill: '#059669', stroke: '#ffffff', strokeWidth: 2 }}
+                            />
+                          )}
+                          {showAdminProfitLine && (
+                            <Line
+                              yAxisId="left"
+                              type="monotone"
+                              dataKey="ganancia"
+                              name="Ganancia Neta"
+                              stroke="#4f46e5"
+                              strokeWidth={2.5}
+                              dot={{ r: 3.5, fill: '#4f46e5', strokeWidth: 1.5, stroke: '#ffffff' }}
+                              activeDot={{ r: 5 }}
+                            />
+                          )}
+                          {showAdminExpensesLine && (
+                            <Line
+                              yAxisId="left"
+                              type="monotone"
+                              dataKey="gastos"
+                              name="Gastos Operativos"
+                              stroke="#ef4444"
+                              strokeWidth={2}
+                              strokeDasharray="4 4"
+                              dot={{ r: 3, fill: '#ef4444' }}
+                              activeDot={{ r: 5 }}
+                            />
+                          )}
+                          {showAdminTicketLine && (
+                            <Line
+                              yAxisId="right"
+                              type="monotone"
+                              dataKey="ticketPromedio"
+                              name="Ticket Promedio"
+                              stroke="#f59e0b"
+                              strokeWidth={2}
+                              dot={{ r: 3, fill: '#f59e0b' }}
+                              activeDot={{ r: 5 }}
+                            />
+                          )}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              }
             />
           </div>
         )}
@@ -1087,18 +1583,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               employees={employees}
               initialOrders={orders}
               businessId={activeBizId}
-            />
-          </div>
-        )}
-
-        {/* VIEW 0: Dashboard Financiero (P&L, Gastos, Ventas, Comparativas) */}
-        {activeTab === 'financiero' && (
-          <div className="max-w-7xl mx-auto space-y-6">
-            <FinancialDashboard 
-              restaurants={restaurants}
-              orders={orders}
-              shifts={shifts}
-              menuItems={menuItems}
             />
           </div>
         )}
@@ -1142,7 +1626,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 onClick={() => {
                   setEditingRest(null);
-                  setRestForm({ nombre: '', direccion: '', telefono: '', activo: true, numeroMesas: 10, usaCocina: true, logoUrl: '' });
+                  setRestFormError(null);
+                  setRestForm({
+                    nombre: '',
+                    direccion: '',
+                    telefono: '',
+                    codigoSede: generateUniqueCodigoSedeForBusiness(),
+                    activo: true,
+                    numeroMesas: 10,
+                    usaCocina: true,
+                    logoUrl: ''
+                  });
                   setShowRestModal(true);
                 }}
                 className="h-10 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm cursor-pointer"
@@ -1174,7 +1668,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         )}
                         <div>
                           <h4 className="font-extrabold text-neutral-900 text-base leading-tight">{rest.nombre}</h4>
-                          <span className="text-[10px] text-neutral-400 font-mono">ID: {rest.id.slice(0, 8)}</span>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] text-neutral-400 font-mono">ID: {rest.id.slice(0, 8)}</span>
+                            {rest.codigoSede && (
+                              <span className="px-2 py-0.5 rounded-md bg-orange-100 text-orange-900 font-mono font-black text-[10px] border border-orange-200 flex items-center gap-1">
+                                <KeyRound className="w-2.5 h-2.5 text-orange-600" />
+                                Código Sede: {rest.codigoSede}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -1227,10 +1729,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         type="button"
                         onClick={() => {
                           setEditingRest(rest);
+                          setRestFormError(null);
                           setRestForm({
                             nombre: rest.nombre,
                             direccion: rest.direccion,
                             telefono: rest.telefono,
+                            codigoSede: rest.codigoSede && /^\d{4}$/.test(rest.codigoSede)
+                              ? rest.codigoSede
+                              : generateUniqueCodigoSedeForBusiness(rest.id),
                             activo: rest.activo,
                             numeroMesas: rest.numeroMesas || 10,
                             usaCocina: rest.usaCocina !== false,
@@ -1270,16 +1776,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* VIEW 3: Empleados con PIN y tarifa por hora */}
+        {/* VIEW 3: Empleados con PIN, Días Trabajados y Sueldo (Sin valores por hora) */}
         {activeTab === 'empleados' && (
           <div className="max-w-6xl mx-auto space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-neutral-800 text-sm uppercase tracking-wider">
-                  Plantilla de Empleados y Control de PINs ({employees.length})
+                  Plantilla de Empleados, Días de Trabajo y Sueldos ({employees.length})
                 </h3>
                 <p className="text-xs text-neutral-500">
-                  Asigna roles, gestiona la tarifa por hora y resetea PINs de acceso táctil.
+                  Asigna roles, gestiona el sueldo por día o mensual (sin tarifas por hora), consulta días trabajados y resetea PINs.
                 </p>
               </div>
               <button
@@ -1289,7 +1795,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     nombre: '',
                     puesto: 'mesero',
                     pin: '',
-                    modalidadPago: 'por_horas',
+                    modalidadPago: 'por_dia',
                     tarifaHora: 12.0,
                     tarifaDiaria: 50.0,
                     sueldoMensual: 1200.0,
@@ -1313,13 +1819,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <th className="p-3">Rol / Puesto</th>
                     <th className="p-3">Sede Asignada</th>
                     <th className="p-3">PIN Actual</th>
-                    <th className="p-3 text-right">Tarifa / Hora</th>
+                    <th className="p-3 text-center">Modalidad</th>
+                    <th className="p-3 text-right">Sueldo Base</th>
+                    <th className="p-3 text-center">Días Trabajados</th>
+                    <th className="p-3 text-right">Sueldo Generado</th>
                     <th className="p-3 text-center">Estado</th>
                     <th className="p-3 text-right">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100 text-neutral-700">
-                  {employees.map(emp => (
+                  {employees.map(emp => {
+                    const rawMod = emp.modalidadPago || emp.tipoSueldo || 'por_dia';
+                    const isMonthly = rawMod === 'mes' || rawMod === 'fijo';
+                    const dailySalary = isMonthly
+                      ? (Number(emp.sueldoMensual) || 1200) / 30
+                      : (Number(emp.tarifaDiaria) > 0 ? Number(emp.tarifaDiaria) : Math.max(30, (Number(emp.tarifaHora) || 12) * 8));
+                    const baseSalary = isMonthly ? (Number(emp.sueldoMensual) || 1200) : dailySalary;
+
+                    const empShifts = shifts.filter(s => s.employeeId === emp.id);
+                    const uniqueWorkedDates = new Set(
+                      empShifts.map(s => (s.fecha || s.horaInicio || '').split('T')[0]).filter(Boolean)
+                    );
+                    const workedDaysCount = uniqueWorkedDates.size;
+                    const generatedSalary = isMonthly
+                      ? (workedDaysCount > 0 ? Math.min(baseSalary, (baseSalary / 30) * workedDaysCount) : 0)
+                      : (workedDaysCount * dailySalary);
+
+                    return (
                     <tr key={emp.id} className="hover:bg-neutral-50/50">
                       <td className="p-3 font-bold text-neutral-900">{emp.nombre}</td>
                       <td className="p-3">
@@ -1341,12 +1867,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {restaurants.find(r => r.id === emp.restaurantId)?.nombre || 'Todas'}
                       </td>
                       <td className="p-3 font-mono font-bold text-orange-600">
-                        •••• ({emp.pin})
+                        <div>•••• ({emp.pin})</div>
+                        {restaurants.find(r => r.id === emp.restaurantId)?.codigoSede && (
+                          <div className="text-[10px] text-neutral-500 font-mono mt-0.5">
+                            Acceso 8 díg: <strong className="text-neutral-900">{restaurants.find(r => r.id === emp.restaurantId)?.codigoSede}{emp.pin}</strong>
+                          </div>
+                        )}
                       </td>
-                      <td className="p-3 text-right font-mono font-bold">
-                        {emp.modalidadPago === 'por_dia' ? `$${(emp.tarifaDiaria || 0).toFixed(2)} / día` :
-                         emp.modalidadPago === 'mes' ? `$${(emp.sueldoMensual || 0).toFixed(2)} / mes` :
-                         `$${(emp.tarifaHora || 0).toFixed(2)} / h`}
+                      <td className="p-3 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          isMonthly ? 'bg-purple-50 text-purple-700 border border-purple-200' : 'bg-blue-50 text-blue-700 border border-blue-200'
+                        }`}>
+                          {isMonthly ? 'Mensual' : 'Por Día'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right font-mono font-bold text-neutral-800">
+                        {isMonthly
+                          ? `$${baseSalary.toFixed(2)} / mes`
+                          : `$${dailySalary.toFixed(2)} / día`}
+                      </td>
+                      <td className="p-3 text-center">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-indigo-50 text-indigo-800 font-black font-mono text-xs border border-indigo-200">
+                          {workedDaysCount} {workedDaysCount === 1 ? 'día' : 'días'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right font-mono font-black text-emerald-700">
+                        ${generatedSalary.toFixed(2)}
                       </td>
                       <td className="p-3 text-center">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -1365,14 +1911,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </button>
                         <button
                           onClick={() => {
+                            const normalizedMod: EmployeeSalaryType = isMonthly ? 'mes' : 'por_dia';
                             setEditingEmp(emp);
                             setEmpForm({
                               nombre: emp.nombre,
                               puesto: emp.puesto,
                               pin: emp.pin,
-                              modalidadPago: emp.modalidadPago || emp.tipoSueldo || 'por_horas',
+                              modalidadPago: normalizedMod,
                               tarifaHora: emp.tarifaHora || 12.0,
-                              tarifaDiaria: emp.tarifaDiaria || 50.0,
+                              tarifaDiaria: dailySalary || 50.0,
                               sueldoMensual: emp.sueldoMensual || 1200.0,
                               restaurantId: emp.restaurantId,
                               activo: emp.activo
@@ -1385,7 +1932,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1713,21 +2261,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                   {item.disponible ? 'Disponible' : 'Agotado'}
                                 </button>
                               </td>
-                              <td className="p-3 text-right space-x-1">
-                                <button
-                                  onClick={() => handleOpenEditDish(item)}
-                                  className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 transition"
-                                  title="Editar Plato"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => handleConfirmDeleteMenuItemWithAudit(item)}
-                                  className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition"
-                                  title="Eliminar Plato"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                              <td className="p-3 text-right">
+                                <div className="inline-flex items-center justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditDish(item)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-[11px] flex items-center gap-1 transition cursor-pointer"
+                                    title="Editar Plato"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                    <span>Editar</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleConfirmDeleteMenuItemWithAudit(item)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 font-bold text-[11px] flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                                    title="Borrar plato del menú sin afectar el historial de ventas"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Borrar</span>
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1848,16 +2402,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                           <div className="flex gap-1.5">
                             <button
+                              type="button"
                               onClick={() => handleOpenEditDish(item)}
-                              className="p-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700"
+                              className="px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                              title="Editar Plato"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
+                              <span>Editar</span>
                             </button>
                             <button
+                              type="button"
                               onClick={() => handleConfirmDeleteMenuItemWithAudit(item)}
-                              className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"
+                              className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 font-bold text-xs flex items-center gap-1 transition cursor-pointer"
+                              title="Borrar plato del menú sin afectar el historial de ventas"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
+                              <span>Borrar</span>
                             </button>
                           </div>
                         </div>
@@ -1883,158 +2443,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 await seedSampleMenuAuditLogsIfEmpty(activeBizId, employees, menuItems);
               }}
             />
-          </div>
-        )}
-
-        {/* VIEW 5: Auditoría de Turnos & Pago de Sueldos */}
-        {activeTab === 'turnos' && (
-          <div className="max-w-6xl mx-auto space-y-4">
-            {paySuccessToast && (
-              <div className="p-3 bg-emerald-600 text-white rounded-xl text-xs font-bold flex items-center justify-between shadow-md animate-in slide-in-from-top duration-200">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>{paySuccessToast}</span>
-                </div>
-                <button onClick={() => setPaySuccessToast(null)} className="text-white/80 hover:text-white">✕</button>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-bold text-neutral-800 text-sm uppercase tracking-wider">
-                  Historial y Liquidación de Turnos ({shifts.length})
-                </h3>
-                <p className="text-xs text-neutral-500">
-                  Calcula horas ordinarias, horas extra (1.5x), ventas y liquida el pago registrando el gasto automáticamente.
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-white rounded-2xl border border-neutral-200 overflow-hidden shadow-xs">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b">
-                  <tr>
-                    <th className="p-3">Empleado</th>
-                    <th className="p-3">Sede</th>
-                    <th className="p-3">Horario</th>
-                    <th className="p-3 text-center">Horas</th>
-                    <th className="p-3 text-center">Estado</th>
-                    <th className="p-3 text-right">Modalidad / Tarifa</th>
-                    <th className="p-3 text-right">Sueldo Calc.</th>
-                    <th className="p-3 text-right">Ventas</th>
-                    <th className="p-3 text-center">Liquidación / Pago</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-100 text-neutral-700">
-                  {shifts.map(sh => {
-                    const emp = employees.find(e => e.id === sh.employeeId);
-                    const mod = emp?.modalidadPago || emp?.tipoSueldo || 'por_horas';
-                    let rateLabel = `$${(emp?.tarifaHora || 12).toFixed(2)}/h`;
-                    
-                    let durationHours = sh.horaFin 
-                      ? Math.max(0.1, (new Date(sh.horaFin).getTime() - new Date(sh.horaInicio).getTime()) / (1000 * 60 * 60))
-                      : (new Date().getTime() - new Date(sh.horaInicio).getTime()) / (1000 * 60 * 60);
-                    
-                    if (sh.pausas && sh.pausas.length > 0) {
-                      let pauseHours = 0;
-                      sh.pausas.forEach(p => {
-                        const endPause = p.fin ? new Date(p.fin).getTime() : new Date().getTime();
-                        pauseHours += (endPause - new Date(p.inicio).getTime()) / (1000 * 60 * 60);
-                      });
-                      durationHours = Math.max(0.1, durationHours - pauseHours);
-                    }
-                    
-                    const regularHours = Math.min(8, durationHours);
-                    const overtimeHours = Math.max(0, durationHours - 8);
-                    
-                    let calculatedSalary = (regularHours * (emp?.tarifaHora || 12)) + (overtimeHours * (emp?.tarifaHora || 12) * 1.5);
-                    
-                    if (mod === 'por_dia') {
-                      const dailyRate = emp?.tarifaDiaria || 50;
-                      rateLabel = `$${dailyRate.toFixed(2)}/día`;
-                      calculatedSalary = dailyRate;
-                    } else if (mod === 'mes' || mod === 'fijo') {
-                      const monthlyRate = emp?.sueldoMensual || 1200;
-                      rateLabel = `$${monthlyRate.toFixed(2)}/mes`;
-                      calculatedSalary = 0; // Se liquida en planilla mensual consolidada
-                    }
-
-                    const isClosed = sh.estado === 'cerrado';
-                    const isPaid = Boolean(sh.pagado ?? sh.sueldoPagado ?? false);
-                    const paidAmount = sh.montoPagadoSueldo ?? sh.sueldoTotal;
-
-                    return (
-                      <tr key={sh.id} className="hover:bg-neutral-50/50">
-                        <td className="p-3">
-                          <div className="font-bold text-neutral-900">{sh.employeeName || sh.employeeId}</div>
-                          <div className="text-[10px] text-neutral-400 capitalize">{emp?.puesto || 'personal'}</div>
-                        </td>
-                        <td className="p-3 text-neutral-600">{sh.restaurantNombre || 'Central'}</td>
-                        <td className="p-3 font-mono text-[11px]">
-                          <div>In: {new Date(sh.horaInicio).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                          {sh.horaFin ? (
-                            <div>Out: {new Date(sh.horaFin).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                          ) : (
-                            <div className="text-emerald-600 font-bold">En curso</div>
-                          )}
-                        </td>
-                        <td className="p-3 text-center font-mono font-bold">
-                          {durationHours.toFixed(1)}h
-                          {overtimeHours > 0 && mod === 'por_horas' && (
-                            <span className="block text-[10px] text-orange-600 font-normal">+{overtimeHours.toFixed(1)}h extra</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            sh.estado === 'abierto' ? 'bg-emerald-100 text-emerald-800' :
-                            sh.estado === 'en_pausa' ? 'bg-amber-100 text-amber-800' :
-                            'bg-neutral-100 text-neutral-600'
-                          }`}>
-                            {sh.estado === 'en_pausa' ? 'en pausa' : sh.estado}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right font-mono text-neutral-600">
-                          {rateLabel}
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold text-neutral-900">
-                          {mod === 'mes' || mod === 'fijo' ? (
-                            <span className="text-[10px] text-neutral-400">Planilla Mensual</span>
-                          ) : (
-                            `$${calculatedSalary.toFixed(2)}`
-                          )}
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold text-emerald-700">
-                          ${(sh.ventasGeneradas || 0).toFixed(2)}
-                        </td>
-                        <td className="p-3 text-center">
-                          {isPaid ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-200">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              Pagado (${(paidAmount !== undefined ? paidAmount : calculatedSalary).toFixed(2)})
-                            </span>
-                          ) : (mod === 'mes' || mod === 'fijo') ? (
-                            <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
-                              Pago Mensual
-                            </span>
-                          ) : isClosed ? (
-                            <button
-                              type="button"
-                              disabled={payingShiftId === sh.id}
-                              onClick={() => handlePayShift(sh)}
-                              className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] shadow-xs active:scale-95 transition disabled:opacity-50 cursor-pointer"
-                            >
-                              {payingShiftId === sh.id ? 'Pagando...' : `Pagar $${calculatedSalary.toFixed(2)}`}
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-neutral-400 font-medium">Turno activo</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
           </div>
         )}
 
@@ -2360,6 +2768,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-bold text-neutral-700 mb-1">
+                  Código de Sede (4 dígitos numéricos):
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={restForm.codigoSede}
+                    onChange={(e) => {
+                      const digitsOnly = e.target.value.replace(/\D/g, '').slice(0, 4);
+                      setRestForm({ ...restForm, codigoSede: digitsOnly });
+                      setRestFormError(null);
+                    }}
+                    placeholder="Ej: 2481"
+                    className="flex-1 h-10 px-3 rounded-xl border border-neutral-300 font-mono font-black text-sm tracking-widest text-neutral-900 outline-none focus:border-orange-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRestForm({ ...restForm, codigoSede: generateUniqueCodigoSedeForBusiness(editingRest?.id) });
+                      setRestFormError(null);
+                    }}
+                    className="h-10 px-3 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shrink-0"
+                    title="Generar código único de 4 dígitos"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Generar</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-neutral-500 mt-1">
+                  Los primeros 4 dígitos del código de 8 dígitos que ingresan los empleados de esta sucursal.
+                </p>
+              </div>
+
+              {restFormError && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{restFormError}</span>
+                </div>
+              )}
+
               {/* Subida y Preview de Logo del Local */}
               <LogoUploader
                 logoUrl={restForm.logoUrl}
@@ -2497,15 +2948,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-bold text-neutral-700 mb-1">Modalidad de Pago:</label>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">Modalidad de Sueldo:</label>
                   <select
-                    value={empForm.modalidadPago}
+                    value={empForm.modalidadPago === 'mes' || empForm.modalidadPago === 'fijo' ? 'mes' : 'por_dia'}
                     onChange={(e) => setEmpForm({ ...empForm, modalidadPago: e.target.value as any })}
                     className="w-full h-10 px-2 rounded-xl border border-neutral-300 text-xs font-bold"
                   >
-                    <option value="por_horas">Pago por Hora</option>
-                    <option value="por_dia">Pago por Día</option>
-                    <option value="mes">Sueldo Mensual</option>
+                    <option value="por_dia">Pago por Día Trabajado</option>
+                    <option value="mes">Sueldo Mensual Fijo</option>
                   </select>
                 </div>
                 <div>
@@ -2523,22 +2973,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
-                {empForm.modalidadPago === 'por_horas' && (
+                {(empForm.modalidadPago !== 'mes' && empForm.modalidadPago !== 'fijo') ? (
                   <div>
-                    <label className="block text-xs font-bold text-neutral-700 mb-1">Tarifa por Hora ($):</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0.1"
-                      value={empForm.tarifaHora}
-                      onChange={(e) => setEmpForm({ ...empForm, tarifaHora: parseFloat(e.target.value) || 0 })}
-                      className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
-                    />
-                  </div>
-                )}
-                {empForm.modalidadPago === 'por_dia' && (
-                  <div>
-                    <label className="block text-xs font-bold text-neutral-700 mb-1">Tarifa por Día ($):</label>
+                    <label className="block text-xs font-bold text-neutral-700 mb-1">Sueldo por Día Trabajado ($):</label>
                     <input
                       type="number"
                       step="1"
@@ -2547,9 +2984,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       onChange={(e) => setEmpForm({ ...empForm, tarifaDiaria: parseFloat(e.target.value) || 0 })}
                       className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
                     />
+                    <p className="text-[11px] text-neutral-500 mt-1">
+                      Se multiplica por cada día trabajado registrado en Asistencia & Planilla.
+                    </p>
                   </div>
-                )}
-                {empForm.modalidadPago === 'mes' && (
+                ) : (
                   <div>
                     <label className="block text-xs font-bold text-neutral-700 mb-1">Sueldo Mensual ($):</label>
                     <input
@@ -2560,6 +2999,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       onChange={(e) => setEmpForm({ ...empForm, sueldoMensual: parseFloat(e.target.value) || 0 })}
                       className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs font-bold"
                     />
+                    <p className="text-[11px] text-neutral-500 mt-1">
+                      Equivalente diario: ${((empForm.sueldoMensual || 0) / 30).toFixed(2)} / día (base 30 días).
+                    </p>
                   </div>
                 )}
               </div>
@@ -3064,11 +3506,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             <div className="flex gap-2 pt-3 border-t border-neutral-100">
+              {editingMenu && (
+                <button
+                  type="button"
+                  disabled={isUploadingPhoto}
+                  onClick={() => handleConfirmDeleteMenuItemWithAudit(editingMenu)}
+                  className="px-3.5 h-11 rounded-xl bg-red-50 hover:bg-red-600 text-red-600 hover:text-white border border-red-200 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  title="Borrar plato del menú sin afectar su historial de ventas"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>Borrar Plato</span>
+                </button>
+              )}
               <button
                 type="button"
                 disabled={isUploadingPhoto}
                 onClick={() => setShowMenuModal(false)}
-                className="flex-1 h-11 rounded-xl bg-neutral-100 hover:bg-neutral-200 font-bold text-xs text-neutral-700 transition disabled:opacity-50"
+                className="flex-1 h-11 rounded-xl bg-neutral-100 hover:bg-neutral-200 font-bold text-xs text-neutral-700 transition disabled:opacity-50 cursor-pointer"
               >
                 Cancelar
               </button>
@@ -3076,7 +3530,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 type="button"
                 disabled={isUploadingPhoto || !menuForm.nombre.trim()}
                 onClick={handleSaveMenuItem}
-                className="flex-1 h-11 rounded-xl bg-orange-600 hover:bg-orange-700 font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition disabled:opacity-50"
+                className="flex-1 h-11 rounded-xl bg-orange-600 hover:bg-orange-700 font-bold text-xs text-white shadow-sm flex items-center justify-center gap-2 transition disabled:opacity-50 cursor-pointer"
               >
                 {isUploadingPhoto ? (
                   <>
@@ -3089,6 +3543,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* MODAL: Confirmación para Borrar Plato del Menú Conservando Historial de Ventas */}
+      {dishToDeleteModal && (
+        <div className="fixed inset-0 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-neutral-200 space-y-4">
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-neutral-100">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-neutral-900">
+                    ¿Borrar plato del menú activo?
+                  </h3>
+                  <p className="text-xs text-neutral-500">
+                    {dishToDeleteModal.nombre} · ${dishToDeleteModal.precio.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDishToDeleteModal(null)}
+                className="w-8 h-8 rounded-full bg-neutral-100 hover:bg-neutral-200 text-neutral-500 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 space-y-1.5">
+              <div className="font-black flex items-center gap-1.5 text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Historial de ventas 100% protegido</span>
+              </div>
+              <p className="text-[11px] text-emerald-800 leading-relaxed">
+                Este plato se retirará de la carta activa (Meseros, Caja y Menú), pero <strong>todas sus ventas históricas, ingresos cobrados, unidades vendidas y reportes financieros P&L se conservarán intactos</strong>.
+              </p>
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingDish}
+                onClick={() => setDishToDeleteModal(null)}
+                className="flex-1 h-11 rounded-xl bg-neutral-100 hover:bg-neutral-200 font-bold text-xs text-neutral-700 transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingDish}
+                onClick={handleExecuteDeleteDish}
+                className="flex-1 h-11 rounded-xl bg-red-600 hover:bg-red-700 font-black text-xs text-white shadow-sm flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isDeletingDish ? 'Borrando del menú...' : 'Sí, Borrar del Menú'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast flotante de confirmación de borrado de plato */}
+      {dishDeletedToast && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-md bg-neutral-900 text-white px-4 py-3.5 rounded-2xl shadow-2xl border border-emerald-500/40 flex items-center gap-3 text-xs font-bold animate-in fade-in slide-in-from-bottom-4">
+          <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+          <span className="flex-1 leading-snug">{dishDeletedToast}</span>
+          <button
+            type="button"
+            onClick={() => setDishDeletedToast(null)}
+            className="text-neutral-400 hover:text-white p-1 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 

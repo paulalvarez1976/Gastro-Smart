@@ -1,4 +1,14 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend
+} from 'recharts';
 import { 
   FinancialSummaryData, 
   DailyStat, 
@@ -42,6 +52,23 @@ export const ExecutivePdfReport: React.FC<ExecutivePdfReportProps> = ({
   };
 
   const sortedStats = [...dailyStats].sort((a, b) => a.fecha.localeCompare(b.fecha));
+  const [showRawTable, setShowRawTable] = useState(false);
+
+  const lineChartData = sortedStats.length > 0
+    ? sortedStats.map(st => ({
+        fecha: st.fecha,
+        ventas: Number(st.ventasTotales.toFixed(2)),
+        gastos: Number(st.gastosTotales.toFixed(2)),
+        ganancia: Number(st.gananciaNeta.toFixed(2)),
+        pedidos: st.pedidosCobrados
+      }))
+    : summary.chartData.map(pt => ({
+        fecha: pt.label,
+        ventas: Number(pt.ventas.toFixed(2)),
+        gastos: Number(pt.gastos.toFixed(2)),
+        ganancia: Number(pt.ganancia.toFixed(2)),
+        pedidos: pt.pedidos || 0
+      }));
 
   return (
     <div className="fixed inset-0 bg-black/80 z-50 overflow-y-auto flex flex-col items-center justify-start p-4 sm:p-8 backdrop-blur-sm print:p-0 print:bg-white print:fixed print:inset-0">
@@ -197,8 +224,8 @@ export const ExecutivePdfReport: React.FC<ExecutivePdfReportProps> = ({
             <h4 className="font-bold uppercase tracking-wider text-[11px]">Resumen de Eficiencia Operativa</h4>
             <div className="grid grid-cols-3 gap-4 text-neutral-800">
               <div>
-                <span className="text-neutral-500 block">Horas Laborales:</span>
-                <strong>{summary.horasTrabajadas.toFixed(1)} hrs</strong>
+                <span className="text-neutral-500 block">Días / Jornadas Laborales:</span>
+                <strong>{Math.round(summary.horasTrabajadas)} días</strong>
               </div>
               <div>
                 <span className="text-neutral-500 block">Costo Laboral Estimado:</span>
@@ -220,31 +247,83 @@ export const ExecutivePdfReport: React.FC<ExecutivePdfReportProps> = ({
           </div>
 
           <div className="border border-black p-4">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-600 mb-4">Evolución en el Periodo ({periodLabel})</h4>
-            
-            {/* Visual printable ascii / bar representations for maximum cross-print fidelity */}
-            <table className="w-full text-xs text-left border-collapse">
-              <thead>
-                <tr className="border-b border-black bg-neutral-100">
-                  <th className="p-2 font-bold uppercase">Fecha / Punto</th>
-                  <th className="p-2 font-bold uppercase text-right">Ventas ($)</th>
-                  <th className="p-2 font-bold uppercase text-right">Gastos ($)</th>
-                  <th className="p-2 font-bold uppercase text-right">Ganancia Neta ($)</th>
-                  <th className="p-2 font-bold uppercase text-right">Pedidos</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedStats.slice(0, 14).map((st, idx) => (
-                  <tr key={idx} className="border-b border-neutral-200">
-                    <td className="p-2 font-mono">{st.fecha}</td>
-                    <td className="p-2 text-right font-bold">${st.ventasTotales.toFixed(2)}</td>
-                    <td className="p-2 text-right">${st.gastosTotales.toFixed(2)}</td>
-                    <td className="p-2 text-right font-bold">${st.gananciaNeta.toFixed(2)}</td>
-                    <td className="p-2 text-right">{st.pedidosCobrados}</td>
+            <div className="flex items-center justify-between mb-4">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-600">
+                Evolución Diaria de Ventas vs. Gastos ({periodLabel})
+              </h4>
+              <button
+                type="button"
+                onClick={() => setShowRawTable(v => !v)}
+                className="print:hidden px-2.5 py-1 rounded-lg border border-neutral-300 text-[11px] font-bold text-neutral-700 hover:bg-neutral-100 cursor-pointer"
+              >
+                {showRawTable ? 'Ocultar desglose tabular' : 'Ver desglose tabular'}
+              </button>
+            </div>
+
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={lineChartData} margin={{ top: 10, right: 20, left: 0, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e5e5" />
+                  <XAxis dataKey="fecha" tick={{ fontSize: 11, fill: '#404040', fontWeight: 600 }} />
+                  <YAxis tick={{ fontSize: 11, fill: '#404040' }} tickFormatter={(v) => `$${v}`} />
+                  <Tooltip
+                    formatter={(value: any, name: string) => [`$${Number(value).toFixed(2)}`, name]}
+                  />
+                  <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
+                  <Line
+                    type="monotone"
+                    dataKey="ventas"
+                    name="Ventas Diarias ($)"
+                    stroke="#10b981"
+                    strokeWidth={3}
+                    dot={{ r: 4, fill: '#10b981' }}
+                    activeDot={{ r: 6 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ganancia"
+                    name="Ganancia Neta ($)"
+                    stroke="#4f46e5"
+                    strokeWidth={2.5}
+                    dot={{ r: 3.5, fill: '#4f46e5' }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="gastos"
+                    name="Gastos ($)"
+                    stroke="#ef4444"
+                    strokeWidth={2}
+                    strokeDasharray="4 4"
+                    dot={{ r: 3, fill: '#ef4444' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {showRawTable && (
+              <table className="w-full text-xs text-left border-collapse mt-4 pt-4 border-t border-neutral-200">
+                <thead>
+                  <tr className="border-b border-black bg-neutral-100">
+                    <th className="p-2 font-bold uppercase">Fecha / Punto</th>
+                    <th className="p-2 font-bold uppercase text-right">Ventas ($)</th>
+                    <th className="p-2 font-bold uppercase text-right">Gastos ($)</th>
+                    <th className="p-2 font-bold uppercase text-right">Ganancia Neta ($)</th>
+                    <th className="p-2 font-bold uppercase text-right">Pedidos</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {sortedStats.slice(0, 14).map((st, idx) => (
+                    <tr key={idx} className="border-b border-neutral-200">
+                      <td className="p-2 font-mono">{st.fecha}</td>
+                      <td className="p-2 text-right font-bold">${st.ventasTotales.toFixed(2)}</td>
+                      <td className="p-2 text-right">${st.gastosTotales.toFixed(2)}</td>
+                      <td className="p-2 text-right font-bold">${st.gananciaNeta.toFixed(2)}</td>
+                      <td className="p-2 text-right">{st.pedidosCobrados}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </section>
 

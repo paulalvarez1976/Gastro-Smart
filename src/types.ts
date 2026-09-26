@@ -33,6 +33,7 @@ export interface Business {
   email?: string;
   telefono?: string;
   direccion?: string;
+  codigoSede?: string;
   modoPruebas?: boolean;
 }
 
@@ -66,6 +67,7 @@ export interface Restaurant {
   nombre: string;
   direccion: string;
   telefono: string;
+  codigoSede?: string; // 4 dígitos numéricos
   numeroMesas?: number;
   activo: boolean;
   usaCocina?: boolean; // true: con pantalla/display cocina KDS; false: sin cocina, pedidos van directo a mostrador
@@ -138,6 +140,42 @@ export interface Shift {
   };
 }
 
+export interface DishIngredient {
+  insumoId: string;
+  insumoNombre: string;
+  cantidadPorUnidad: number;
+  unidadMedida: string;
+}
+
+export interface InventoryItem {
+  id: string;
+  businessId: string;
+  restaurantId: string; // 'all' o ID de sucursal
+  nombre: string;
+  categoria: string;
+  stockActual: number;
+  stockMinimo: number; // Umbral crítico de alerta
+  unidadMedida: string; // 'kg' | 'g' | 'litros' | 'ml' | 'unidades' | 'porciones' | 'paquetes' | 'latas' | 'botellas'
+  costoUnitario?: number;
+  proveedor?: string;
+  notas?: string;
+  ultimaActualizacion?: string;
+  appId: 'gastro_smart';
+}
+
+export interface DeductedSupplyRecord {
+  insumoId: string;
+  nombre: string;
+  cantidadDescontada: number;
+  stockAnterior: number;
+  stockRestante: number;
+  stockMinimo: number;
+  unidad: string;
+  alertaCritica: boolean;
+  agotado: boolean;
+  tipo: 'insumo' | 'plato';
+}
+
 export interface MenuItem {
   id: string;
   businessId?: string;
@@ -154,8 +192,11 @@ export interface MenuItem {
   stockActual?: number; // Cantidad actual disponible en inventario
   stockMinimo?: number; // Umbral mínimo de alerta de stock bajo (ej. 5)
   unidadMedida?: string; // 'unidades' | 'porciones' | 'botellas' | 'latas' | 'kg' | 'litros' | etc.
+  insumosReceta?: DishIngredient[]; // Insumos que se descuentan automáticamente por unidad al marcar como entregado
   fotoUrl?: string | null;
   imagenUrl?: string | null;
+  eliminadoDeCarta?: boolean; // Indica si el plato fue borrado del menú activo conservando su historial de ventas
+  eliminadoEn?: string;
 }
 
 export interface Client {
@@ -329,6 +370,10 @@ export interface Order {
     fecha: string;
     montoPerdido: number;
   } | null;
+  insumosDescontados?: boolean;
+  insumosDescontadosEn?: string;
+  insumosDescontadosRondas?: number[];
+  detalleInsumosDescontados?: DeductedSupplyRecord[];
 }
 
 export interface CashRegisterClose {
@@ -565,7 +610,10 @@ export type MenuAuditActionType =
   | 'modificacion_plato'
   | 'ajuste_stock'
   | 'cambio_disponibilidad'
-  | 'eliminacion_plato';
+  | 'eliminacion_plato'
+  | 'descuento_automatico_entrega'
+  | 'creacion_insumo'
+  | 'ajuste_insumo';
 
 export interface MenuAuditLogChange {
   campo: string;

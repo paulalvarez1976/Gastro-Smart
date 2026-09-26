@@ -12,24 +12,29 @@ import {
   CheckCircle2, 
   HelpCircle,
   Edit2,
+  Trash2,
   UtensilsCrossed,
   Filter
 } from 'lucide-react';
 
 interface DishCostProfitReportProps {
   menuItems: MenuItem[];
+  archivedMenuItems?: MenuItem[];
   orders: Order[];
   restaurants: Restaurant[];
   currentRestaurant?: Restaurant | null;
   onEditDish?: (item: MenuItem) => void;
+  onDeleteDish?: (item: MenuItem) => void;
 }
 
 export const DishCostProfitReport: React.FC<DishCostProfitReportProps> = ({
   menuItems,
+  archivedMenuItems = [],
   orders,
   restaurants,
   currentRestaurant,
-  onEditDish
+  onEditDish,
+  onDeleteDish
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -45,28 +50,89 @@ export const DishCostProfitReport: React.FC<DishCostProfitReportProps> = ({
     return Array.from(cats);
   }, [menuItems]);
 
-  // Aggregate real sales counts per menuItem across completed orders
-  const salesMap = useMemo(() => {
+  // Aggregate real sales counts per menuItem across completed orders (preserving historical dish info even if deleted from active menu)
+  const { salesMap, historicalDishMeta } = useMemo(() => {
     const map = new Map<string, { unitsSold: number; revenue: number }>();
-    const paidOrders = orders.filter(o => o.estado === 'cobrado');
+    const metaMap = new Map<string, { id: string; nombre: string; precio: number; fotoUrl?: string | null }>();
+    const paidOrders = orders.filter(o => o.estado === 'cobrado' || o.estadoPago === 'cobrado');
 
     paidOrders.forEach(order => {
       order.items?.forEach(item => {
         const key = item.menuItemId || item.nombre;
         const current = map.get(key) || { unitsSold: 0, revenue: 0 };
+        const qty = item.cantidad || 1;
+        const rev = (item as any).subtotal || (qty * (item.precio || 0));
         map.set(key, {
-          unitsSold: current.unitsSold + (item.cantidad || 1),
-          revenue: current.revenue + (item.subtotal || ((item.cantidad || 1) * item.precio))
+          unitsSold: current.unitsSold + qty,
+          revenue: current.revenue + rev
         });
+        if (item.nombre && ! map.has(item.nombre)) {
+          map.set(item.nombre, {
+            unitsSold: current.unitsSold + qty,
+            revenue: current.revenue + rev
+          });
+        }
+        if (!metaMap.has(key)) {
+          metaMap.set(key, {
+            id: item.menuItemId || key,
+            nombre: item.nombre || 'Plato Histórico',
+            precio: item.precio || 0,
+            fotoUrl: item.fotoUrl || item.imagenUrl || null
+          });
+        }
       });
     });
 
-    return map;
+    return { salesMap: map, historicalDishMeta: metaMap };
   }, [orders]);
+
+  // Combine active menu items with archived/deleted dishes that have historical sales so sales history is never lost
+  const allReportDishes = useMemo(() => {
+    const activeIds = new Set(menuItems.map(m => m.id));
+    const activeNames = new Set(menuItems.map(m => m.nombre.toLowerCase().trim()));
+    const combined: MenuItem[] = [...menuItems];
+
+    // 1. Add archived menu items that have historical sales
+    archivedMenuItems.forEach(arch => {
+      if (!activeIds.has(arch.id)) {
+        const sales = salesMap.get(arch.id) || salesMap.get(arch.nombre);
+        if (sales && sales.unitsSold > 0) {
+          combined.push({ ...arch, eliminadoDeCarta: true });
+          activeIds.add(arch.id);
+          activeNames.add(arch.nombre.toLowerCase().trim());
+        }
+      }
+    });
+
+    // 2. Reconstruct any hard-deleted dish that still exists in historical paid orders
+    historicalDishMeta.forEach((meta, key) => {
+      if (!activeIds.has(meta.id) && !activeNames.has(meta.nombre.toLowerCase().trim())) {
+        const sales = salesMap.get(key);
+        if (sales && sales.unitsSold > 0) {
+          combined.push({
+            id: meta.id,
+            restaurantId: 'all',
+            nombre: meta.nombre,
+            descripcion: 'Plato retirado del menú activo (historial de ventas conservado)',
+            precio: meta.precio,
+            costoElaboracion: 0,
+            categoria: 'Histórico',
+            disponible: false,
+            eliminadoDeCarta: true,
+            fotoUrl: meta.fotoUrl
+          });
+          activeIds.add(meta.id);
+          activeNames.add(meta.nombre.toLowerCase().trim());
+        }
+      }
+    });
+
+    return combined;
+  }, [menuItems, archivedMenuItems, salesMap, historicalDishMeta]);
 
   // Compute metrics for each dish
   const enrichedDishes = useMemo(() => {
-    return menuItems.map(item => {
+    return allReportDishes.map(item => {
       const price = item.precio || 0;
       const cost = item.costoElaboracion || 0;
       const hasCost = typeof item.costoElaboracion === 'number' && item.costoElaboracion > 0;
@@ -75,10 +141,10 @@ export const DishCostProfitReport: React.FC<DishCostProfitReportProps> = ({
       const profitMarginPercent = price > 0 ? (profitMargin$ / price) * 100 : 0;
       const foodCostPercent = price > 0 ? (cost / price) * 100 : 0;
 
-      // Real sales data
+      // Real sales data (preserve actual historical revenue if price changed or dish was deleted)
       const sales = salesMap.get(item.id) || salesMap.get(item.nombre) || { unitsSold: 0, revenue: 0 };
       const totalUnitsSold = sales.unitsSold;
-      const totalRevenue = totalUnitsSold * price;
+      const totalRevenue = sales.revenue > 0 ? sales.revenue : totalUnitsSold * price;
       const totalCost = totalUnitsSold * cost;
       const totalNetProfit = totalRevenue - totalCost;
 
@@ -111,7 +177,7 @@ export const DishCostProfitReport: React.FC<DishCostProfitReportProps> = ({
         marginStatus
       };
     });
-  }, [menuItems, salesMap]);
+  }, [allReportDishes, salesMap]);
 
   // Filter & Sort
   const filteredDishes = useMemo(() => {
@@ -436,7 +502,14 @@ export const DishCostProfitReport: React.FC<DishCostProfitReportProps> = ({
                           )}
                         </div>
                         <div>
-                          <div className="font-bold text-neutral-900">{dish.nombre}</div>
+                          <div className="font-bold text-neutral-900 flex items-center gap-1.5 flex-wrap">
+                            <span>{dish.nombre}</span>
+                            {dish.eliminadoDeCarta && (
+                              <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-neutral-200 text-neutral-700 border border-neutral-300">
+                                Borrado de carta · Historial conservado
+                              </span>
+                            )}
+                          </div>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-neutral-100 text-neutral-600 uppercase">
                               {dish.categoria}
@@ -538,18 +611,37 @@ export const DishCostProfitReport: React.FC<DishCostProfitReportProps> = ({
                       )}
                     </td>
 
-                    {/* Acción / Editar */}
+                    {/* Acción / Editar o Borrar de Carta */}
                     <td className="p-3 text-center">
-                      {onEditDish && (
-                        <button
-                          type="button"
-                          onClick={() => onEditDish(dish)}
-                          className="px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-orange-50 hover:text-orange-700 text-neutral-600 text-xs font-bold flex items-center justify-center gap-1 mx-auto transition cursor-pointer"
-                          title="Ajustar precio o costo de elaboración"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>Editar</span>
-                        </button>
+                      {dish.eliminadoDeCarta ? (
+                        <span className="inline-flex items-center px-2 py-1 rounded-lg bg-neutral-100 text-neutral-500 text-[10px] font-bold">
+                          Solo Historial
+                        </span>
+                      ) : (
+                        <div className="flex items-center justify-center gap-1.5">
+                          {onEditDish && (
+                            <button
+                              type="button"
+                              onClick={() => onEditDish(dish)}
+                              className="px-2.5 py-1.5 rounded-lg bg-neutral-100 hover:bg-orange-50 hover:text-orange-700 text-neutral-600 text-xs font-bold flex items-center justify-center gap-1 transition cursor-pointer"
+                              title="Ajustar precio o costo de elaboración"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>Editar</span>
+                            </button>
+                          )}
+                          {onDeleteDish && (
+                            <button
+                              type="button"
+                              onClick={() => onDeleteDish(dish)}
+                              className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold flex items-center justify-center gap-1 transition cursor-pointer border border-red-200/70"
+                              title="Borrar plato del menú activo sin afectar su historial de ventas"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              <span>Borrar</span>
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>

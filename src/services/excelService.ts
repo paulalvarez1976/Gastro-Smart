@@ -12,16 +12,16 @@ export interface PayrollEmployeeRow {
   nombre: string;
   puesto: string;
   sucursal: string;
-  tarifaHora: number;
-  horasNormales: number;
-  horasExtra: number;
-  horasTotales: number;
-  totalNormal: number;
-  totalExtra: number;
+  modalidadPago: 'por_dia' | 'mes';
+  modalidadLabel: string;
+  sueldoBase: number;
+  valorDiario: number;
+  diasTrabajados: number;
   sueldoCalculado: number;
   totalAbonado: number;
   totalPagar: number;
   turnosContados: number;
+  ventasGeneradas: number;
   estadoPago: string;
 }
 
@@ -349,7 +349,7 @@ export function exportFinancialReportToExcel(params: {
 }
 
 /**
- * Exporta la planilla de horas y asistencia a Excel
+ * Exporta la planilla consolidada de asistencia, días trabajados y sueldos a Excel
  */
 export function exportPayrollToExcel(params: {
   businessName: string;
@@ -364,14 +364,14 @@ export function exportPayrollToExcel(params: {
     'Empleado',
     'Puesto',
     'Sucursal',
-    'Tarifa Hora ($)',
-    'Horas Normales',
-    'Horas Extra (1.5x)',
-    'Horas Totales',
-    'Total Normal ($)',
-    'Total Extra ($)',
-    'Total a Pagar ($)',
-    'Turnos Registrados',
+    'Modalidad de Sueldo',
+    'Sueldo Base ($)',
+    'Valor por Día ($)',
+    'Días Trabajados',
+    'Jornadas / Turnos',
+    'Sueldo Calculado ($)',
+    'Abonos Registrados ($)',
+    'Saldo Neto a Pagar ($)',
     'Estado'
   ];
 
@@ -379,24 +379,25 @@ export function exportPayrollToExcel(params: {
     r.nombre,
     r.puesto.toUpperCase(),
     r.sucursal,
-    r.tarifaHora,
-    r.horasNormales,
-    r.horasExtra,
-    r.horasTotales,
-    r.totalNormal,
-    r.totalExtra,
-    r.totalPagar,
+    r.modalidadLabel,
+    r.sueldoBase,
+    r.valorDiario,
+    r.diasTrabajados,
     r.turnosContados,
+    r.sueldoCalculado,
+    r.totalAbonado,
+    r.totalPagar,
     r.estadoPago
   ]);
 
-  const totalHorasNormales = rows.reduce((s, r) => s + r.horasNormales, 0);
-  const totalHorasExtra = rows.reduce((s, r) => s + r.horasExtra, 0);
-  const totalHoras = rows.reduce((s, r) => s + r.horasTotales, 0);
+  const totalDias = rows.reduce((s, r) => s + r.diasTrabajados, 0);
+  const totalTurnos = rows.reduce((s, r) => s + r.turnosContados, 0);
+  const totalCalculado = rows.reduce((s, r) => s + r.sueldoCalculado, 0);
+  const totalAbonado = rows.reduce((s, r) => s + r.totalAbonado, 0);
   const totalPagar = rows.reduce((s, r) => s + r.totalPagar, 0);
 
   const ws = XLSX.utils.aoa_to_sheet([
-    ['GASTRO SMART - PLANILLA DE HORAS Y ASISTENCIA'],
+    ['GASTRO SMART - PLANILLA DE ASISTENCIA, DÍAS TRABAJADOS Y SUELDOS'],
     ['Negocio:', businessName],
     ['Sucursal:', selectedBranchName],
     ['Periodo:', periodLabel],
@@ -405,21 +406,21 @@ export function exportPayrollToExcel(params: {
     headers,
     ...dataRows,
     [],
-    ['TOTALES', '', '', '', totalHorasNormales, totalHorasExtra, totalHoras, '', '', totalPagar, '', '']
+    ['TOTALES', '', '', '', '', '', totalDias, totalTurnos, totalCalculado, totalAbonado, totalPagar, '']
   ]);
 
   ws['!cols'] = [
+    { wch: 24 },
+    { wch: 16 },
     { wch: 22 },
-    { wch: 15 },
-    { wch: 22 },
-    { wch: 14 },
-    { wch: 14 },
-    { wch: 18 },
-    { wch: 14 },
+    { wch: 20 },
     { wch: 15 },
     { wch: 15 },
+    { wch: 16 },
+    { wch: 16 },
     { wch: 18 },
-    { wch: 18 },
+    { wch: 20 },
+    { wch: 20 },
     { wch: 15 }
   ];
 

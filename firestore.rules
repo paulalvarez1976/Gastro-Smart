@@ -118,7 +118,7 @@ service cloud.firestore {
       allow read: if isGastroSmart(resource.data) || isAuthenticated();
       allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
       allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow delete: if isGastroSmart(resource.data) || isAuthenticated();
     }
 
     // ==========================================
@@ -209,6 +209,26 @@ service cloud.firestore {
       allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
       allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
       allow delete: if isAuthenticated();
+    }
+
+    // ==========================================
+    // 17. FCM TOKENS (NOTIFICACIONES PUSH EN SEGUNDO PLANO)
+    // ==========================================
+    match /fcmTokens/{tokenId} {
+      allow read: if isGastroSmart(resource.data) || isAuthenticated();
+      allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow delete: if isGastroSmart(resource.data) || isAuthenticated();
+    }
+
+    // ==========================================
+    // 18. INVENTORY ITEMS (INSUMOS Y MATERIAS PRIMAS)
+    // ==========================================
+    match /inventoryItems/{itemId} {
+      allow read: if isGastroSmart(resource.data) || isAuthenticated();
+      allow create: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow update: if isGastroSmart(request.resource.data) || isAuthenticated();
+      allow delete: if isGastroSmart(resource.data) || isAuthenticated();
     }
   }
 }

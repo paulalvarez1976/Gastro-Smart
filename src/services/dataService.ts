@@ -50,7 +50,10 @@ import {
   MenuAuditLog,
   MenuAuditActionType,
   MenuAuditLogChange,
-  DeliveryCompanyConfig
+  DeliveryCompanyConfig,
+  InventoryItem,
+  DishIngredient,
+  DeductedSupplyRecord
 } from '../types';
 import { 
   getDailyStatDocId, 
@@ -104,19 +107,24 @@ export async function getBusiness(businessId: string): Promise<Business | null> 
   return null;
 }
 
-export async function getOrCreateSingleBusiness(businessId: string): Promise<Business> {
-  const biz = await getBusiness(businessId);
-  if (biz) {
-    return biz;
+export async function getOrCreateSingleBusiness(businessId: string, defaultName?: string): Promise<Business> {
+  try {
+    const biz = await getBusiness(businessId);
+    if (biz && biz.nombre) {
+      return biz;
+    }
+  } catch {
+    // Si no existe documento previo o permiso requiere creación con appId
   }
   const defaultData: Omit<Business, 'id'> = {
-    nombre: 'Mi Negocio',
+    nombre: defaultName || 'Mi Negocio',
     rif_o_ruc: 'J-00000000-0',
     plan: 'pro',
     activo: true,
     creadoEn: new Date().toISOString(),
-    ownerUid: 'system',
-    email: 'admin@gastrosmart.com'
+    ownerUid: 'owner_' + businessId,
+    email: 'admin@gastrosmart.com',
+    appId: 'gastro_smart'
   };
   await createBusiness(defaultData, businessId);
   return { id: businessId, ...defaultData };
@@ -341,6 +349,17 @@ export async function clearAllSecurityAlerts(businessId: string | null): Promise
 
 // ======================= RESTAURANTS (SUCURSALES) =======================
 
+export function generateUniqueBranchCode(existingCodes: Set<string>): string {
+  for (let i = 0; i < 200; i++) {
+    const code = String(Math.floor(1000 + Math.random() * 9000));
+    if (!existingCodes.has(code)) {
+      existingCodes.add(code);
+      return code;
+    }
+  }
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
 export function subscribeToRestaurants(
   arg1?: string | null | ((data: Restaurant[]) => void),
   arg2?: (data: Restaurant[]) => void
@@ -361,10 +380,28 @@ export function subscribeToRestaurants(
     : query(colRef, where('appId', '==', 'gastro_smart'));
 
   return onSnapshot(q, (snapshot) => {
-    const list: Restaurant[] = snapshot.docs.map(d => ({
-      id: d.id,
-      ...d.data()
-    } as Restaurant));
+    const usedCodes = new Set<string>();
+    const rawList: Restaurant[] = snapshot.docs.map(d => {
+      const data = { id: d.id, ...d.data() } as Restaurant;
+      if (data.codigoSede && /^\d{4}$/.test(data.codigoSede.trim())) {
+        usedCodes.add(data.codigoSede.trim());
+      }
+      return data;
+    });
+
+    const list: Restaurant[] = rawList.map(rest => {
+      if (rest.codigoSede && /^\d{4}$/.test(rest.codigoSede.trim())) {
+        return rest;
+      }
+      const generatedCode = generateUniqueBranchCode(usedCodes);
+      // Persistir automáticamente para no romper restaurantes existentes sin codigoSede
+      updateDoc(doc(db, 'restaurants', rest.id), { codigoSede: generatedCode }).catch(() => {});
+      return {
+        ...rest,
+        codigoSede: generatedCode
+      };
+    });
+
     callback(list);
   }, (err) => {
     console.warn('Subscription warning (restaurants):', err);
@@ -372,23 +409,62 @@ export function subscribeToRestaurants(
 }
 
 export async function createRestaurant(data: Omit<Restaurant, 'id'>, businessId?: string) {
+  const targetBizId = businessId || data.businessId || UNIQUE_BUSINESS_ID;
+  let finalCodigoSede = (data.codigoSede || '').trim();
+  if (!/^\d{4}$/.test(finalCodigoSede)) {
+    const existingCodes = new Set<string>();
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'restaurants'), where('appId', '==', 'gastro_smart'), where('businessId', '==', targetBizId))
+      );
+      snap.docs.forEach(d => {
+        const c = (d.data().codigoSede || '').trim();
+        if (/^\d{4}$/.test(c)) existingCodes.add(c);
+      });
+    } catch {
+      // fallback
+    }
+    finalCodigoSede = generateUniqueBranchCode(existingCodes);
+  }
+
+  // Garantizar que el documento del negocio exista en la colección businesses para que sea visible en el Panel Creador
+  await getOrCreateSingleBusiness(targetBizId, data.nombre);
+
   return addDoc(collection(db, 'restaurants'), {
     ...data,
+    codigoSede: finalCodigoSede,
     usaCocina: data.usaCocina !== false,
     logoUrl: data.logoUrl || null,
-    businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
+    businessId: targetBizId,
     appId: 'gastro_smart',
     creadoEn: new Date().toISOString()
   });
 }
 
 export async function createRestaurantWithTables(
-  data: { businessId?: string; nombre: string; direccion: string; telefono: string; numeroMesas: number; usaCocina?: boolean; logoUrl?: string | null },
+  data: { businessId?: string; nombre: string; direccion: string; telefono: string; codigoSede?: string; numeroMesas: number; usaCocina?: boolean; logoUrl?: string | null },
   businessIdParam?: string
 ): Promise<string> {
   const targetBizId = data.businessId || businessIdParam || UNIQUE_BUSINESS_ID;
   const restRef = doc(collection(db, 'restaurants'));
   const restaurantId = restRef.id;
+
+  let finalCodigoSede = (data.codigoSede || '').trim();
+  if (!/^\d{4}$/.test(finalCodigoSede)) {
+    const existingCodes = new Set<string>();
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'restaurants'), where('appId', '==', 'gastro_smart'), where('businessId', '==', targetBizId))
+      );
+      snap.docs.forEach(d => {
+        const c = (d.data().codigoSede || '').trim();
+        if (/^\d{4}$/.test(c)) existingCodes.add(c);
+      });
+    } catch {
+      // fallback
+    }
+    finalCodigoSede = generateUniqueBranchCode(existingCodes);
+  }
 
   const batch = writeBatch(db);
   batch.set(restRef, {
@@ -396,6 +472,7 @@ export async function createRestaurantWithTables(
     nombre: data.nombre.trim(),
     direccion: data.direccion.trim(),
     telefono: data.telefono.trim(),
+    codigoSede: finalCodigoSede,
     numeroMesas: data.numeroMesas,
     usaCocina: data.usaCocina !== false,
     logoUrl: data.logoUrl || null,
@@ -404,10 +481,13 @@ export async function createRestaurantWithTables(
     creadoEn: new Date().toISOString()
   });
 
+  // Garantizar que el documento del negocio exista en la colección businesses para que sea visible en el Panel Creador
+  await getOrCreateSingleBusiness(targetBizId, data.nombre.trim());
+
   // Si se proporcionó logo y el negocio no tiene logo configurado, actualizarlo en el negocio
   if (data.logoUrl && targetBizId) {
     const bizRef = doc(db, 'businesses', targetBizId);
-    batch.set(bizRef, { logoUrl: data.logoUrl }, { merge: true });
+    batch.set(bizRef, { logoUrl: data.logoUrl, appId: 'gastro_smart' }, { merge: true });
   }
 
   // Generar mesas del 1 al N en estado "libre" de forma atómica en el mismo batch
@@ -987,54 +1067,43 @@ export async function payShiftSalary(shift: Shift, employee: Employee): Promise<
     throw new Error('Este turno ya ha sido liquidado y pagado previamente.');
   }
 
-  const modalidad = employee.modalidadPago || employee.tipoSueldo || 'por_horas';
-  if (modalidad === 'mes' || modalidad === 'fijo') {
-    throw new Error('Este empleado tiene modalidad de Sueldo Mensual. Utilice el módulo de pago mensual en la pestaña Asistencia & Planilla.');
+  const rawModalidad = employee.modalidadPago || employee.tipoSueldo || 'por_dia';
+  if (rawModalidad === 'mes' || rawModalidad === 'fijo') {
+    throw new Error('Este empleado tiene modalidad de Sueldo Mensual. Utilice la liquidación de planilla en la pestaña Asistencia & Planilla.');
   }
 
-  let totalPay = 0;
-  let descriptionDesc = '';
-  let durationHours = 0;
-  let overtimeHours = 0;
-  let rateUsed = 0;
+  // Validar que no se pague dos veces el mismo día operativo para el mismo empleado
+  const shiftDate = getOperationalDateString(shiftData.horaInicio || shiftData.fecha);
+  const qShifts = query(
+    collection(db, 'shifts'),
+    where('appId', '==', 'gastro_smart'),
+    where('employeeId', '==', employee.id)
+  );
+  const existingShiftsSnap = await getDocs(qShifts);
+  const alreadyPaidToday = existingShiftsSnap.docs.some(d => {
+    const s = d.data() as Shift;
+    const sDate = getOperationalDateString(s.horaInicio || s.fecha);
+    return d.id !== shift.id && sDate === shiftDate && (s.pagado === true || s.sueldoPagado === true);
+  });
 
-  if (modalidad === 'por_dia') {
-    // Validar que no se pague dos veces el mismo día para el mismo empleado
-    const shiftDate = shiftData.fecha || (shiftData.horaInicio || '').split('T')[0];
-    const qShifts = query(
-      collection(db, 'shifts'),
-      where('appId', '==', 'gastro_smart'),
-      where('employeeId', '==', employee.id),
-      where('fecha', '==', shiftDate)
-    );
-    const existingShiftsSnap = await getDocs(qShifts);
-    const alreadyPaidToday = existingShiftsSnap.docs.some(d => {
-      const s = d.data() as Shift;
-      return s.id !== shift.id && (s.pagado === true || s.sueldoPagado === true);
-    });
-
-    if (alreadyPaidToday) {
-      throw new Error(`El empleado ${employee.nombre} ya tiene un turno liquidado y pagado para la fecha ${shiftDate}. Evitando pago diario duplicado.`);
-    }
-
-    const dailyRate = (employee.tarifaDiaria && employee.tarifaDiaria > 0) ? employee.tarifaDiaria : 50;
-    totalPay = Math.round(dailyRate * 100) / 100;
-    rateUsed = dailyRate;
-    descriptionDesc = `Pago de sueldo diario - ${employee.nombre} (Jornada ${shiftDate} a $${dailyRate}/día)`;
-    durationHours = shiftData.minutosTrabajados ? shiftData.minutosTrabajados / 60 : 8;
-  } else {
-    // Por horas (por_horas)
-    durationHours = shiftData.horaFin 
-      ? Math.max(0.1, (new Date(shiftData.horaFin).getTime() - new Date(shiftData.horaInicio).getTime()) / (1000 * 60 * 60))
-      : Math.max(0.1, (shiftData.minutosTrabajados || 0) / 60);
-
-    const rate = (employee.tarifaHora && employee.tarifaHora > 0) ? employee.tarifaHora : 12;
-    rateUsed = rate;
-    const regularHours = Math.min(8, durationHours);
-    overtimeHours = Math.max(0, durationHours - 8);
-    totalPay = Math.round(((regularHours * rate) + (overtimeHours * rate * 1.5)) * 100) / 100;
-    descriptionDesc = `Pago de sueldo turno - ${employee.nombre} (${regularHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${rate}/h)`;
+  if (alreadyPaidToday) {
+    throw new Error(`El empleado ${employee.nombre} ya tiene una jornada liquidada y pagada para el día operativo ${shiftDate}. Evitando pago diario duplicado.`);
   }
+
+  const dailyRate = (employee.tarifaDiaria && employee.tarifaDiaria > 0)
+    ? employee.tarifaDiaria
+    : (employee.sueldoMensual && employee.sueldoMensual > 0)
+      ? Math.round((employee.sueldoMensual / 30) * 100) / 100
+      : (employee.tarifaHora && employee.tarifaHora > 0)
+        ? Math.round(employee.tarifaHora * 8 * 100) / 100
+        : 50;
+
+  const totalPay = Math.round(dailyRate * 100) / 100;
+  const descriptionDesc = `Pago de jornada laboral - ${employee.nombre} (Día trabajado ${shiftDate} • Sueldo diario $${dailyRate.toFixed(2)})`;
+  const durationHours = shiftData.minutosTrabajados ? shiftData.minutosTrabajados / 60 : 8;
+  const overtimeHours = 0;
+  const rateUsed = dailyRate;
+  const modalidad = 'por_dia';
 
   if (isNaN(totalPay) || totalPay <= 0) {
     throw new Error('El monto de sueldo calculado es inválido o igual a cero.');
@@ -1108,16 +1177,40 @@ export function subscribeToMenuItems(
     : query(colRef, where('appId', '==', 'gastro_smart'));
 
   return onSnapshot(q, (snapshot) => {
-    let list: MenuItem[] = snapshot.docs.map(d => ({
-      id: d.id,
-      ...d.data()
-    } as MenuItem));
+    let list: MenuItem[] = snapshot.docs
+      .map(d => ({
+        id: d.id,
+        ...d.data()
+      } as MenuItem))
+      .filter(m => m.eliminadoDeCarta !== true);
     if (restaurantId) {
       list = list.filter(m => !m.restaurantId || m.restaurantId === restaurantId || m.restaurantId === 'all');
     }
     callback(list);
   }, (err) => {
     console.warn('Subscription warning (menuItems):', err);
+  });
+}
+
+export function subscribeToArchivedMenuItems(
+  businessId: string | null,
+  callback: (items: MenuItem[]) => void
+) {
+  const colRef = collection(db, 'menuItems');
+  const q = businessId
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
+
+  return onSnapshot(q, (snapshot) => {
+    const archived: MenuItem[] = snapshot.docs
+      .map(d => ({
+        id: d.id,
+        ...d.data()
+      } as MenuItem))
+      .filter(m => m.eliminadoDeCarta === true);
+    callback(archived);
+  }, (err) => {
+    console.warn('Subscription warning (archivedMenuItems):', err);
   });
 }
 
@@ -1201,62 +1294,290 @@ export async function quickAdjustMenuItemStock(id: string, delta: number) {
   return updateDoc(itemRef, updatePayload);
 }
 
-export async function deductStockForOrderItems(items: OrderItem[], businessId?: string, restaurantId?: string) {
-  if (!items || items.length === 0) return;
+export async function deductStockForOrderItems(
+  items: OrderItem[],
+  businessId?: string,
+  restaurantId?: string,
+  orderContext?: {
+    orderId?: string;
+    mesaNumero?: number | null;
+    tipo?: string;
+    usuario?: string;
+  }
+): Promise<{ deductedRecords: DeductedSupplyRecord[]; criticalAlerts: DeductedSupplyRecord[] }> {
+  const deductedRecords: DeductedSupplyRecord[] = [];
+  const criticalAlerts: DeductedSupplyRecord[] = [];
+
+  if (!items || items.length === 0) {
+    return { deductedRecords, criticalAlerts };
+  }
+
+  const targetBizId = businessId || UNIQUE_BUSINESS_ID;
+  const nowIso = new Date().toISOString();
+
   try {
+    // 1. Cargar todos los insumos (inventoryItems) del negocio para poder descontar por receta o coincidencia
+    const invSnap = await getDocs(
+      query(
+        collection(db, 'inventoryItems'),
+        where('appId', '==', 'gastro_smart'),
+        where('businessId', '==', targetBizId)
+      )
+    );
+    const invMapById = new Map<string, InventoryItem>();
+    const invMapByName = new Map<string, InventoryItem>();
+    invSnap.docs.forEach(d => {
+      const inv = { id: d.id, ...d.data() } as InventoryItem;
+      invMapById.set(inv.id, inv);
+      if (inv.nombre) {
+        invMapByName.set(inv.nombre.trim().toLowerCase(), inv);
+      }
+    });
+
+    // Acumulador de descuentos por insumo para evitar colisiones si varios platos usan el mismo insumo en el mismo pedido
+    const pendingInsumoDeductions = new Map<string, { inv: InventoryItem; qtyToDeduct: number; dishesUsed: string[] }>();
+
     for (const item of items) {
-      if (!item.menuItemId) continue;
-      const itemRef = doc(db, 'menuItems', item.menuItemId);
-      const snap = await getDoc(itemRef);
-      if (snap.exists()) {
-        const data = snap.data() as MenuItem;
-        if (data.controlaStock) {
-          const currentStock = typeof data.stockActual === 'number' ? data.stockActual : 0;
-          const qty = item.cantidad || 1;
-          const newStock = Math.max(0, currentStock - qty);
-          const updatePayload: Partial<MenuItem> = { stockActual: newStock };
-          
-          if (newStock <= 0) {
-            updatePayload.disponible = false;
-            try {
-              await createSecurityAlert({
-                businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
-                restaurantId: restaurantId || data.restaurantId,
-                tipo: 'stock_agotado',
-                mensaje: `⚠️ PRODUCTO AGOTADO: "${data.nombre}" se ha quedado sin existencias (0 ${data.unidadMedida || 'unidades'}).`,
-                fecha: new Date().toISOString(),
-                leido: false,
-                severidad: 'alta'
-              });
-            } catch (alertErr) {
-              console.warn('Could not register stock alert:', alertErr);
-            }
-          } else if (newStock <= (data.stockMinimo ?? 5) && currentStock > (data.stockMinimo ?? 5)) {
-            try {
-              await createSecurityAlert({
-                businessId: businessId || data.businessId || UNIQUE_BUSINESS_ID,
-                restaurantId: restaurantId || data.restaurantId,
-                tipo: 'stock_bajo',
-                mensaje: `⚠️ ALERTA DE STOCK BAJO: "${data.nombre}" tiene solo ${newStock} ${data.unidadMedida || 'unidades'} restantes (Umbral mínimo: ${data.stockMinimo ?? 5}).`,
-                fecha: new Date().toISOString(),
-                leido: false,
-                severidad: 'media'
-              });
-            } catch (alertErr) {
-              console.warn('Could not register stock alert:', alertErr);
+      const itemQty = Number(item.cantidad) || 1;
+      let menuItemData: MenuItem | null = null;
+
+      if (item.menuItemId) {
+        const itemRef = doc(db, 'menuItems', item.menuItemId);
+        const snap = await getDoc(itemRef);
+        if (snap.exists()) {
+          menuItemData = { id: snap.id, ...snap.data() } as MenuItem;
+        }
+      }
+
+      // A) Descontar insumos de la receta del plato (insumosReceta)
+      if (menuItemData && Array.isArray(menuItemData.insumosReceta) && menuItemData.insumosReceta.length > 0) {
+        for (const rec of menuItemData.insumosReceta) {
+          const targetInv =
+            (rec.insumoId ? invMapById.get(rec.insumoId) : undefined) ||
+            (rec.insumoNombre ? invMapByName.get(rec.insumoNombre.trim().toLowerCase()) : undefined);
+
+          if (targetInv) {
+            const deductAmount = Math.round((Number(rec.cantidadPorUnidad) || 0) * itemQty * 1000) / 1000;
+            if (deductAmount > 0) {
+              const existing = pendingInsumoDeductions.get(targetInv.id);
+              if (existing) {
+                existing.qtyToDeduct = Math.round((existing.qtyToDeduct + deductAmount) * 1000) / 1000;
+                if (!existing.dishesUsed.includes(item.nombre)) existing.dishesUsed.push(item.nombre);
+              } else {
+                pendingInsumoDeductions.set(targetInv.id, {
+                  inv: targetInv,
+                  qtyToDeduct: deductAmount,
+                  dishesUsed: [item.nombre]
+                });
+              }
             }
           }
-          await updateDoc(itemRef, updatePayload);
+        }
+      } else {
+        // Fallback inteligente: si hay un insumo con el mismo nombre del producto (ej. gaseosas, cervezas, porciones base)
+        const matchingInv = invMapByName.get((item.nombre || '').trim().toLowerCase());
+        if (matchingInv) {
+          const existing = pendingInsumoDeductions.get(matchingInv.id);
+          if (existing) {
+            existing.qtyToDeduct = Math.round((existing.qtyToDeduct + itemQty) * 1000) / 1000;
+          } else {
+            pendingInsumoDeductions.set(matchingInv.id, {
+              inv: matchingInv,
+              qtyToDeduct: itemQty,
+              dishesUsed: [item.nombre]
+            });
+          }
+        }
+      }
+
+      // B) Descontar stock directo del plato en menuItems si controlaStock está activo
+      if (menuItemData && menuItemData.controlaStock && item.menuItemId) {
+        const itemRef = doc(db, 'menuItems', item.menuItemId);
+        const currentStock = typeof menuItemData.stockActual === 'number' ? menuItemData.stockActual : 0;
+        const minStock = menuItemData.stockMinimo ?? 5;
+        const newStock = Math.max(0, Math.round((currentStock - itemQty) * 100) / 100);
+        const unit = menuItemData.unidadMedida || 'unidades';
+        const isDepleted = newStock <= 0;
+        const isCritical = newStock <= minStock;
+
+        const updatePayload: Partial<MenuItem> = { stockActual: newStock };
+        if (isDepleted) {
+          updatePayload.disponible = false;
+        }
+        await updateDoc(itemRef, updatePayload);
+
+        const record: DeductedSupplyRecord = {
+          insumoId: item.menuItemId,
+          nombre: menuItemData.nombre,
+          cantidadDescontada: itemQty,
+          stockAnterior: currentStock,
+          stockRestante: newStock,
+          stockMinimo: minStock,
+          unidad: unit,
+          alertaCritica: isCritical,
+          agotado: isDepleted,
+          tipo: 'plato'
+        };
+        deductedRecords.push(record);
+
+        if (isDepleted) {
+          criticalAlerts.push(record);
+          try {
+            await createSecurityAlert({
+              businessId: targetBizId,
+              restaurantId: restaurantId || menuItemData.restaurantId,
+              tipo: 'stock_agotado',
+              mensaje: `🚨 PRODUCTO AGOTADO AL ENTREGAR PEDIDO: "${menuItemData.nombre}" quedó en 0 ${unit} (Umbral crítico: ${minStock} ${unit}).`,
+              fecha: nowIso,
+              leido: false,
+              severidad: 'alta'
+            });
+          } catch (alertErr) {
+            console.warn('Could not register stock_agotado alert:', alertErr);
+          }
+        } else if (isCritical) {
+          criticalAlerts.push(record);
+          try {
+            await createSecurityAlert({
+              businessId: targetBizId,
+              restaurantId: restaurantId || menuItemData.restaurantId,
+              tipo: 'stock_bajo',
+              mensaje: `⚠️ STOCK CRÍTICO TRAS ENTREGA: "${menuItemData.nombre}" bajó a ${newStock} ${unit} restantes (Umbral crítico: ${minStock} ${unit}).`,
+              fecha: nowIso,
+              leido: false,
+              severidad: 'media'
+            });
+          } catch (alertErr) {
+            console.warn('Could not register stock_bajo alert:', alertErr);
+          }
         }
       }
     }
+
+    // Aplicar descuentos acumulados sobre la colección inventoryItems (Insumos)
+    for (const [invId, entry] of pendingInsumoDeductions.entries()) {
+      const { inv, qtyToDeduct, dishesUsed } = entry;
+      const currentStock = typeof inv.stockActual === 'number' ? inv.stockActual : 0;
+      const minStock = inv.stockMinimo ?? 5;
+      const newStock = Math.max(0, Math.round((currentStock - qtyToDeduct) * 1000) / 1000);
+      const unit = inv.unidadMedida || 'unidades';
+      const isDepleted = newStock <= 0;
+      const isCritical = newStock <= minStock;
+
+      await updateDoc(doc(db, 'inventoryItems', invId), {
+        stockActual: newStock,
+        ultimaActualizacion: nowIso
+      });
+
+      const record: DeductedSupplyRecord = {
+        insumoId: invId,
+        nombre: inv.nombre,
+        cantidadDescontada: qtyToDeduct,
+        stockAnterior: currentStock,
+        stockRestante: newStock,
+        stockMinimo: minStock,
+        unidad: unit,
+        alertaCritica: isCritical,
+        agotado: isDepleted,
+        tipo: 'insumo'
+      };
+      deductedRecords.push(record);
+
+      if (isDepleted) {
+        criticalAlerts.push(record);
+        try {
+          await createSecurityAlert({
+            businessId: targetBizId,
+            restaurantId: restaurantId || inv.restaurantId,
+            tipo: 'stock_agotado',
+            mensaje: `🚨 INSUMO AGOTADO AL ENTREGAR PEDIDO: "${inv.nombre}" se agotó (0 ${unit}). Usado en: ${dishesUsed.join(', ')}.`,
+            fecha: nowIso,
+            leido: false,
+            severidad: 'alta'
+          });
+        } catch (alertErr) {
+          console.warn('Could not register insumo stock_agotado alert:', alertErr);
+        }
+      } else if (isCritical) {
+        criticalAlerts.push(record);
+        try {
+          await createSecurityAlert({
+            businessId: targetBizId,
+            restaurantId: restaurantId || inv.restaurantId,
+            tipo: 'stock_bajo',
+            mensaje: `⚠️ ALERTA DE INSUMO EN NIVEL CRÍTICO: "${inv.nombre}" tiene ${newStock} ${unit} disponibles (Umbral crítico: ${minStock} ${unit}). Descontado: -${qtyToDeduct} ${unit}.`,
+            fecha: nowIso,
+            leido: false,
+            severidad: 'media'
+          });
+        } catch (alertErr) {
+          console.warn('Could not register insumo stock_bajo alert:', alertErr);
+        }
+      }
+    }
+
+    // Registrar en el historial de auditoría de inventario si hubo descuentos
+    if (deductedRecords.length > 0) {
+      const orderLabel = orderContext?.mesaNumero
+        ? `Mesa #${orderContext.mesaNumero}`
+        : orderContext?.orderId
+        ? `Pedido #${orderContext.orderId.slice(-5).toUpperCase()}`
+        : 'Pedido entregado';
+
+      const summaryStr = deductedRecords
+        .map(r => `${r.nombre}: -${r.cantidadDescontada} ${r.unidad} (Stock: ${r.stockAnterior} → ${r.stockRestante} ${r.unidad}${r.alertaCritica ? ' ⚠️ CRÍTICO' : ''})`)
+        .join(' · ');
+
+      await recordMenuAuditLog({
+        businessId: targetBizId,
+        restaurantId: restaurantId || 'all',
+        platoId: orderContext?.orderId || 'order_delivery',
+        platoNombre: `${orderLabel} (Entrega confirmada)`,
+        tipoAccion: 'descuento_automatico_entrega',
+        detalles: `Descuento automático de inventario al marcar como ENTREGADO (${orderLabel}): ${summaryStr}`,
+        cambios: deductedRecords.map(r => ({
+          campo: r.nombre,
+          valorAnterior: `${r.stockAnterior} ${r.unidad}`,
+          valorNuevo: `${r.stockRestante} ${r.unidad}`
+        })),
+        empleadoNombre: orderContext?.usuario || 'Sistema Automático',
+        empleadoRol: 'Operaciones',
+        fecha: nowIso
+      });
+    }
+
+    // Emitir evento global en el navegador para mostrar alerta inmediata en pantalla
+    if (typeof window !== 'undefined' && (deductedRecords.length > 0 || criticalAlerts.length > 0)) {
+      window.dispatchEvent(
+        new CustomEvent('gastro-inventory-deducted', {
+          detail: {
+            deductedRecords,
+            criticalAlerts,
+            orderContext
+          }
+        })
+      );
+    }
   } catch (err) {
-    console.warn('Error deducting stock for order items:', err);
+    console.warn('Error deducting stock/supplies for delivered order items:', err);
   }
+
+  return { deductedRecords, criticalAlerts };
 }
 
 export async function deleteMenuItem(id: string) {
-  return deleteDoc(doc(db, 'menuItems', id));
+  // Retira el plato de la carta activa sin borrar ni afectar el historial de ventas ni sus costos asociados
+  try {
+    return await updateDoc(doc(db, 'menuItems', id), {
+      appId: 'gastro_smart',
+      eliminadoDeCarta: true,
+      disponible: false,
+      controlaStock: false,
+      eliminadoEn: new Date().toISOString()
+    });
+  } catch (err) {
+    return await deleteDoc(doc(db, 'menuItems', id));
+  }
 }
 
 // ======================= TABLES =======================
@@ -1593,6 +1914,13 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
     timeline: initialTimeline
   };
 
+  const isInitiallyDelivered = data.estado === 'entregado' || data.estadoEntrega === 'entregado';
+  if ( isInitiallyDelivered ) {
+    sanitizedData.insumosDescontados = true;
+    sanitizedData.insumosDescontadosEn = nowIso;
+    sanitizedData.insumosDescontadosRondas = [1];
+  }
+
   const orderRef = doc(collection(db, 'orders'));
   const batch = writeBatch(db);
   batch.set(orderRef, sanitizedData);
@@ -1606,10 +1934,17 @@ export async function createOrder(data: Omit<Order, 'id' | 'creadoEn'> & { cread
 
   await batch.commit();
 
-  // Descontar inventario/stock de forma asíncrona para los productos con control de stock
-  deductStockForOrderItems(sanitizedItems, targetBusinessId, data.restaurantId).catch(err => {
-    console.warn('Error descontando stock en createOrder:', err);
-  });
+  // Descontar inventario/insumos automáticamente SOLO si el pedido nace marcado como 'entregado'
+  if (isInitiallyDelivered) {
+    deductStockForOrderItems(sanitizedItems, targetBusinessId, data.restaurantId, {
+      orderId: orderRef.id,
+      mesaNumero: data.mesaNumero,
+      tipo: data.tipo,
+      usuario: data.meseroNombre || 'Mostrador'
+    }).catch(err => {
+      console.warn('Error descontando insumos en createOrder entregado:', err);
+    });
+  }
 
   // Incrementar pedidos tomados en el turno del mesero
   try {
@@ -1827,13 +2162,6 @@ export async function appendItemsToExistingOrder(
       });
     }
   });
-
-  // Descontar inventario/stock para los nuevos platos agregados
-  if (itemsToDeduct.length > 0 && savedBusinessId) {
-    deductStockForOrderItems(itemsToDeduct, savedBusinessId, savedRestaurantId).catch(err => {
-      console.warn('Error descontando stock en appendItemsToExistingOrder:', err);
-    });
-  }
 }
 
 /**
@@ -1846,6 +2174,9 @@ export async function updateOrderRoundStatus(
   userName: string
 ): Promise<void> {
   const orderRef = doc(db, 'orders', orderId);
+  let itemsForDeduction: OrderItem[] = [];
+  let orderMeta: { businessId?: string; restaurantId?: string; mesaNumero?: number | null; tipo?: string } = {};
+
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(orderRef);
     if (!snap.exists()) return;
@@ -1891,6 +2222,20 @@ export async function updateOrderRoundStatus(
       else overallState = 'entregado';
     }
 
+    const alreadyDeductedRounds = order.insumosDescontadosRondas || [];
+    const updatedDeductedRounds = [...alreadyDeductedRounds];
+
+    if ((newStatus === 'entregado' || overallState === 'entregado') && !alreadyDeductedRounds.includes(roundNumber)) {
+      updatedDeductedRounds.push(roundNumber);
+      itemsForDeduction = (order.items || []).filter(it => (it.ronda || 1) === roundNumber);
+      orderMeta = {
+        businessId: order.businessId,
+        restaurantId: order.restaurantId,
+        mesaNumero: order.mesaNumero,
+        tipo: order.tipo
+      };
+    }
+
     const newTimelineEvent: OrderTimelineEvent = {
       estado: overallState,
       fecha: now,
@@ -1898,13 +2243,39 @@ export async function updateOrderRoundStatus(
       motivo: `Mesa #${order.mesaNumero || ''} · Ronda ${roundNumber} pasada a ${newStatus}`
     };
 
-    tx.update(orderRef, {
+    const txUpdatePayload: Record<string, any> = {
       items: updatedItems,
       rondas: updatedRondas,
       estado: overallState,
       timeline: [...(order.timeline || []), newTimelineEvent]
-    });
+    };
+
+    if (itemsForDeduction.length > 0) {
+      txUpdatePayload.insumosDescontadosRondas = updatedDeductedRounds;
+      if (overallState === 'entregado') {
+        txUpdatePayload.insumosDescontados = true;
+        txUpdatePayload.insumosDescontadosEn = now;
+        txUpdatePayload.entregadoEn = now;
+        txUpdatePayload.estadoEntrega = 'entregado';
+      }
+    }
+
+    tx.update(orderRef, txUpdatePayload);
   });
+
+  if (itemsForDeduction.length > 0) {
+    await deductStockForOrderItems(
+      itemsForDeduction,
+      orderMeta.businessId,
+      orderMeta.restaurantId,
+      {
+        orderId,
+        mesaNumero: orderMeta.mesaNumero,
+        tipo: orderMeta.tipo,
+        usuario: userName
+      }
+    );
+  }
 }
 
 /**
@@ -2337,6 +2708,58 @@ export async function cambiarEstadoPedido(
     updatePayload.estadoEntrega = 'entregado';
     if (estadoActual === 'cobrado' || orderData.estadoPago === 'cobrado') {
       updatePayload.estado = 'cobrado';
+    }
+
+    // Marcar todos los items y rondas como entregados
+    if (Array.isArray(orderData.items)) {
+      updatePayload.items = (options?.items || orderData.items).map(it => ({
+        ...it,
+        estadoItem: 'entregado',
+        estado: it.estado === 'cobrado' ? 'cobrado' : 'entregado'
+      }));
+    }
+    if (Array.isArray(orderData.rondas)) {
+      updatePayload.rondas = orderData.rondas.map(r => ({
+        ...r,
+        estado: 'entregado',
+        entregadoEn: r.entregadoEn || now
+      }));
+    }
+
+    // Descontar insumos y existencias automáticamente al marcar el pedido como 'entregado'
+    const alreadyDeductedRounds = orderData.insumosDescontadosRondas || [];
+    const allItems = options?.items || orderData.items || [];
+    const undeductedItems = orderData.insumosDescontados
+      ? allItems.filter(it => !alreadyDeductedRounds.includes(it.ronda || 1))
+      : allItems;
+
+    if (undeductedItems.length > 0) {
+      const allRounds = Array.from(new Set(allItems.map(it => it.ronda || 1)));
+      updatePayload.insumosDescontados = true;
+      updatePayload.insumosDescontadosEn = now;
+      updatePayload.insumosDescontadosRondas = allRounds;
+
+      try {
+        const { deductedRecords } = await deductStockForOrderItems(
+          undeductedItems,
+          orderData.businessId || UNIQUE_BUSINESS_ID,
+          orderData.restaurantId,
+          {
+            orderId,
+            mesaNumero: orderData.mesaNumero,
+            tipo: orderData.tipo,
+            usuario: usuario || 'Personal'
+          }
+        );
+        if (deductedRecords.length > 0) {
+          updatePayload.detalleInsumosDescontados = [
+            ...(orderData.detalleInsumosDescontados || []),
+            ...deductedRecords
+          ];
+        }
+      } catch (deductErr) {
+        console.warn('Error al descontar insumos en pedido entregado:', deductErr);
+      }
     }
   }
 
@@ -3565,13 +3988,27 @@ export async function seedSampleDishesForBusiness(businessId: string, restaurant
  * 2. Registra la plantilla inicial de empleados operativos con PINs y restaurante asignado
  * 3. Siembra la carta inicial de platos y bebidas
  */
-export async function bootstrapNewBusinessDefaults(businessId: string, businessName: string, logoUrl?: string | null): Promise<{ restaurantId: string }> {
-  // 1. Crear sucursal principal
+export async function bootstrapNewBusinessDefaults(
+  businessId: string,
+  businessName: string,
+  logoUrl?: string | null,
+  customCodigoSede?: string
+): Promise<{ restaurantId: string; codigoSede: string }> {
+  // 1. Crear sucursal principal con código de sede único de 4 dígitos (asignado por el creador o autogenerado)
+  const cleanCustomCode = (customCodigoSede || '').replace(/\D/g, '').slice(0, 4);
+  let finalCodigoSede = cleanCustomCode.length === 4 ? cleanCustomCode : '';
+  if (!finalCodigoSede) {
+    const existingSnap = await getDocs(query(collection(db, 'restaurants'), where('appId', '==', 'gastro_smart')));
+    const existingCodes = new Set(existingSnap.docs.map(d => d.data().codigoSede).filter(Boolean));
+    finalCodigoSede = generateUniqueBranchCode(existingCodes);
+  }
+
   const restRef = await addDoc(collection(db, 'restaurants'), {
     businessId,
     nombre: `${businessName.trim()} - Sede Principal`,
     direccion: 'Av. Principal #100',
     telefono: '+1 (555) 000-0000',
+    codigoSede: finalCodigoSede,
     numeroMesas: 12,
     activo: true,
     logoUrl: logoUrl || null,
@@ -3581,12 +4018,12 @@ export async function bootstrapNewBusinessDefaults(businessId: string, businessN
 
   const restaurantId = restRef.id;
 
-  if (logoUrl) {
-    try {
-      await updateDoc(doc(db, 'businesses', businessId), { logoUrl });
-    } catch {
-      // Ignorar si el negocio aún no terminó de escribirse
-    }
+  try {
+    const updatePayload: Record<string, any> = { codigoSede: finalCodigoSede };
+    if (logoUrl) updatePayload.logoUrl = logoUrl;
+    await updateDoc(doc(db, 'businesses', businessId), updatePayload);
+  } catch {
+    // Ignorar si el negocio aún no terminó de escribirse
   }
 
   // 2. Generar 12 mesas en estado libre
@@ -3668,7 +4105,69 @@ export async function bootstrapNewBusinessDefaults(businessId: string, businessN
     console.warn('Error seeding sample dishes for new business:', err);
   }
 
-  return { restaurantId };
+  return { restaurantId, codigoSede: finalCodigoSede };
+}
+
+/**
+ * Permite al Creador (SuperAdmin) o Propietario asignar, crear o modificar el código de 4 dígitos
+ * de una empresa / sede y sincronizarlo en las colecciones 'businesses' y 'restaurants'.
+ */
+export async function assignOrCreateBranchCodeForBusiness(params: {
+  businessId: string;
+  businessName: string;
+  codigoSede: string;
+  restaurantId?: string;
+  logoUrl?: string | null;
+}): Promise<{ codigoSede: string; restaurantId: string }> {
+  const cleanCode = (params.codigoSede || '').replace(/\D/g, '').slice(0, 4);
+  if (cleanCode.length !== 4) {
+    throw new Error('El código de sede debe tener exactamente 4 dígitos numéricos.');
+  }
+
+  // 1. Actualizar el código en el documento de la empresa ('businesses')
+  try {
+    await setDoc(
+      doc(db, 'businesses', params.businessId),
+      { codigoSede: cleanCode, appId: 'gastro_smart' },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn('Could not update codigoSede on businesses doc:', e);
+  }
+
+  // 2. Si se especificó un restaurantId concreto, actualizarlo directamente
+  if (params.restaurantId) {
+    await updateDoc(doc(db, 'restaurants', params.restaurantId), {
+      codigoSede: cleanCode
+    });
+    return { codigoSede: cleanCode, restaurantId: params.restaurantId };
+  }
+
+  // 3. Buscar sucursales existentes para este businessId
+  const restSnap = await getDocs(
+    query(
+      collection(db, 'restaurants'),
+      where('appId', '==', 'gastro_smart'),
+      where('businessId', '==', params.businessId)
+    )
+  );
+
+  if (!restSnap.empty) {
+    const primaryRest = restSnap.docs[0];
+    await updateDoc(doc(db, 'restaurants', primaryRest.id), {
+      codigoSede: cleanCode
+    });
+    return { codigoSede: cleanCode, restaurantId: primaryRest.id };
+  }
+
+  // 4. Si la empresa aún no tenía sucursal creada en 'restaurants', inicializarla con este código de 4 dígitos
+  const created = await bootstrapNewBusinessDefaults(
+    params.businessId,
+    params.businessName || 'Restaurante',
+    params.logoUrl || null,
+    cleanCode
+  );
+  return { codigoSede: created.codigoSede, restaurantId: created.restaurantId };
 }
 
 /**
@@ -4157,39 +4656,37 @@ export async function paySalaryBatch(
 
   for (const [employeeId, empShifts] of Object.entries(shiftsByEmployee)) {
     const empInfo = employeeDataMap ? employeeDataMap[employeeId] : undefined;
-    const modalidad = empInfo?.modalidad || 'por_horas';
+    const rawMod = empInfo?.modalidad || 'por_dia';
+    const isMonthly = rawMod === 'mes' || rawMod === 'fijo';
+    const modalidad = isMonthly ? 'mes' : 'por_dia';
     const employeeName = empShifts[0]?.employeeName || 'Empleado';
+
+    // Días trabajados únicos bajo el ciclo operativo (5:00 a.m. - 4:59 a.m.)
+    const uniqueDays = new Set(
+      empShifts.map(s => getOperationalDateString(s.horaInicio || s.fecha))
+    ).size;
+    const daysCount = uniqueDays || empShifts.length;
+
+    const dailyRate = (empInfo?.tarifaDiaria && empInfo.tarifaDiaria > 0)
+      ? empInfo.tarifaDiaria
+      : (empInfo?.sueldoMensual && empInfo.sueldoMensual > 0)
+        ? Math.round((empInfo.sueldoMensual / 30) * 100) / 100
+        : (empInfo?.tarifaHora && empInfo.tarifaHora > 0)
+          ? Math.round(empInfo.tarifaHora * 8 * 100) / 100
+          : (employeeRateMap[employeeId] || 50);
 
     let totalPay = 0;
     let description = '';
-    let normalHours = 0;
-    let overtimeHours = 0;
-    let daysCount = 0;
 
-    if (modalidad === 'por_dia') {
-      // Cálculo por día / jornal
-      const uniqueDays = new Set(empShifts.map(s => s.fecha || (s.horaInicio || '').split('T')[0])).size;
-      daysCount = uniqueDays || empShifts.length;
-      const dailyRate = empInfo?.tarifaDiaria && empInfo.tarifaDiaria > 0 
-        ? empInfo.tarifaDiaria 
-        : (employeeRateMap[employeeId] || 50);
-      
-      totalPay = Math.round(daysCount * dailyRate * 100) / 100;
-      description = `Pago de sueldo ${periodLabel} - ${employeeName} (${daysCount} días a $${dailyRate}/día)`;
+    if (isMonthly) {
+      const monthlySalary = (empInfo?.sueldoMensual && empInfo.sueldoMensual > 0)
+        ? empInfo.sueldoMensual
+        : Math.round(dailyRate * 30 * 100) / 100;
+      totalPay = Math.round(monthlySalary * 100) / 100;
+      description = `Pago de sueldo mensual ${periodLabel} - ${employeeName} (${daysCount} días trabajados • Sueldo base $${monthlySalary.toFixed(2)}/mes)`;
     } else {
-      // Cálculo estándar por horas
-      const hourlyRate = empInfo?.tarifaHora && empInfo.tarifaHora > 0 
-        ? empInfo.tarifaHora 
-        : (employeeRateMap[employeeId] || 12);
-
-      empShifts.forEach(shift => {
-        const h = (shift.minutosTrabajados || 0) / 60;
-        normalHours += Math.min(8, h);
-        overtimeHours += Math.max(0, h - 8);
-      });
-
-      totalPay = Math.round((normalHours * hourlyRate + overtimeHours * hourlyRate * overtimeMultiplier) * 100) / 100;
-      description = `Pago de sueldo ${periodLabel} - ${employeeName} (${normalHours.toFixed(1)}h norm + ${overtimeHours.toFixed(1)}h ext a $${hourlyRate}/h)`;
+      totalPay = Math.round(daysCount * dailyRate * 100) / 100;
+      description = `Pago de sueldo por días trabajados (${periodLabel}) - ${employeeName} (${daysCount} ${daysCount === 1 ? 'día trabajado' : 'días trabajados'} a $${dailyRate.toFixed(2)}/día)`;
     }
 
     const abonoPrevio = abonosMap ? (abonosMap[employeeId] || 0) : 0;
@@ -4201,7 +4698,7 @@ export async function paySalaryBatch(
     if (netPay > 0) {
       let finalDescription = description;
       if (abonoPrevio > 0) {
-        finalDescription = `Liquidación final de sueldo ${periodLabel} - ${employeeName} (Bruto $${totalPay.toFixed(2)} - Abonos $${abonoPrevio.toFixed(2)} = Neto $${netPay.toFixed(2)})`;
+        finalDescription = `Liquidación final de sueldo ${periodLabel} - ${employeeName} (${daysCount} días trabajados • Sueldo $${totalPay.toFixed(2)} - Abonos $${abonoPrevio.toFixed(2)} = Neto $${netPay.toFixed(2)})`;
       }
 
       await createExpense({
@@ -4212,12 +4709,9 @@ export async function paySalaryBatch(
         descripcion: finalDescription,
         employeeId,
         employeeName,
-        horasTrabajadas: Math.round((normalHours + overtimeHours) * 10) / 10,
-        horasExtra: Math.round(overtimeHours * 10) / 10,
-        diasTrabajados: daysCount || undefined,
+        diasTrabajados: daysCount,
         modalidadPago: modalidad,
-        tarifaHora: modalidad === 'por_horas' ? (empInfo?.tarifaHora || employeeRateMap[employeeId] || 12) : undefined,
-        tarifaDiaria: modalidad === 'por_dia' ? (empInfo?.tarifaDiaria || 50) : undefined,
+        tarifaDiaria: dailyRate,
         fecha: today,
         appId: 'gastro_smart',
         creadoEn: now
@@ -4225,26 +4719,15 @@ export async function paySalaryBatch(
     }
 
     // 2. Marcar cada shift como pagado
+    const perShiftPay = empShifts.length > 0 ? Math.round((totalPay / empShifts.length) * 100) / 100 : dailyRate;
     for (const shift of empShifts) {
       const shiftRef = doc(db, 'shifts', shift.id);
-      let shiftPay = 0;
-      if (modalidad === 'por_dia') {
-        const dailyRate = empInfo?.tarifaDiaria && empInfo.tarifaDiaria > 0 ? empInfo.tarifaDiaria : 50;
-        shiftPay = Math.round(dailyRate * 100) / 100;
-      } else {
-        const hourlyRate = empInfo?.tarifaHora && empInfo.tarifaHora > 0 ? empInfo.tarifaHora : (employeeRateMap[employeeId] || 12);
-        const shiftHours = (shift.minutosTrabajados || 0) / 60;
-        const shiftNorm = Math.min(8, shiftHours);
-        const shiftExt = Math.max(0, shiftHours - 8);
-        shiftPay = Math.round((shiftNorm * hourlyRate + shiftExt * hourlyRate * overtimeMultiplier) * 100) / 100;
-      }
-
       await updateDoc(shiftRef, {
         pagado: true,
         fechaPago: now,
-        montoPagadoSueldo: shiftPay,
+        montoPagadoSueldo: perShiftPay,
         sueldoPagado: true,
-        sueldoTotal: shiftPay
+        sueldoTotal: perShiftPay
       });
     }
   }
@@ -4407,4 +4890,365 @@ export async function seedSampleMenuAuditLogsIfEmpty(
     console.warn('Error sembrando registros de auditoría de muestra:', err);
   }
 }
+
+// ==========================================
+// SISTEMA DE GESTIÓN DE INVENTARIO E INSUMOS
+// ==========================================
+
+export function subscribeToInventoryItems(
+  arg1?: string | null | ((items: InventoryItem[]) => void),
+  arg2?: ((items: InventoryItem[]) => void) | string | null,
+  arg3?: string | null
+) {
+  let restaurantId: string | null = null;
+  let businessId: string | null = null;
+  let callback: (items: InventoryItem[]) => void = () => {};
+
+  if (typeof arg1 === 'function') {
+    callback = arg1;
+    if (typeof arg2 === 'string') businessId = arg2;
+  } else {
+    restaurantId = arg1 || null;
+    if (typeof arg2 === 'function') {
+      callback = arg2;
+      if (typeof arg3 === 'string') businessId = arg3;
+    }
+  }
+
+  const colRef = collection(db, 'inventoryItems');
+  const q = businessId
+    ? query(colRef, where('appId', '==', 'gastro_smart'), where('businessId', '==', businessId))
+    : query(colRef, where('appId', '==', 'gastro_smart'));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      let list: InventoryItem[] = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      } as InventoryItem));
+      if (restaurantId && restaurantId !== 'all') {
+        list = list.filter(i => !i.restaurantId || i.restaurantId === 'all' || i.restaurantId === restaurantId);
+      }
+      list.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      callback(list);
+    },
+    (err) => {
+      console.warn('Subscription warning (inventoryItems):', err);
+    }
+  );
+}
+
+export async function createInventoryItem(
+  data: Omit<InventoryItem, 'id' | 'appId'>
+): Promise<string> {
+  const nowIso = new Date().toISOString();
+  const payload = {
+    ...data,
+    businessId: data.businessId || UNIQUE_BUSINESS_ID,
+    restaurantId: data.restaurantId || 'all',
+    stockActual: Math.max(0, Number(data.stockActual) || 0),
+    stockMinimo: Math.max(1, Number(data.stockMinimo) || 5),
+    unidadMedida: data.unidadMedida || 'unidades',
+    costoUnitario: Number(data.costoUnitario) || 0,
+    ultimaActualizacion: nowIso,
+    appId: 'gastro_smart' as const
+  };
+  const docRef = await addDoc(collection(db, 'inventoryItems'), payload);
+  return docRef.id;
+}
+
+export async function updateInventoryItem(
+  id: string,
+  data: Partial<InventoryItem>
+): Promise<void> {
+  const cleaned: Record<string, any> = {
+    ultimaActualizacion: new Date().toISOString()
+  };
+  for (const [key, val] of Object.entries(data)) {
+    if (val !== undefined) {
+      cleaned[key] = val;
+    }
+  }
+  await updateDoc(doc(db, 'inventoryItems', id), cleaned);
+}
+
+export async function deleteInventoryItem(id: string): Promise<void> {
+  await deleteDoc(doc(db, 'inventoryItems', id));
+}
+
+export async function quickAdjustInventoryItemStock(
+  id: string,
+  delta: number,
+  userName: string = 'Administrador',
+  businessId: string = UNIQUE_BUSINESS_ID
+): Promise<number> {
+  const ref = doc(db, 'inventoryItems', id);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return 0;
+
+  const inv = { id: snap.id, ...snap.data() } as InventoryItem;
+  const prevStock = Number(inv.stockActual) || 0;
+  const newStock = Math.max(0, Math.round((prevStock + delta) * 1000) / 1000);
+  const nowIso = new Date().toISOString();
+
+  await updateDoc(ref, {
+    stockActual: newStock,
+    ultimaActualizacion: nowIso
+  });
+
+  await recordMenuAuditLog({
+    businessId: inv.businessId || businessId,
+    restaurantId: inv.restaurantId || 'all',
+    platoId: inv.id,
+    platoNombre: `Insumo: ${inv.nombre}`,
+    tipoAccion: 'ajuste_insumo',
+    detalles: `Ajuste de stock de insumo "${inv.nombre}": ${delta > 0 ? `+${delta}` : delta} ${inv.unidadMedida} (${prevStock} → ${newStock} ${inv.unidadMedida})`,
+    cambios: [{ campo: 'stockActual', valorAnterior: prevStock, valorNuevo: newStock }],
+    empleadoNombre: userName,
+    empleadoRol: 'Inventario',
+    fecha: nowIso
+  });
+
+  return newStock;
+}
+
+/**
+ * Siembra insumos base realistas y vincula automáticamente recetas a los platos de la carta
+ * para que al marcar cualquier pedido como 'entregado' se descuenten insumos y se activen alertas críticas.
+ */
+export async function seedDefaultInventoryItemsAndLinkDishes(
+  businessId: string,
+  restaurantId: string,
+  menuItems: MenuItem[]
+): Promise<{ createdCount: number; linkedDishesCount: number }> {
+  const targetBizId = businessId || UNIQUE_BUSINESS_ID;
+  const targetRestId = restaurantId || 'all';
+  const nowIso = new Date().toISOString();
+
+  const existingSnap = await getDocs(
+    query(
+      collection(db, 'inventoryItems'),
+      where('appId', '==', 'gastro_smart'),
+      where('businessId', '==', targetBizId)
+    )
+  );
+
+  const existingByName = new Map<string, InventoryItem>();
+  existingSnap.docs.forEach(d => {
+    const item = { id: d.id, ...d.data() } as InventoryItem;
+    existingByName.set(item.nombre.trim().toLowerCase(), item);
+  });
+
+  const baseSupplies: Array<Omit<InventoryItem, 'id' | 'appId'>> = [
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Carne de Res Premium (Porción 200g)',
+      categoria: 'Carnes y Proteínas',
+      stockActual: 12,
+      stockMinimo: 10,
+      unidadMedida: 'porciones',
+      costoUnitario: 2.2,
+      proveedor: 'Frigorífico Central',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Pechuga de Pollo Fresca (Porción)',
+      categoria: 'Carnes y Proteínas',
+      stockActual: 14,
+      stockMinimo: 10,
+      unidadMedida: 'porciones',
+      costoUnitario: 1.6,
+      proveedor: 'Avícola del Valle',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Pan Brioche / Artesanal',
+      categoria: 'Panadería y Harinas',
+      stockActual: 9,
+      stockMinimo: 10, // Inicia justo bajo umbral crítico para evidenciar alerta visual inmediata
+      unidadMedida: 'unidades',
+      costoUnitario: 0.45,
+      proveedor: 'Panadería La Espiga',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Queso Cheddar / Mozzarella',
+      categoria: 'Lácteos y Quesos',
+      stockActual: 15,
+      stockMinimo: 12,
+      unidadMedida: 'porciones',
+      costoUnitario: 0.5,
+      proveedor: 'Lácteos Andinos',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Papas Seleccionadas para Freír',
+      categoria: 'Verduras y Guarniciones',
+      stockActual: 8,
+      stockMinimo: 8, // En el umbral crítico para disparar alerta al entregar 1 pedido
+      unidadMedida: 'porciones',
+      costoUnitario: 0.65,
+      proveedor: 'Mercado Mayorista',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Mix Vegetales Frescos (Lechuga y Tomate)',
+      categoria: 'Verduras y Guarniciones',
+      stockActual: 20,
+      stockMinimo: 8,
+      unidadMedida: 'porciones',
+      costoUnitario: 0.35,
+      proveedor: 'Mercado Mayorista',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Aceite Vegetal y Salsas Base',
+      categoria: 'Abarrotes y Salsas',
+      stockActual: 25,
+      stockMinimo: 6,
+      unidadMedida: 'porciones',
+      costoUnitario: 0.25,
+      proveedor: 'Distribuidora Global',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Bebida / Refresco Frío',
+      categoria: 'Bebidas',
+      stockActual: 7,
+      stockMinimo: 8,
+      unidadMedida: 'unidades',
+      costoUnitario: 0.8,
+      proveedor: 'Embotelladora Nacional',
+      ultimaActualizacion: nowIso
+    },
+    {
+      businessId: targetBizId,
+      restaurantId: targetRestId,
+      nombre: 'Servilletas y Empaque de Servicio',
+      categoria: 'Empaques y Descartables',
+      stockActual: 30,
+      stockMinimo: 10,
+      unidadMedida: 'unidades',
+      costoUnitario: 0.15,
+      proveedor: 'EcoPack',
+      ultimaActualizacion: nowIso
+    }
+  ];
+
+  const batch = writeBatch(db);
+  let createdCount = 0;
+
+  for (const sup of baseSupplies) {
+    const key = sup.nombre.trim().toLowerCase();
+    if (!existingByName.has(key)) {
+      const newRef = doc(collection(db, 'inventoryItems'));
+      const fullItem: InventoryItem = {
+        ...sup,
+        id: newRef.id,
+        appId: 'gastro_smart'
+      };
+      batch.set(newRef, {
+        ...sup,
+        appId: 'gastro_smart'
+      });
+      existingByName.set(key, fullItem);
+      createdCount++;
+    }
+  }
+
+  const getInsumo = (partialName: string): InventoryItem | undefined => {
+    for (const [k, val] of existingByName.entries()) {
+      if (k.includes(partialName.toLowerCase())) return val;
+    }
+    return undefined;
+  };
+
+  const carne = getInsumo('carne');
+  const pollo = getInsumo('pollo');
+  const pan = getInsumo('pan');
+  const queso = getInsumo('queso');
+  const papas = getInsumo('papas');
+  const vegetales = getInsumo('vegetales');
+  const aceite = getInsumo('aceite');
+  const bebida = getInsumo('bebida');
+  const empaque = getInsumo('empaque');
+
+  let linkedDishesCount = 0;
+
+  for (const dish of menuItems) {
+    if (dish.insumosReceta && dish.insumosReceta.length > 0) continue;
+
+    const nameLower = (dish.nombre || '').toLowerCase();
+    const catLower = (dish.categoria || '').toLowerCase();
+    const recipe: DishIngredient[] = [];
+
+    if (
+      nameLower.includes('hamburguesa') ||
+      nameLower.includes('burger') ||
+      nameLower.includes('sandwich') ||
+      nameLower.includes('sándwich') ||
+      nameLower.includes('pepito')
+    ) {
+      if (carne) recipe.push({ insumoId: carne.id, insumoNombre: carne.nombre, cantidadPorUnidad: 1, unidadMedida: carne.unidadMedida });
+      if (pan) recipe.push({ insumoId: pan.id, insumoNombre: pan.nombre, cantidadPorUnidad: 1, unidadMedida: pan.unidadMedida });
+      if (queso) recipe.push({ insumoId: queso.id, insumoNombre: queso.nombre, cantidadPorUnidad: 1, unidadMedida: queso.unidadMedida });
+      if (papas) recipe.push({ insumoId: papas.id, insumoNombre: papas.nombre, cantidadPorUnidad: 1, unidadMedida: papas.unidadMedida });
+    } else if (
+      nameLower.includes('pollo') ||
+      nameLower.includes('alitas') ||
+      nameLower.includes('broaster') ||
+      nameLower.includes('pechuga')
+    ) {
+      if (pollo) recipe.push({ insumoId: pollo.id, insumoNombre: pollo.nombre, cantidadPorUnidad: 1, unidadMedida: pollo.unidadMedida });
+      if (papas) recipe.push({ insumoId: papas.id, insumoNombre: papas.nombre, cantidadPorUnidad: 1, unidadMedida: papas.unidadMedida });
+      if (aceite) recipe.push({ insumoId: aceite.id, insumoNombre: aceite.nombre, cantidadPorUnidad: 1, unidadMedida: aceite.unidadMedida });
+    } else if (
+      catLower.includes('bebida') ||
+      nameLower.includes('coca') ||
+      nameLower.includes('gaseosa') ||
+      nameLower.includes('jugo') ||
+      nameLower.includes('agua') ||
+      nameLower.includes('cerveza') ||
+      nameLower.includes('refresco')
+    ) {
+      if (bebida) recipe.push({ insumoId: bebida.id, insumoNombre: bebida.nombre, cantidadPorUnidad: 1, unidadMedida: bebida.unidadMedida });
+    } else {
+      // Plato general de cocina
+      if (carne) recipe.push({ insumoId: carne.id, insumoNombre: carne.nombre, cantidadPorUnidad: 1, unidadMedida: carne.unidadMedida });
+      if (vegetales) recipe.push({ insumoId: vegetales.id, insumoNombre: vegetales.nombre, cantidadPorUnidad: 1, unidadMedida: vegetales.unidadMedida });
+      if (papas) recipe.push({ insumoId: papas.id, insumoNombre: papas.nombre, cantidadPorUnidad: 1, unidadMedida: papas.unidadMedida });
+    }
+
+    if (empaque) {
+      recipe.push({ insumoId: empaque.id, insumoNombre: empaque.nombre, cantidadPorUnidad: 1, unidadMedida: empaque.unidadMedida });
+    }
+
+    if (recipe.length > 0) {
+      batch.update(doc(db, 'menuItems', dish.id), {
+        insumosReceta: recipe
+      });
+      linkedDishesCount++;
+    }
+  }
+
+  await batch.commit();
+  return { createdCount, linkedDishesCount };
+}
+
 

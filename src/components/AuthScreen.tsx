@@ -38,10 +38,7 @@ export const AuthScreen: React.FC = () => {
     lockRemainingSeconds, 
     lockSeverity,
     allRestaurants,
-    allBusinesses,
-    selectedRestaurantId,
-    selectRestaurant,
-    currentBusiness,
+    allEmployees,
     selfHealingToast,
     dismissSelfHealingToast
   } = useAuth();
@@ -79,22 +76,10 @@ export const AuthScreen: React.FC = () => {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotFeedback, setForgotFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Form states - Employee PIN
-  const [selectedBranchId, setSelectedBranchId] = useState<string>(() => {
-    return selectedRestaurantId || (allRestaurants[0]?.id) || '';
-  });
+  // Form states - Employee PIN (Código de 8 dígitos: 4 de sede + 4 de PIN personal)
   const [pin, setPin] = useState<string>('');
   const [pinErrorMsg, setPinErrorMsg] = useState<string>('');
   const [pinLoading, setPinLoading] = useState(false);
-
-  // Sincronizar sucursal seleccionada con la lista de restaurantes disponibles
-  useEffect(() => {
-    if (selectedRestaurantId && allRestaurants.some(r => r.id === selectedRestaurantId)) {
-      setSelectedBranchId(selectedRestaurantId);
-    } else if (allRestaurants.length > 0 && (!selectedBranchId || !allRestaurants.some(r => r.id === selectedBranchId))) {
-      setSelectedBranchId(allRestaurants[0].id);
-    }
-  }, [allRestaurants, selectedRestaurantId]);
 
   // Reproducir sonido cuando aparece toast de autorrecuperación o notificación
   useEffect(() => {
@@ -102,9 +87,6 @@ export const AuthScreen: React.FC = () => {
       sounds.playNotification();
     }
   }, [selfHealingToast]);
-
-  const activeRest = allRestaurants.find(r => r.id === (selectedBranchId || selectedRestaurantId)) || allRestaurants[0] || null;
-  const activeBiz = activeRest ? allBusinesses.find(b => b.id === activeRest.businessId) : null;
 
   // ================= ADMIN HANDLERS =================
   const handleGoogleAuth = async (isCreator = false) => {
@@ -253,15 +235,15 @@ export const AuthScreen: React.FC = () => {
     }
   };
 
-  // ================= EMPLOYEE PIN HANDLERS =================
+  // ================= EMPLOYEE PIN HANDLERS (8 DÍGITOS: 4 SEDE + 4 PIN) =================
   const handleDigit = (digit: string) => {
-    if (isLocked || pin.length >= 4) return;
+    if (isLocked || pinLoading || pin.length >= 8) return;
     sounds.playKeypadClick();
     const newPin = pin + digit;
     setPin(newPin);
     setPinErrorMsg('');
 
-    if (newPin.length === 4) {
+    if (newPin.length === 8) {
       submitEmployeePin(newPin);
     }
   };
@@ -281,16 +263,42 @@ export const AuthScreen: React.FC = () => {
   };
 
   const submitEmployeePin = async (inputPin: string) => {
+    if (inputPin.length !== 8) return;
     setPinLoading(true);
     setPinErrorMsg('');
     try {
-      const branchToUse = selectedBranchId || (allRestaurants[0]?.id);
-      const res = await loginWithPin(inputPin, branchToUse);
+      const codigoSede = inputPin.slice(0, 4);
+      const pinEmpleado = inputPin.slice(4, 8);
+
+      const restaurantEncontrado = allRestaurants.find(
+        r => (r.codigoSede || '').trim() === codigoSede
+      );
+
+      if (!restaurantEncontrado) {
+        // Mantener intacto el sistema anti-fuerza-bruta y mostrar el mismo mensaje genérico de PIN inválido
+        const res = await loginWithPin('__INVALID_PIN__', '__INVALID_BRANCH__');
+        sounds.playAlertWarning();
+        setPinErrorMsg(res.message.replace(/\s+para\s+[^.]+/, ''));
+        setPin('');
+        return;
+      }
+
+      // Verificar si el empleado activo pertenece a esa sucursal específica
+      const employeeInBranch = allEmployees.some(
+        e => e.activo && e.pin === pinEmpleado && e.restaurantId === restaurantEncontrado.id
+      );
+
+      const res = await loginWithPin(
+        employeeInBranch ? pinEmpleado : '__INVALID_PIN__',
+        restaurantEncontrado.id
+      );
+
       if (res.success && res.employee) {
         sounds.playKeypadClick();
       } else {
         sounds.playAlertWarning();
-        setPinErrorMsg(res.message);
+        // Mantener el mensaje de error genérico sin revelar el nombre de la sede
+        setPinErrorMsg(res.message.replace(/\s+para\s+[^.]+/, ''));
         setPin('');
       }
     } catch (err: any) {
@@ -816,128 +824,53 @@ export const AuthScreen: React.FC = () => {
       {authMode === 'employee' && (
         <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-orange-100/80 p-6 sm:p-8 flex flex-col items-center backdrop-blur-sm animate-in fade-in zoom-in-95 duration-150">
           
-          {/* Selector y Visualizador de Restaurante / Sucursal */}
-          {allRestaurants.length === 0 ? (
-            <div className="w-full mb-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-center">
-              <Store className="w-6 h-6 text-amber-600 mx-auto mb-1.5" />
-              <p className="text-xs font-bold text-neutral-800">No hay restaurantes registrados aún</p>
-              <p className="text-[11px] text-neutral-500 mt-1">
-                El dueño o administrador debe iniciar sesión para crear el primer restaurante y dar de alta a los empleados.
-              </p>
-              <button
-                type="button"
-                onClick={() => setAuthMode('admin')}
-                className="mt-3 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition"
-              >
-                Acceder como Administrador
-              </button>
-            </div>
-          ) : (
-            <div className="w-full mb-4 bg-orange-50/70 border border-orange-200/80 rounded-2xl p-3 shadow-xs">
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[11px] font-extrabold text-orange-950 uppercase tracking-wider flex items-center gap-1.5">
-                  <Store className="w-4 h-4 text-orange-600" />
-                  <span>Restaurante / Sucursal de Ingreso</span>
-                </label>
-                {allRestaurants.length > 1 && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 bg-orange-200/80 text-orange-800 rounded-full">
-                    {allRestaurants.length} sucursales
-                  </span>
-                )}
-              </div>
-
-              {allRestaurants.length > 1 ? (
-                <select
-                  value={activeRest?.id || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setSelectedBranchId(val);
-                    selectRestaurant(val);
-                    setPinErrorMsg('');
-                  }}
-                  className="w-full h-11 px-3 rounded-xl border border-orange-300 bg-white text-xs font-black text-neutral-800 outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 shadow-xs cursor-pointer"
-                >
-                  {allRestaurants.map(r => {
-                    const biz = allBusinesses.find(b => b.id === r.businessId);
-                    const bizLabel = biz ? ` [${biz.nombre}]` : '';
-                    return (
-                      <option key={r.id} value={r.id}>
-                        🏢 {r.nombre}{bizLabel} {r.direccion ? `• ${r.direccion}` : `• ${r.numeroMesas || 10} mesas`}
-                      </option>
-                    );
-                  })}
-                </select>
-              ) : (
-                <div className="flex items-center justify-between px-3 py-2 bg-white rounded-xl border border-orange-200 shadow-2xs">
-                  <div className="flex items-center gap-2">
-                    {(activeRest?.logoUrl || activeBiz?.logoUrl) ? (
-                      <div className="w-8 h-8 rounded-lg bg-neutral-50 border border-orange-200 p-0.5 flex items-center justify-center shrink-0 overflow-hidden shadow-2xs">
-                        <img
-                          src={(activeRest?.logoUrl || activeBiz?.logoUrl)!}
-                          alt={activeRest?.nombre || 'Logo'}
-                          className="w-full h-full object-contain"
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                    ) : (
-                      <div className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-orange-600 font-bold text-sm shrink-0">
-                        🏢
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <div className="text-xs font-black text-neutral-800 truncate">
-                        {activeRest?.nombre || 'Restaurante Principal'}
-                      </div>
-                      <div className="text-[10px] text-neutral-500 font-semibold truncate">
-                        {activeBiz?.nombre || 'Gastro Smart'} {activeRest?.direccion ? `• ${activeRest.direccion}` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full shrink-0">
-                    Activo
-                  </span>
-                </div>
-              )}
-
-              {/* Contexto visible para el empleado */}
-              {activeRest && (
-                <div className="mt-2 pt-2 border-t border-orange-200/60 flex items-center justify-between text-[11px] text-neutral-600 font-medium">
-                  <span className="flex items-center gap-1 text-orange-900 font-semibold truncate">
-                    <span>📍 Ingresando a:</span>
-                    <strong className="text-neutral-900 font-extrabold">{activeRest.nombre}</strong>
-                  </span>
-                  <span className="text-neutral-500 text-[10px] shrink-0 font-bold">
-                    {activeRest.numeroMesas || 10} Mesas
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Estado de Entrada: 4 Puntos de PIN */}
+          {/* Estado de Entrada: 8 Puntos de Código (4 Código de Sede + 4 PIN Personal) */}
           <div className="w-full flex flex-col items-center mb-4">
             <div className="flex items-center gap-2 mb-2">
               <Lock className="w-4 h-4 text-neutral-400" />
               <span className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                Ingresa tu PIN de 4 dígitos
+                Ingresá tu código de 8 dígitos
               </span>
             </div>
 
-            {/* 4 PIN Dots */}
-            <div className="flex items-center justify-center gap-4 my-2">
-              {[0, 1, 2, 3].map((idx) => {
-                const isFilled = pin.length > idx;
-                return (
-                  <div
-                    key={idx}
-                    className={`w-5 h-5 rounded-full transition-all duration-200 ${
-                      isFilled 
-                        ? 'bg-orange-500 scale-125 shadow-md shadow-orange-300' 
-                        : 'bg-neutral-200'
-                    }`}
-                  />
-                );
-              })}
+            {/* 8 PIN Dots agrupados visualmente en dos bloques de 4 con separador */}
+            <div className="flex items-center justify-center gap-3 my-3">
+              {/* Bloque 1: Primeros 4 dígitos (Código de Sede) */}
+              <div className="flex items-center gap-2.5">
+                {[0, 1, 2, 3].map((idx) => {
+                  const isFilled = pin.length > idx;
+                  return (
+                    <div
+                      key={idx}
+                      className={`w-4 h-4 sm:w-5 sm:h-5 rounded-full transition-all duration-200 ${
+                        isFilled 
+                          ? 'bg-orange-500 scale-125 shadow-md shadow-orange-300' 
+                          : 'bg-neutral-200'
+                      }`}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* Pequeño separador visual entre los dos bloques de 4 */}
+              <div className="w-3 h-1 rounded-full bg-neutral-300 mx-1" />
+
+              {/* Bloque 2: Últimos 4 dígitos (PIN Personal) */}
+              <div className="flex items-center gap-2.5">
+                {[4, 5, 6, 7].map((idx) => {
+                  const isFilled = pin.length > idx;
+                  return (
+                    <div
+                      key={idx}
+                      className={`w-4 h-4 sm:w-5 sm:h-5 rounded-full transition-all duration-200 ${
+                        isFilled 
+                          ? 'bg-orange-500 scale-125 shadow-md shadow-orange-300' 
+                          : 'bg-neutral-200'
+                      }`}
+                    />
+                  );
+                })}
+              </div>
             </div>
 
             {/* Avisos de Seguridad y Bloqueo Anti-Fuerza Bruta */}

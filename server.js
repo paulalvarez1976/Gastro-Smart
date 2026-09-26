@@ -34,6 +34,57 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'ok', service: 'gastro_smart_server' });
 });
 
+// API: Envío de Notificaciones Push Nativas mediante Firebase Cloud Messaging (FCM)
+app.post('/api/push/notify', async (req, res) => {
+  try {
+    const { title, body, orderId, eventType, businessId, restaurantId, targetRoles, tokens } = req.body || {};
+    const fcmServerKey = process.env.FIREBASE_SERVER_KEY || process.env.FCM_SERVER_KEY;
+
+    if (fcmServerKey && Array.isArray(tokens) && tokens.length > 0) {
+      const fcmResponse = await fetch('https://fcm.googleapis.com/fcm/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `key=${fcmServerKey}`,
+        },
+        body: JSON.stringify({
+          registration_ids: tokens,
+          priority: 'high',
+          notification: {
+            title: title || '🔔 Nuevo Pedido en Gastro Smart',
+            body: body || 'Tienes una nueva alerta de pedido pendiente.',
+            icon: '/pwa-192x192.png',
+            sound: 'default',
+          },
+          data: {
+            title: title || '🔔 Nuevo Pedido en Gastro Smart',
+            body: body || 'Tienes una nueva alerta de pedido pendiente.',
+            orderId: orderId || '',
+            type: eventType || 'new_order',
+            businessId: businessId || '',
+            restaurantId: restaurantId || '',
+            url: '/',
+          },
+        }),
+      });
+      const fcmResult = await fcmResponse.json().catch(() => ({}));
+      return res.json({ success: true, fcmDispatched: true, result: fcmResult });
+    }
+
+    return res.json({
+      success: true,
+      fcmDispatched: false,
+      mode: 'service_worker_realtime',
+      targetRoles: targetRoles || [],
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error?.message || 'Error al procesar envío push FCM.',
+    });
+  }
+});
+
 // API: Escaneo inteligente de tickets y recibos de compra con Gemini
 app.post('/api/scan-receipt', async (req, res) => {
   try {

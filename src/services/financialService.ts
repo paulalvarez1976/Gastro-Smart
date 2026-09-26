@@ -247,15 +247,16 @@ export function computeDailyStatFromRawData(
     }
   });
 
-  // Turnos y horas trabajadas
+  // Turnos y jornadas trabajadas (sin cálculo por hora)
   let horasTrabajadasTotal = 0;
   let costoSueldosTurnos = 0;
+  const workedEmployeesSet = new Set<string>();
   dayShifts.forEach(shift => {
-    const mins = shift.minutosTrabajados || 0;
-    const hours = mins / 60;
-    horasTrabajadasTotal += hours;
-    costoSueldosTurnos += (shift.montoPagadoSueldo || (hours * 12));
+    const empKey = shift.employeeId || shift.id;
+    workedEmployeesSet.add(empKey);
+    costoSueldosTurnos += (shift.montoPagadoSueldo || shift.sueldoTotal || 50);
   });
+  horasTrabajadasTotal = workedEmployeesSet.size;
 
   const topPlatos: DailyDishSale[] = Array.from(dishMap.values())
     .sort((a, b) => b.cantidad - a.cantidad)
@@ -640,18 +641,19 @@ export function aggregateFinancialSummary(
   const prevMargen = prevVentas > 0 ? (prevGanancia / prevVentas) * 100 : 0;
   const prevTicket = prevPedidos > 0 ? prevVentas / prevPedidos : 0;
 
-  // 3. Gráfica Principal: Ventas vs Gastos
+  // 3. Gráfica Principal: Evolución Diaria de las Ventas vs Gastos
   const chartData: {
     label: string;
+    fecha?: string;
     ventas: number;
     gastos: number;
     ganancia: number;
     pedidos?: number;
+    ticketPromedio?: number;
   }[] = [];
 
   if (timeframe === 'dia') {
-    // Horas del día (12h a 22h, mostrando desde 08h a 23h para visión completa)
-    // Agrupamos ventasPorHora de todos los stats del día actual
+    // Horas del día (mostrando desde 08h a 23h para visión completa)
     const hourlyAggregate: Record<string, { ventas: number; gastos: number; ganancia: number; pedidos: number }> = {};
     for (let h = 8; h <= 23; h++) {
       const key = String(h).padStart(2, '0');
@@ -677,22 +679,26 @@ export function aggregateFinancialSummary(
     Object.entries(hourlyAggregate).forEach(([h, val]) => {
       const v = Math.round(val.ventas * 100) / 100;
       const g = Math.round(val.gastos * 100) / 100;
+      const t = val.pedidos > 0 ? Math.round((v / val.pedidos) * 100) / 100 : 0;
       chartData.push({
         label: `${h}:00`,
         ventas: v,
         gastos: g,
         ganancia: Math.round((v - g) * 100) / 100,
-        pedidos: val.pedidos
+        pedidos: val.pedidos,
+        ticketPromedio: t
       });
     });
-  } else if (timeframe === 'semana') {
-    // Días de la semana (Lunes a Domingo o los 7 días analizados)
-    // Mapear por fecha de la semana
+  } else {
+    // Evolución diaria día por día (tanto para 'semana' como para 'mes')
     const dayMap = new Map<string, { ventas: number; gastos: number; pedidos: number }>();
     const dayLabels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const monthLabels = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
-    // Obtener las fechas ordenadas
-    const uniqueDates = Array.from(new Set(currentStats.map(s => s.fecha))).sort();
+    const todayOpStr = getOperationalDateString(new Date());
+    const uniqueDates = Array.from(new Set(currentStats.map(s => s.fecha)))
+      .filter(dStr => timeframe === 'semana' || dStr <= todayOpStr)
+      .sort();
 
     uniqueDates.forEach(dStr => {
       dayMap.set(dStr, { ventas: 0, gastos: 0, pedidos: 0 });
@@ -711,47 +717,20 @@ export function aggregateFinancialSummary(
       const [y, m, d] = dStr.split('-').map(Number);
       const dateObj = new Date(y, m - 1, d);
       const dayName = dayLabels[dateObj.getDay()];
+      const monthName = monthLabels[dateObj.getMonth()];
       const item = dayMap.get(dStr) || { ventas: 0, gastos: 0, pedidos: 0 };
       const v = Math.round(item.ventas * 100) / 100;
       const g = Math.round(item.gastos * 100) / 100;
+      const t = item.pedidos > 0 ? Math.round((v / item.pedidos) * 100) / 100 : 0;
 
       chartData.push({
-        label: `${dayName} ${d}`,
+        label: timeframe === 'semana' ? `${dayName} ${d}` : `${d} ${monthName}`,
+        fecha: dStr,
         ventas: v,
         gastos: g,
         ganancia: Math.round((v - g) * 100) / 100,
-        pedidos: item.pedidos
-      });
-    });
-  } else {
-    // Mes: Semanas del mes (Semana 1: días 1-7, Semana 2: 8-14, Semana 3: 15-21, Semana 4: 22-28, Semana 5: 29+)
-    const weeks = [
-      { label: 'Semana 1 (1-7)', min: 1, max: 7, ventas: 0, gastos: 0, pedidos: 0 },
-      { label: 'Semana 2 (8-14)', min: 8, max: 14, ventas: 0, gastos: 0, pedidos: 0 },
-      { label: 'Semana 3 (15-21)', min: 15, max: 21, ventas: 0, gastos: 0, pedidos: 0 },
-      { label: 'Semana 4 (22-28)', min: 22, max: 28, ventas: 0, gastos: 0, pedidos: 0 },
-      { label: 'Semana 5 (29+)', min: 29, max: 31, ventas: 0, gastos: 0, pedidos: 0 }
-    ];
-
-    currentStats.forEach(stat => {
-      const dayNum = parseInt(stat.fecha.split('-')[2], 10);
-      const w = weeks.find(item => dayNum >= item.min && dayNum <= item.max);
-      if (w) {
-        w.ventas += stat.ventasTotales || 0;
-        w.gastos += stat.gastosTotales || 0;
-        w.pedidos += stat.pedidosCobrados || 0;
-      }
-    });
-
-    weeks.forEach(w => {
-      const v = Math.round(w.ventas * 100) / 100;
-      const g = Math.round(w.gastos * 100) / 100;
-      chartData.push({
-        label: w.label,
-        ventas: v,
-        gastos: g,
-        ganancia: Math.round((v - g) * 100) / 100,
-        pedidos: w.pedidos
+        pedidos: item.pedidos,
+        ticketPromedio: t
       });
     });
   }

@@ -3,13 +3,13 @@ import {
   Shift, 
   Employee, 
   Restaurant, 
-  Role,
   PaymentMethod,
   Expense
 } from '../types';
 import { 
   paySalaryBatch,
   payFixedSalaryExpense,
+  payShiftSalary,
   createExpense,
   subscribeToExpenses,
   getOperationalDateString,
@@ -18,29 +18,21 @@ import {
 import { exportPayrollToExcel, PayrollEmployeeRow } from '../services/excelService';
 import { sounds } from '../utils/sound';
 import { 
-  Clock, 
   Users, 
   DollarSign, 
   Calendar, 
-  Building2, 
-  Filter, 
   FileSpreadsheet, 
   CheckCircle2, 
   AlertCircle, 
   Lock, 
   BarChart3, 
-  Check, 
   X,
   ChevronDown,
   ChevronUp,
-  Briefcase,
   Wallet,
-  Receipt,
-  CreditCard,
   Download,
   CalendarCheck,
-  Layers,
-  PauseCircle
+  TrendingUp
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -63,6 +55,25 @@ interface StaffAttendanceAdminViewProps {
   userRole: 'owner' | 'admin';
 }
 
+interface EmployeeDayWorkedDetail {
+  fechaOperativa: string;
+  fechaLabel: string;
+  turnos: Shift[];
+  ventasDia: number;
+  pedidosDia: number;
+  pagadoDia: boolean;
+  reportes: string[];
+}
+
+interface UnifiedEmployeePayrollItem extends PayrollEmployeeRow {
+  avatarUrl?: string;
+  isMonthlyFixed: boolean;
+  sueldoMensual: number;
+  diasDetalle: EmployeeDayWorkedDetail[];
+  isPaidFixedMonth: boolean;
+  employeeObj: Employee;
+}
+
 export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> = ({
   shifts,
   employees,
@@ -75,46 +86,42 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
   if (userRole !== 'owner' && userRole !== 'admin') {
     return (
       <div className="p-8 text-center text-neutral-500 font-bold bg-white rounded-2xl border border-neutral-200">
-        Acceso restringido: Solo administradores y propietarios tienen acceso a la gestión de asistencia y nómina.
+        Acceso restringido: Solo administradores y propietarios tienen acceso a la gestión de asistencia y planilla.
       </div>
     );
   }
 
-  // Pestaña activa: Por Horas / Turnos vs Sueldo Fijo Mensual vs Reporte Días Trabajados
-  const [activeTab, setActiveTab] = useState<'turnos' | 'fijos' | 'dias_trabajados'>('turnos');
-
-  // Estado para Reporte de Días Trabajados
-  const [expandedEmployeeId, setExpandedEmployeeId] = useState<string | null>(null);
-  const [workingDaysMonthFilter, setWorkingDaysMonthFilter] = useState<string>('all');
-
-  // Filtros
-  const [dateRangePreset, setDateRangePreset] = useState<'hoy' | 'semana' | 'quincena' | 'mes' | 'todos'>('semana');
+  // Filtros unificados (sin pestañas redundantes)
+  const [dateRangePreset, setDateRangePreset] = useState<'hoy' | 'semana' | 'quincena' | 'mes' | 'todos'>('mes');
   const [selectedBranchId, setSelectedBranchId] = useState<string>('all');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
   const [selectedRole, setSelectedRole] = useState<string>('all');
-  const [overtimeMultiplier, setOvertimeMultiplier] = useState<number>(1.5);
+  const [modalityFilter, setModalityFilter] = useState<'all' | 'por_dia' | 'mes'>('all');
 
-  // Modal de generación de gastos de sueldos por horas
+  // Fila expandida para ver el detalle de días trabajados y jornadas de un empleado
+  const [expandedEmployeeId, setExpandedEmployeeId] = useState<string | null>(null);
+
+  // Modal de liquidación masiva de planilla
   const [showPayrollModal, setShowPayrollModal] = useState<boolean>(false);
   const [isProcessingSalary, setIsProcessingSalary] = useState<boolean>(false);
   const [salarySuccessToast, setSalarySuccessToast] = useState<string | null>(null);
-
-  // Empleados seleccionados para pago masivo por horas
   const [selectedForPayment, setSelectedForPayment] = useState<Record<string, boolean>>({});
 
-  // Control para Sueldo Fijo Mensual
+  // Modal de liquidación individual de empleado (Diario o Mensual)
+  const [payingSingleRow, setPayingSingleRow] = useState<UnifiedEmployeePayrollItem | null>(null);
+  const [singlePayMethod, setSinglePayMethod] = useState<PaymentMethod>('transferencia');
+  const [singlePayNotes, setSinglePayNotes] = useState<string>('');
+  const [isProcessingSinglePay, setIsProcessingSinglePay] = useState<boolean>(false);
+  const [singlePayError, setSinglePayError] = useState<string | null>(null);
+  const [payingShiftId, setPayingShiftId] = useState<string | null>(null);
+
+  // Control de mes operativo para liquidación mensual
   const currentYear = new Date().getFullYear();
   const currentMonthIdx = new Date().getMonth();
   const defaultMonthKey = `${currentYear}-${String(currentMonthIdx + 1).padStart(2, '0')}`;
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string>(defaultMonthKey);
 
-  const [fixedSalaryMonthKey, setFixedSalaryMonthKey] = useState<string>(defaultMonthKey);
-  const [payingFixedEmployee, setPayingFixedEmployee] = useState<Employee | null>(null);
-  const [fixedPayMethod, setFixedPayMethod] = useState<PaymentMethod>('transferencia');
-  const [fixedPayNotes, setFixedPayNotes] = useState<string>('');
-  const [isProcessingFixedPay, setIsProcessingFixedPay] = useState<boolean>(false);
-  const [fixedPayError, setFixedPayError] = useState<string | null>(null);
-
-  // Gastos de sueldos (pagos reales registrados)
+  // Gastos de sueldos registrados en tiempo real
   const [salaryExpenses, setSalaryExpenses] = useState<Expense[]>([]);
 
   useEffect(() => {
@@ -142,23 +149,14 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
   }, [currentYear, currentMonthIdx]);
 
   const selectedMonthLabel = useMemo(() => {
-    const m = availableMonths.find(am => am.key === fixedSalaryMonthKey);
+    const m = availableMonths.find(am => am.key === selectedMonthKey);
     if (m) return m.label;
-    const [y, mm] = fixedSalaryMonthKey.split('-');
+    const [y, mm] = selectedMonthKey.split('-');
     const idx = parseInt(mm, 10) - 1;
     return `${monthNames[idx] || mm} ${y}`;
-  }, [fixedSalaryMonthKey, availableMonths]);
+  }, [selectedMonthKey, availableMonths]);
 
-  // Lista de empleados fijos
-  const fixedEmployees = useMemo(() => {
-    return employees.filter(e => {
-      if (e.tipoSueldo !== 'fijo') return false;
-      if (selectedBranchId !== 'all' && e.restaurantId !== selectedBranchId) return false;
-      return true;
-    });
-  }, [employees, selectedBranchId]);
-
-  // Calcular fechas según preset aplicando el día operativo (5:00 a.m. - 4:59 a.m.)
+  // Calcular rango de fechas operativo (5:00 a.m. - 4:59 a.m.)
   const dateFilter = useMemo(() => {
     const now = new Date();
     const todayStr = getOperationalDateString(now);
@@ -171,302 +169,200 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
     if (dateRangePreset === 'semana') {
       const dateObj = new Date(opNow);
       const day = dateObj.getDay();
-      const diff = dateObj.getDate() - day + (day === 0 ? -6 : 1); // Lunes
+      const diff = dateObj.getDate() - day + (day === 0 ? -6 : 1);
       dateObj.setDate(diff);
       const start = getOperationalDateString(dateObj);
       return { start, end: todayStr, label: 'Esta Semana' };
     }
     if (dateRangePreset === 'quincena') {
       const dateObj = new Date(opNow);
-      dateObj.setDate(dateObj.getDate() - 15);
+      dateObj.setDate(dateObj.getDate() - 14);
       const start = getOperationalDateString(dateObj);
       return { start, end: todayStr, label: 'Última Quincena (15 días)' };
     }
     if (dateRangePreset === 'mes') {
-      const start = `${todayStr.slice(0, 7)}-01`;
-      return { start, end: todayStr, label: 'Este Mes Operativo' };
+      const start = `${selectedMonthKey}-01`;
+      const [selY, selM] = selectedMonthKey.split('-').map(Number);
+      const lastDay = new Date(selY, selM, 0).getDate();
+      const end = `${selectedMonthKey}-${String(lastDay).padStart(2, '0')}`;
+      return { start, end, label: `Mes ${selectedMonthLabel}` };
     }
     return { start: '2020-01-01', end: '2030-12-31', label: 'Todo el Historial' };
-  }, [dateRangePreset]);
+  }, [dateRangePreset, selectedMonthKey, selectedMonthLabel]);
 
-  // Turnos filtrados
+  const restaurantMap = useMemo(() => {
+    return new Map(restaurants.map(r => [r.id, r.nombre]));
+  }, [restaurants]);
+
+  // Turnos filtrados por negocio, sede, empleado, puesto y fecha operativa
   const filteredShifts = useMemo(() => {
     return shifts.filter(s => {
-      // Filtro de negocio
       if (s.businessId && s.businessId !== businessId) return false;
-      
-      // Filtro de sucursal
       if (selectedBranchId !== 'all' && s.restaurantId !== selectedBranchId) return false;
-
-      // Filtro de empleado
       if (selectedEmployeeId !== 'all' && s.employeeId !== selectedEmployeeId) return false;
-
-      // Filtro de puesto
       if (selectedRole !== 'all') {
         const emp = employees.find(e => e.id === s.employeeId);
         const role = s.employeePuesto || emp?.puesto;
         if (role !== selectedRole) return false;
       }
-
-      // Filtro de fechas respetando el día operativo 5:00 a.m. - 4:59 a.m.
       const shiftDate = getOperationalDateString(s.horaInicio || s.fecha);
       if (shiftDate < dateFilter.start || shiftDate > dateFilter.end) return false;
-
       return true;
     });
   }, [shifts, businessId, selectedBranchId, selectedEmployeeId, selectedRole, dateFilter, employees]);
 
-  // Mapa de empleados y tarifas
-  const employeeMap = useMemo(() => {
-    return new Map(employees.map(e => [e.id, e]));
-  }, [employees]);
-
-  // Mapa de restaurantes
-  const restaurantMap = useMemo(() => {
-    return new Map(restaurants.map(r => [r.id, r.nombre]));
-  }, [restaurants]);
-
-  // Estructura de desglose de días trabajados por empleado
-  const workingDaysReport = useMemo(() => {
-    const targetEmployees = employees.filter(e => {
-      if (selectedBranchId !== 'all' && e.restaurantId !== selectedBranchId) return false;
-      if (selectedEmployeeId !== 'all' && e.id !== selectedEmployeeId) return false;
-      if (selectedRole !== 'all' && e.puesto !== selectedRole) return false;
-      return true;
-    });
-
-    return targetEmployees.map(emp => {
-      // Obtener todos los turnos de este empleado que caen en el rango filtrado
-      const empShifts = filteredShifts.filter(s => {
-        if (s.employeeId !== emp.id) return false;
-        if (workingDaysMonthFilter !== 'all') {
-          const shiftMonth = getOperationalMonthString(s.horaInicio || s.fecha);
-          if (shiftMonth !== workingDaysMonthFilter) return false;
-        }
-        return true;
-      });
-
-      // Agrupar turnos por fecha operativa (5:00 a.m. - 4:59 a.m.)
-      const dayMap = new Map<string, Shift[]>();
-      empShifts.forEach(shift => {
-        const opDate = getOperationalDateString(shift.horaInicio || shift.fecha);
-        if (!dayMap.has(opDate)) {
-          dayMap.set(opDate, []);
-        }
-        dayMap.get(opDate)!.push(shift);
-      });
-
-      // Construir detalle por día
-      interface ShiftDayDetail {
-        fechaOperativa: string;
-        fechaLabel: string;
-        minutosTotales: number;
-        horasTotales: number;
-        turnos: Shift[];
-        pausasTotales: number;
-        pausasMinutos: number;
-      }
-
-      const diasDetalle: ShiftDayDetail[] = [];
-      let grandTotalMinutos = 0;
-
-      dayMap.forEach((shiftsInDay, opDate) => {
-        let minutosDia = 0;
-        let pausasCount = 0;
-        let pausasMin = 0;
-
-        shiftsInDay.forEach(s => {
-          const shiftPauseMin = s.pausasMinutos ?? (s.pausas || []).reduce((sum, p) => sum + (p.minutos || 0), 0);
-          let shiftMin = s.minutosTrabajados;
-          if (shiftMin === undefined || shiftMin === null) {
-            const start = new Date(s.horaInicio).getTime();
-            const end = s.horaFin ? new Date(s.horaFin).getTime() : Date.now();
-            shiftMin = Math.max(0, Math.round((end - start) / 60000) - shiftPauseMin);
-          }
-          minutosDia += shiftMin;
-          if (s.pausas && s.pausas.length > 0) {
-            pausasCount += s.pausas.length;
-          }
-          pausasMin += shiftPauseMin;
-        });
-
-        grandTotalMinutos += minutosDia;
-        const [y, m, d] = opDate.split('-').map(Number);
-        const dateObj = new Date(y, m - 1, d, 12, 0, 0);
-        const fechaLabel = dateObj.toLocaleDateString('es-ES', { 
-          weekday: 'short', 
-          day: 'numeric', 
-          month: 'short', 
-          year: 'numeric' 
-        });
-
-        diasDetalle.push({
-          fechaOperativa: opDate,
-          fechaLabel,
-          minutosTotales: minutosDia,
-          horasTotales: Math.round((minutosDia / 60) * 10) / 10,
-          turnos: shiftsInDay,
-          pausasTotales: pausasCount,
-          pausasMinutos: pausasMin
-        });
-      });
-
-      // Ordenar días del más reciente al más antiguo
-      diasDetalle.sort((a, b) => b.fechaOperativa.localeCompare(a.fechaOperativa));
-
-      const diasTrabajados = diasDetalle.length;
-      const horasTotales = Math.round((grandTotalMinutos / 60) * 10) / 10;
-      const promedioHorasDia = diasTrabajados > 0 
-        ? Math.round((horasTotales / diasTrabajados) * 10) / 10 
-        : 0;
-
-      const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
-      const modalidad = emp.modalidadPago || (emp.tipoSueldo === 'fijo' ? 'mes' : emp.tipoSueldo) || 'por_horas';
-      const rateLabel = modalidad === 'por_dia' 
-        ? `$${(emp.tarifaDiaria || 50).toFixed(2)} / día` 
-        : modalidad === 'mes'
-          ? `$${(emp.sueldoMensual || 1200).toFixed(2)} / mes`
-          : `$${(emp.tarifaHora || 12).toFixed(2)} / h`;
-
-      return {
-        empleadoId: emp.id,
-        nombre: emp.nombre,
-        puesto: emp.puesto,
-        sucursal: restName,
-        avatarUrl: emp.avatarUrl,
-        modalidadPago: modalidad,
-        tipoSueldo: modalidad,
-        tarifaLabel: rateLabel,
-        tarifaHora: emp.tarifaHora || 0,
-        tarifaDiaria: emp.tarifaDiaria || 0,
-        sueldoMensual: emp.sueldoMensual || 0,
-        diasTrabajados,
-        horasTotales,
-        promedioHorasDia,
-        diasDetalle
-      };
-    }).sort((a, b) => b.diasTrabajados - a.diasTrabajados || b.horasTotales - a.horasTotales);
-  }, [employees, filteredShifts, workingDaysMonthFilter, restaurantMap, selectedBranchId, selectedEmployeeId, selectedRole]);
-
-  // Exportar reporte de días trabajados a CSV
-  const handleExportWorkingDaysCSV = () => {
-    sounds.playKeypadClick();
-    const headers = [
-      'Empleado',
-      'Puesto/Rol',
-      'Sucursal',
-      'Tipo Sueldo',
-      'Tarifa Hora',
-      'Dias Trabajados (Ciclo Operativo)',
-      'Horas Totales',
-      'Promedio Horas/Dia'
-    ];
-    const rows = workingDaysReport.map(r => [
-      `"${r.nombre.replace(/"/g, '""')}"`,
-      `"${r.puesto}"`,
-      `"${r.sucursal}"`,
-      `"${r.tipoSueldo}"`,
-      `"$${r.tarifaHora.toFixed(2)}"`,
-      r.diasTrabajados,
-      r.horasTotales,
-      r.promedioHorasDia
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + 
-      [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Reporte_Dias_Trabajados_${dateFilter.label.replace(/[^a-zA-Z0-9]/g, '_')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Agrupación y cálculo de planilla por empleado
-  const payrollRows: PayrollEmployeeRow[] = useMemo(() => {
-    // 1. Filtrar empleados aplicables
+  // PLANILLA UNIFICADA: Días trabajados por empleado y cálculo mejorado de sueldo (SIN valores por hora)
+  const unifiedPayrollRows: UnifiedEmployeePayrollItem[] = useMemo(() => {
     const applicableEmployees = employees.filter(e => {
       if (selectedBranchId !== 'all' && e.restaurantId !== selectedBranchId) return false;
       if (selectedEmployeeId !== 'all' && e.id !== selectedEmployeeId) return false;
       if (selectedRole !== 'all' && e.puesto !== selectedRole) return false;
+
+      const isMonthly = e.modalidadPago === 'mes' || e.tipoSueldo === 'fijo';
+      if (modalityFilter === 'mes' && !isMonthly) return false;
+      if (modalityFilter === 'por_dia' && isMonthly) return false;
       return true;
     });
 
     return applicableEmployees.map(emp => {
       const empShifts = filteredShifts.filter(s => s.employeeId === emp.id);
+      const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal Principal';
 
-      // Abonos, adelantos o pagos de sueldo ya registrados en Gastos para este empleado en el periodo
+      // Agrupar turnos por Día Operativo (5:00 a.m. - 4:59 a.m.) para contar días reales de trabajo
+      const dayMap = new Map<string, Shift[]>();
+      empShifts.forEach(sh => {
+        const opDate = getOperationalDateString(sh.horaInicio || sh.fecha);
+        if (!dayMap.has(opDate)) {
+          dayMap.set(opDate, []);
+        }
+        dayMap.get(opDate)!.push(sh);
+      });
+
+      const diasDetalle: EmployeeDayWorkedDetail[] = [];
+      let totalVentasEmp = 0;
+
+      dayMap.forEach((shiftsInDay, opDate) => {
+        const [y, m, d] = opDate.split('-').map(Number);
+        const dateObj = new Date(y, m - 1, d, 12, 0, 0);
+        const fechaLabel = dateObj.toLocaleDateString('es-ES', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric'
+        });
+
+        let ventasDia = 0;
+        let pedidosDia = 0;
+        const reportes: string[] = [];
+
+        shiftsInDay.forEach(s => {
+          ventasDia += Number(s.ventasGeneradas || 0);
+          pedidosDia += Number(s.pedidosTomados || 0);
+          if (s.reporteLabores && s.reporteLabores.trim()) {
+            reportes.push(s.reporteLabores.trim());
+          }
+        });
+
+        totalVentasEmp += ventasDia;
+        const pagadoDia = shiftsInDay.every(s => Boolean(s.pagado || s.sueldoPagado));
+
+        diasDetalle.push({
+          fechaOperativa: opDate,
+          fechaLabel,
+          turnos: shiftsInDay,
+          ventasDia: Math.round(ventasDia * 100) / 100,
+          pedidosDia,
+          pagadoDia,
+          reportes
+        });
+      });
+
+      diasDetalle.sort((a, b) => b.fechaOperativa.localeCompare(a.fechaOperativa));
+
+      // Gastos / Abonos de sueldo registrados en el periodo para este empleado
       const expForEmp = salaryExpenses.filter(e => {
         if (e.employeeId !== emp.id) return false;
-        const expDate = (e.fecha || '').split('T')[0];
+        const expDate = getOperationalDateString(e.fecha || e.creadoEn);
         return expDate >= dateFilter.start && expDate <= dateFilter.end;
       });
 
-      const totalAbonado = expForEmp.reduce((sum, e) => sum + (e.monto || 0), 0);
-      const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
-      const modalidad = emp.modalidadPago || (emp.tipoSueldo === 'fijo' ? 'mes' : emp.tipoSueldo) || 'por_horas';
+      const totalAbonado = Math.round(expForEmp.reduce((sum, e) => sum + (Number(e.monto) || 0), 0) * 100) / 100;
 
-      let horasNormales = 0;
-      let horasExtra = 0;
-      let totalNormal = 0;
-      let totalExtra = 0;
+      // Determinar modalidad sin valores por hora: 'mes' (Sueldo Mensual) o 'por_dia' (Sueldo por Día)
+      const isMonthlyFixed = emp.modalidadPago === 'mes' || emp.tipoSueldo === 'fijo';
+      const modalidadPago: 'por_dia' | 'mes' = isMonthlyFixed ? 'mes' : 'por_dia';
+
+      // Calcular Valor Diario y Sueldo Base limpios
+      const sueldoMensual = (emp.sueldoMensual && emp.sueldoMensual > 0)
+        ? emp.sueldoMensual
+        : (emp.tarifaDiaria && emp.tarifaDiaria > 0)
+          ? Math.round(emp.tarifaDiaria * 30 * 100) / 100
+          : (emp.tarifaHora && emp.tarifaHora > 0)
+            ? Math.round(emp.tarifaHora * 8 * 30 * 100) / 100
+            : 1200;
+
+      const valorDiario = isMonthlyFixed
+        ? Math.round((sueldoMensual / 30) * 100) / 100
+        : (emp.tarifaDiaria && emp.tarifaDiaria > 0)
+          ? emp.tarifaDiaria
+          : (emp.tarifaHora && emp.tarifaHora > 0)
+            ? Math.round(emp.tarifaHora * 8 * 100) / 100
+            : 50;
+
+      const sueldoBase = isMonthlyFixed ? sueldoMensual : valorDiario;
+      const modalidadLabel = isMonthlyFixed
+        ? `Mensual ($${sueldoMensual.toFixed(2)}/mes)`
+        : `Por Día ($${valorDiario.toFixed(2)}/día)`;
+
+      // Días trabajados efectivos
+      const recordedDaysFromExpenses = expForEmp.reduce((sum, e) => sum + (Number(e.diasTrabajados) || 0), 0);
+      const diasTrabajados = diasDetalle.length > 0 ? diasDetalle.length : recordedDaysFromExpenses;
+
+      // Cálculo de Sueldo Correspondiente según modalidad y días trabajados
       let sueldoCalculado = 0;
-      let turnosCount = empShifts.length;
+      const isPaidFixedMonth = isMonthlyFixed && (emp.mesesPagados || []).includes(selectedMonthKey);
 
-      if (turnosCount > 0) {
-        if (modalidad === 'por_dia') {
-          const uniqueDays = new Set(empShifts.map(s => s.fecha || (s.horaInicio || '').split('T')[0])).size;
-          const rate = emp.tarifaDiaria || 50;
-          sueldoCalculado = Math.round((uniqueDays || turnosCount) * rate * 100) / 100;
-          empShifts.forEach(shift => {
-            const h = (shift.minutosTrabajados || 0) / 60;
-            horasNormales += Math.min(8, h);
-            horasExtra += Math.max(0, h - 8);
-          });
-        } else if (modalidad === 'mes' || emp.tipoSueldo === 'fijo') {
-          sueldoCalculado = emp.sueldoMensual || 1200;
-          empShifts.forEach(shift => {
-            const h = (shift.minutosTrabajados || 0) / 60;
-            horasNormales += Math.min(8, h);
-            horasExtra += Math.max(0, h - 8);
-          });
+      if (isMonthlyFixed) {
+        // En modalidad mensual: si el filtro es mensual o todos, corresponde el sueldo mensual base;
+        // si el filtro es hoy/semana/quincena, muestra el proporcional por días trabajados (o base si no tiene turnos pero es mes)
+        if (dateRangePreset === 'mes' || dateRangePreset === 'todos') {
+          sueldoCalculado = sueldoMensual;
         } else {
-          const rate = emp.tarifaHora || 12;
-          empShifts.forEach(shift => {
-            const h = (shift.minutosTrabajados || 0) / 60;
-            const norm = Math.min(8, h);
-            const ext = Math.max(0, h - 8);
-            horasNormales += norm;
-            horasExtra += ext;
-          });
-          totalNormal = Math.round(horasNormales * rate * 100) / 100;
-          totalExtra = Math.round(horasExtra * rate * overtimeMultiplier * 100) / 100;
-          sueldoCalculado = Math.round((totalNormal + totalExtra) * 100) / 100;
+          sueldoCalculado = diasTrabajados > 0
+            ? Math.round(diasTrabajados * valorDiario * 100) / 100
+            : sueldoMensual;
         }
-      } else if (emp.tipoSueldo === 'fijo' || modalidad === 'mes') {
-        sueldoCalculado = emp.sueldoMensual || 0;
-      } else if (expForEmp.length > 0) {
-        horasNormales = expForEmp.reduce((sum, e) => sum + (e.horasTrabajadas || 0), 0);
-        horasExtra = expForEmp.reduce((sum, e) => sum + (e.horasExtra || 0), 0);
-        sueldoCalculado = totalAbonado;
-        turnosCount = expForEmp.length;
+      } else {
+        // En modalidad por día: Días Trabajados × Valor Diario
+        if (diasTrabajados > 0) {
+          sueldoCalculado = Math.round(diasTrabajados * valorDiario * 100) / 100;
+        } else if (totalAbonado > 0) {
+          sueldoCalculado = totalAbonado;
+        }
       }
 
-      // El monto a pagar/liquidar es el sueldo registrado menos los abonos previos realizados en Gastos
-      const totalPagar = Math.max(0, Math.round((sueldoCalculado - totalAbonado) * 100) / 100);
+      // Si todos los turnos del empleado en el periodo ya están marcados como pagados en shifts
+      const paidShiftsAmount = empShifts
+        .filter(s => s.pagado || s.sueldoPagado)
+        .reduce((sum, s) => sum + (Number(s.montoPagadoSueldo ?? s.sueldoTotal) || 0), 0);
 
-      let estadoPago = 'Sin turnos';
-      if (sueldoCalculado > 0 || turnosCount > 0) {
-        if (totalAbonado >= sueldoCalculado && sueldoCalculado > 0) {
+      const effectiveAbonado = Math.max(totalAbonado, Math.round(paidShiftsAmount * 100) / 100);
+      const totalPagar = isPaidFixedMonth && (dateRangePreset === 'mes')
+        ? 0
+        : Math.max(0, Math.round((sueldoCalculado - effectiveAbonado) * 100) / 100);
+
+      let estadoPago = 'Sin actividad';
+      if (isPaidFixedMonth && dateRangePreset === 'mes') {
+        estadoPago = 'Pagado';
+      } else if (sueldoCalculado > 0 || diasTrabajados > 0) {
+        if (totalPagar <= 0 && (effectiveAbonado > 0 || isPaidFixedMonth)) {
           estadoPago = 'Pagado';
-        } else if (totalAbonado > 0 && totalPagar > 0) {
+        } else if (effectiveAbonado > 0 && totalPagar > 0) {
           estadoPago = 'Abonado';
         } else {
           estadoPago = 'Pendiente';
         }
-      } else if (totalAbonado > 0) {
+      } else if (effectiveAbonado > 0) {
         estadoPago = 'Pagado';
       }
 
@@ -475,69 +371,133 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         nombre: emp.nombre,
         puesto: emp.puesto,
         sucursal: restName,
-        tarifaHora: emp.tarifaHora || 0,
-        horasNormales: Math.round(horasNormales * 10) / 10,
-        horasExtra: Math.round(horasExtra * 10) / 10,
-        horasTotales: Math.round((horasNormales + horasExtra) * 10) / 10,
-        totalNormal,
-        totalExtra,
+        avatarUrl: emp.avatarUrl,
+        modalidadPago,
+        modalidadLabel,
+        isMonthlyFixed,
+        sueldoBase,
+        sueldoMensual,
+        valorDiario,
+        diasTrabajados,
         sueldoCalculado,
-        totalAbonado,
+        totalAbonado: effectiveAbonado,
         totalPagar,
-        turnosContados: turnosCount,
-        estadoPago
+        turnosContados: empShifts.length,
+        ventasGeneradas: Math.round(totalVentasEmp * 100) / 100,
+        estadoPago,
+        diasDetalle,
+        isPaidFixedMonth,
+        employeeObj: emp
       };
-    });
-  }, [salaryExpenses, filteredShifts, employees, restaurantMap, selectedEmployeeId, selectedBranchId, selectedRole, dateFilter, overtimeMultiplier]);
+    }).sort((a, b) => b.diasTrabajados - a.diasTrabajados || b.sueldoCalculado - a.sueldoCalculado);
+  }, [
+    employees,
+    filteredShifts,
+    salaryExpenses,
+    restaurantMap,
+    selectedBranchId,
+    selectedEmployeeId,
+    selectedRole,
+    modalityFilter,
+    dateFilter,
+    dateRangePreset,
+    selectedMonthKey
+  ]);
 
-  // Datos para la gráfica de barras: Horas por día de los turnos filtrados
-  const chartData = useMemo(() => {
-    const dayMap: Record<string, { fecha: string; horasNormales: number; horasExtra: number }> = {};
+  // Totales globales de la planilla
+  const kpiTotals = useMemo(() => {
+    const totalDiasHombre = unifiedPayrollRows.reduce((s, r) => s + r.diasTrabajados, 0);
+    const empleadosActivos = unifiedPayrollRows.filter(r => r.diasTrabajados > 0 || r.sueldoCalculado > 0).length;
+    const totalSueldoGenerado = unifiedPayrollRows.reduce((s, r) => s + r.sueldoCalculado, 0);
+    const totalAbonado = unifiedPayrollRows.reduce((s, r) => s + r.totalAbonado, 0);
+    const totalPendiente = unifiedPayrollRows.reduce((s, r) => s + r.totalPagar, 0);
+    return {
+      totalDiasHombre,
+      empleadosActivos,
+      totalSueldoGenerado: Math.round(totalSueldoGenerado * 100) / 100,
+      totalAbonado: Math.round(totalAbonado * 100) / 100,
+      totalPendiente: Math.round(totalPendiente * 100) / 100
+    };
+  }, [unifiedPayrollRows]);
 
-    filteredShifts.forEach(shift => {
-      const f = shift.fecha || (shift.horaInicio || '').split('T')[0];
-      if (!dayMap[f]) {
-        dayMap[f] = { fecha: f, horasNormales: 0, horasExtra: 0 };
-      }
-      const h = (shift.minutosTrabajados || 0) / 60;
-      const norm = Math.min(8, h);
-      const ext = Math.max(0, h - 8);
-      dayMap[f].horasNormales += Math.round(norm * 10) / 10;
-      dayMap[f].horasExtra += Math.round(ext * 10) / 10;
-    });
+  // Datos para gráfico comparativo de Días Trabajados y Sueldo por Empleado
+  const employeeChartData = useMemo(() => {
+    return unifiedPayrollRows
+      .filter(r => r.diasTrabajados > 0 || r.sueldoCalculado > 0)
+      .slice(0, 10)
+      .map(r => ({
+        nombre: r.nombre.length > 14 ? r.nombre.slice(0, 12) + '…' : r.nombre,
+        fullName: r.nombre,
+        diasTrabajados: r.diasTrabajados,
+        sueldo: r.sueldoCalculado,
+        pagado: r.totalAbonado,
+        pendiente: r.totalPagar
+      }));
+  }, [unifiedPayrollRows]);
 
-    return Object.values(dayMap).sort((a, b) => a.fecha.localeCompare(b.fecha));
-  }, [filteredShifts]);
-
-  // Totales consolidados del periodo
-  const grandTotalHours = useMemo(() => payrollRows.reduce((s, r) => s + r.horasTotales, 0), [payrollRows]);
-  const grandTotalOvertime = useMemo(() => payrollRows.reduce((s, r) => s + r.horasExtra, 0), [payrollRows]);
-  const grandTotalCalculated = useMemo(() => payrollRows.reduce((s, r) => s + r.sueldoCalculado, 0), [payrollRows]);
-  const grandTotalAbonado = useMemo(() => payrollRows.reduce((s, r) => s + r.totalAbonado, 0), [payrollRows]);
-  const grandTotalPending = useMemo(() => payrollRows.reduce((s, r) => s + r.totalPagar, 0), [payrollRows]);
-
-  // Exportar a Excel (SheetJS)
+  // Exportar a Excel
   const handleExportExcel = () => {
     sounds.playCashRegister();
-    const branchName = selectedBranchId === 'all' 
-      ? 'Todas las sucursales' 
+    const branchName = selectedBranchId === 'all'
+      ? 'Todas las sucursales'
       : (restaurantMap.get(selectedBranchId) || 'Sucursal');
 
     exportPayrollToExcel({
       businessName,
       periodLabel: dateFilter.label,
       selectedBranchName: branchName,
-      rows: payrollRows
+      rows: unifiedPayrollRows
     });
   };
 
-  // Abrir modal de generación de gastos de sueldo
-  const handleOpenSalaryModal = () => {
+  // Exportar a CSV
+  const handleExportCSV = () => {
     sounds.playKeypadClick();
-    // Pre-seleccionar todos los empleados que tengan turnos pendientes
+    const headers = [
+      'Empleado',
+      'Puesto',
+      'Sucursal',
+      'Modalidad',
+      'Sueldo Base ($)',
+      'Valor Diario ($)',
+      'Dias Trabajados',
+      'Sueldo Correspondiente ($)',
+      'Abonos Registrados ($)',
+      'Saldo Neto a Pagar ($)',
+      'Estado'
+    ];
+    const rows = unifiedPayrollRows.map(r => [
+      `"${r.nombre.replace(/"/g, '""')}"`,
+      `"${r.puesto}"`,
+      `"${r.sucursal}"`,
+      `"${r.modalidadLabel}"`,
+      r.sueldoBase.toFixed(2),
+      r.valorDiario.toFixed(2),
+      r.diasTrabajados,
+      r.sueldoCalculado.toFixed(2),
+      r.totalAbonado.toFixed(2),
+      r.totalPagar.toFixed(2),
+      `"${r.estadoPago}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' +
+      [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Planilla_Dias_y_Sueldos_${dateFilter.label.replace(/[^a-zA-Z0-9]/g, '_')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Abrir modal de pago masivo
+  const handleOpenBatchSalaryModal = () => {
+    sounds.playKeypadClick();
     const initialSelection: Record<string, boolean> = {};
-    payrollRows.forEach(row => {
-      if (row.estadoPago !== 'Pagado') {
+    unifiedPayrollRows.forEach(row => {
+      if (row.totalPagar > 0 && row.estadoPago !== 'Pagado') {
         initialSelection[row.empleadoId] = true;
       }
     });
@@ -545,37 +505,35 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
     setShowPayrollModal(true);
   };
 
-  // Confirmar y generar gastos de sueldos
+  // Confirmar liquidación masiva de sueldos
   const handleConfirmSalaryBatch = async () => {
     setIsProcessingSalary(true);
     sounds.playCashRegister();
 
     try {
-      // Filtrar turnos no pagados de los empleados seleccionados
       const pendingShiftsToPay = filteredShifts.filter(s => {
-        if (s.pagado) return false;
+        if (s.pagado || s.sueldoPagado) return false;
         return selectedForPayment[s.employeeId];
       });
 
       const rateMap: Record<string, number> = {};
-      const empDataMap: Record<string, { modalidad?: string; tarifaHora?: number; tarifaDiaria?: number; sueldoMensual?: number }> = {};
-      
-      employees.forEach(e => {
-        rateMap[e.id] = e.tarifaHora || 12;
-        empDataMap[e.id] = {
-          modalidad: e.modalidadPago || (e.tipoSueldo === 'fijo' ? 'mes' : e.tipoSueldo) || 'por_horas',
-          tarifaHora: e.tarifaHora || 12,
-          tarifaDiaria: e.tarifaDiaria || 50,
-          sueldoMensual: e.sueldoMensual || 1200
+      const empDataMap: Record<string, { modalidad?: string; tarifaDiaria?: number; sueldoMensual?: number }> = {};
+
+      unifiedPayrollRows.forEach(r => {
+        rateMap[r.empleadoId] = r.valorDiario;
+        empDataMap[r.empleadoId] = {
+          modalidad: r.modalidadPago,
+          tarifaDiaria: r.valorDiario,
+          sueldoMensual: r.sueldoMensual
         };
       });
 
-      const targetRestId = selectedBranchId === 'all' 
-        ? (restaurants[0]?.id || 'central') 
+      const targetRestId = selectedBranchId === 'all'
+        ? (restaurants[0]?.id || 'central')
         : selectedBranchId;
 
       const abonosMap: Record<string, number> = {};
-      payrollRows.forEach(r => {
+      unifiedPayrollRows.forEach(r => {
         abonosMap[r.empleadoId] = r.totalAbonado;
       });
 
@@ -587,930 +545,718 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
           rateMap,
           dateFilter.label,
           currentUserName,
-          overtimeMultiplier,
+          1,
           empDataMap,
           abonosMap
         );
-        setSalarySuccessToast(`¡Gastos de sueldo generados exitosamente! Se procesaron ${pendingShiftsToPay.length} turnos.`);
-      } else {
-        // Generar gastos directos para los empleados seleccionados
-        const selectedRows = payrollRows.filter(r => selectedForPayment[r.empleadoId] && r.totalPagar > 0);
-        let count = 0;
-        const todayStr = new Date().toISOString().split('T')[0];
-        
-        for (const row of selectedRows) {
-          const emp = employees.find(e => e.id === row.empleadoId);
+      }
+
+      // También liquidar empleados seleccionados que no tenían turnos pendientes pero sí saldo a pagar (ej. sueldo mensual fijo)
+      const employeesWithShiftsHandled = new Set(pendingShiftsToPay.map(s => s.employeeId));
+      const remainingSelectedRows = unifiedPayrollRows.filter(
+        r => selectedForPayment[r.empleadoId] && r.totalPagar > 0 && !employeesWithShiftsHandled.has(r.empleadoId)
+      );
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      for (const row of remainingSelectedRows) {
+        if (row.isMonthlyFixed && dateRangePreset === 'mes') {
+          await payFixedSalaryExpense({
+            employee: row.employeeObj,
+            monthKey: selectedMonthKey,
+            monthLabel: selectedMonthLabel,
+            amount: row.sueldoCalculado,
+            abonoPrevio: row.totalAbonado,
+            userDisplayName: currentUserName,
+            paymentMethod: 'transferencia',
+            notes: `Liquidación de planilla mensual (${selectedMonthLabel} • ${row.diasTrabajados} días trabajados)`
+          });
+        } else {
           await createExpense({
             businessId,
-            restaurantId: emp?.restaurantId || targetRestId,
+            restaurantId: row.employeeObj.restaurantId || targetRestId,
             tipo: 'sueldo',
             monto: row.totalPagar,
-            descripcion: `Liquidación de sueldo ${dateFilter.label} - ${row.nombre} (${row.horasTotales} hrs)`,
+            descripcion: `Liquidación de sueldo ${dateFilter.label} - ${row.nombre} (${row.diasTrabajados} días trabajados • ${row.modalidadLabel})`,
             employeeId: row.empleadoId,
             employeeName: row.nombre,
-            horasTrabajadas: row.horasTotales,
-            horasExtra: row.horasExtra,
+            diasTrabajados: row.diasTrabajados,
+            modalidadPago: row.modalidadPago,
+            tarifaDiaria: row.valorDiario,
             fecha: todayStr,
             appId: 'gastro_smart',
             creadoEn: new Date().toISOString()
           });
-          count++;
         }
-        setSalarySuccessToast(`¡Gastos de sueldo registrados exitosamente en P&L para ${count || selectedRows.length} empleados!`);
       }
 
+      setSalarySuccessToast(`¡Planilla liquidada exitosamente! Los pagos de sueldo se registraron en Gastos Operativos (P&L).`);
       setShowPayrollModal(false);
       setTimeout(() => setSalarySuccessToast(null), 5000);
     } catch (err: any) {
-      console.error('Error procesando nóminas:', err);
-      alert('Error al generar gastos de sueldo: ' + (err.message || 'Error desconocido'));
+      console.error('Error procesando planilla:', err);
+      alert('Error al liquidar planilla: ' + (err.message || 'Error desconocido'));
     } finally {
       setIsProcessingSalary(false);
     }
   };
 
+  // Liquidar individualmente a un empleado desde su fila
+  const handleConfirmSingleEmployeePay = async () => {
+    if (!payingSingleRow) return;
+    setIsProcessingSinglePay(true);
+    setSinglePayError(null);
+
+    try {
+      const targetRestId = payingSingleRow.employeeObj.restaurantId || restaurants[0]?.id || 'central';
+
+      if (payingSingleRow.isMonthlyFixed && dateRangePreset === 'mes') {
+        const res = await payFixedSalaryExpense({
+          employee: payingSingleRow.employeeObj,
+          monthKey: selectedMonthKey,
+          monthLabel: selectedMonthLabel,
+          amount: payingSingleRow.sueldoCalculado,
+          abonoPrevio: payingSingleRow.totalAbonado,
+          userDisplayName: currentUserName,
+          paymentMethod: singlePayMethod,
+          notes: singlePayNotes.trim() || undefined
+        });
+
+        if (!res.success) {
+          setSinglePayError(res.error || 'No se pudo procesar el pago');
+          setIsProcessingSinglePay(false);
+          return;
+        }
+      } else {
+        // Liquidar sus turnos pendientes del periodo por días trabajados
+        const empPendingShifts = filteredShifts.filter(
+          s => s.employeeId === payingSingleRow.empleadoId && !s.pagado && !s.sueldoPagado
+        );
+
+        if (empPendingShifts.length > 0) {
+          await paySalaryBatch(
+            businessId,
+            targetRestId,
+            empPendingShifts,
+            { [payingSingleRow.empleadoId]: payingSingleRow.valorDiario },
+            dateFilter.label,
+            currentUserName,
+            1,
+            {
+              [payingSingleRow.empleadoId]: {
+                modalidad: payingSingleRow.modalidadPago,
+                tarifaDiaria: payingSingleRow.valorDiario,
+                sueldoMensual: payingSingleRow.sueldoMensual
+              }
+            },
+            { [payingSingleRow.empleadoId]: payingSingleRow.totalAbonado }
+          );
+        } else if (payingSingleRow.totalPagar > 0) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          await createExpense({
+            businessId,
+            restaurantId: targetRestId,
+            tipo: 'sueldo',
+            monto: payingSingleRow.totalPagar,
+            descripcion: `Liquidación de sueldo (${dateFilter.label}) - ${payingSingleRow.nombre} (${payingSingleRow.diasTrabajados} días trabajados a $${payingSingleRow.valorDiario.toFixed(2)}/día)`,
+            employeeId: payingSingleRow.empleadoId,
+            employeeName: payingSingleRow.nombre,
+            diasTrabajados: payingSingleRow.diasTrabajados,
+            modalidadPago: payingSingleRow.modalidadPago,
+            tarifaDiaria: payingSingleRow.valorDiario,
+            metodoPago: singlePayMethod,
+            notas: singlePayNotes.trim() || undefined,
+            fecha: todayStr,
+            appId: 'gastro_smart',
+            creadoEn: new Date().toISOString()
+          });
+        }
+      }
+
+      sounds.playCashRegister();
+      setSalarySuccessToast(`¡Sueldo de ${payingSingleRow.nombre} ($${payingSingleRow.totalPagar.toFixed(2)}) liquidado y registrado en Gastos!`);
+      setPayingSingleRow(null);
+      setSinglePayNotes('');
+      setTimeout(() => setSalarySuccessToast(null), 5000);
+    } catch (err: any) {
+      setSinglePayError(err.message || 'Error al registrar el pago');
+    } finally {
+      setIsProcessingSinglePay(false);
+    }
+  };
+
+  // Liquidar un día/turno individual desde el desplegable
+  const handlePaySingleShift = async (shift: Shift, emp: Employee) => {
+    setPayingShiftId(shift.id);
+    try {
+      const res = await payShiftSalary(shift, emp);
+      sounds.playCashRegister();
+      setSalarySuccessToast(`Jornada pagada a ${emp.nombre}: $${res.amount.toFixed(2)} registrados en Gastos.`);
+      setTimeout(() => setSalarySuccessToast(null), 4500);
+    } catch (err: any) {
+      alert(err.message || 'No se pudo pagar la jornada');
+    } finally {
+      setPayingShiftId(null);
+    }
+  };
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-in fade-in duration-200">
       
-      {/* Toast Notification */}
+      {/* Toast de Confirmación */}
       {salarySuccessToast && (
-        <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl text-emerald-800 text-xs font-bold flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-          <span>{salarySuccessToast}</span>
+        <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl text-emerald-900 text-xs font-bold flex items-center justify-between shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <span>{salarySuccessToast}</span>
+          </div>
+          <button onClick={() => setSalarySuccessToast(null)} className="text-emerald-700 hover:text-emerald-950 font-black">✕</button>
         </div>
       )}
 
-      {/* Tab Navigation: Horas/Turnos vs Sueldo Fijo vs Reporte Días Trabajados */}
-      <div className="flex items-center gap-2 border-b border-neutral-200 pb-2 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => { setActiveTab('turnos'); sounds.playKeypadClick(); }}
-          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeTab === 'turnos'
-              ? 'bg-purple-600 text-white shadow-xs'
-              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          <span>Personal por Horas / Jornadas ({filteredShifts.length} turnos)</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => { setActiveTab('fijos'); sounds.playKeypadClick(); }}
-          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeTab === 'fijos'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-          }`}
-        >
-          <Wallet className="w-4 h-4" />
-          <span>Personal con Sueldo Fijo Mensual ({fixedEmployees.length})</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => { setActiveTab('dias_trabajados'); sounds.playKeypadClick(); }}
-          className={`px-4 py-2 rounded-2xl text-xs font-black transition flex items-center gap-2 cursor-pointer shrink-0 ${
-            activeTab === 'dias_trabajados'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-          }`}
-        >
-          <CalendarCheck className="w-4 h-4" />
-          <span>Reporte: Días Trabajados (Ciclo Operativo)</span>
-        </button>
-      </div>
-
-      {/* TAB 1: Reporte de Días Trabajados (Ciclo Operativo 5:00 a.m. - 4:59 a.m.) */}
-      {activeTab === 'dias_trabajados' && (
-        <div className="space-y-6">
-          {/* Header & Controls */}
-          <div className="bg-white p-6 rounded-3xl border border-neutral-200 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 text-emerald-700 text-xs font-bold uppercase tracking-wider mb-1">
-                  <CalendarCheck className="w-4 h-4" />
-                  <span>Reporte Consolidado • Solo Lectura</span>
-                </div>
-                <h2 className="text-xl sm:text-2xl font-black text-neutral-900">
-                  Horas Trabajadas Resumidas en Días Laborados
-                </h2>
-                <p className="text-xs text-neutral-500 mt-0.5">
-                  Agrupación de horas y turnos de cada empleado bajo el <strong>Día Operativo (5:00 a.m. a 4:59 a.m.)</strong>.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={handleExportWorkingDaysCSV}
-                  className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-black transition flex items-center gap-2 border border-emerald-200 cursor-pointer shadow-xs"
-                >
-                  <Download className="w-4 h-4 text-emerald-600" />
-                  <span>Exportar CSV</span>
-                </button>
-              </div>
+      {/* 1. CABECERA Y CONTROLES UNIFICADOS DE ASISTENCIA & PLANILLA */}
+      <div className="bg-white p-5 sm:p-6 rounded-3xl border border-neutral-200 shadow-xs space-y-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black shrink-0">
+              <CalendarCheck className="w-6 h-6" />
             </div>
-
-            {/* Banner Explicativo Día Operativo */}
-            <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-2xl flex items-start gap-3 text-xs text-emerald-900">
-              <span className="text-base">ℹ️</span>
-              <div>
-                <strong className="font-bold">Regla del Ciclo Operativo (5:00 a.m. - 4:59 a.m.):</strong>
-                <p className="text-emerald-800 text-[11px] mt-0.5">
-                  Todo turno iniciado entre las 5:00 a.m. de hoy y las 4:59 a.m. de la mañana siguiente se contabiliza dentro del mismo día operativo. Los turnos nocturnos o de madrugada no se fragmentan artificialmente, garantizando un recuento exacto de días trabajados por persona.
-                </p>
-              </div>
-            </div>
-
-            {/* Filtros */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 pt-2 border-t border-neutral-100">
-              {/* Preset de Rango */}
-              <div>
-                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
-                  Rango de Fecha:
-                </label>
-                <select
-                  value={dateRangePreset}
-                  onChange={(e) => setDateRangePreset(e.target.value as any)}
-                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
-                >
-                  <option value="hoy">Hoy (Día Operativo)</option>
-                  <option value="semana">Esta Semana</option>
-                  <option value="quincena">Última Quincena (15 días)</option>
-                  <option value="mes">Este Mes Operativo</option>
-                  <option value="todos">Todo el Historial</option>
-                </select>
-              </div>
-
-              {/* Mes Operativo */}
-              <div>
-                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
-                  Mes Específico:
-                </label>
-                <select
-                  value={workingDaysMonthFilter}
-                  onChange={(e) => setWorkingDaysMonthFilter(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
-                >
-                  <option value="all">Todos los Meses</option>
-                  {availableMonths.map(m => (
-                    <option key={m.key} value={m.key}>{m.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Sucursal */}
-              <div>
-                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
-                  Sucursal:
-                </label>
-                <select
-                  value={selectedBranchId}
-                  onChange={(e) => setSelectedBranchId(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
-                >
-                  <option value="all">Todas las Sucursales</option>
-                  {restaurants.map(r => (
-                    <option key={r.id} value={r.id}>{r.nombre}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Rol / Puesto */}
-              <div>
-                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
-                  Puesto / Rol:
-                </label>
-                <select
-                  value={selectedRole}
-                  onChange={(e) => setSelectedRole(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
-                >
-                  <option value="all">Todos los Puestos</option>
-                  <option value="administrador">Administrador</option>
-                  <option value="cajero">Cajero</option>
-                  <option value="mesero">Mesero</option>
-                  <option value="cocinero">Cocinero</option>
-                  <option value="repartidor">Repartidor</option>
-                </select>
-              </div>
-
-              {/* Empleado Específico */}
-              <div>
-                <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
-                  Empleado:
-                </label>
-                <select
-                  value={selectedEmployeeId}
-                  onChange={(e) => setSelectedEmployeeId(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-white"
-                >
-                  <option value="all">Todos los Empleados ({employees.length})</option>
-                  {employees.map(e => (
-                    <option key={e.id} value={e.id}>{e.nombre} ({e.puesto})</option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <h2 className="text-lg sm:text-xl font-black text-neutral-900 tracking-tight">
+                Control de Asistencia, Días Trabajados y Planilla de Sueldos
+              </h2>
+              <p className="text-xs text-neutral-500 mt-0.5">
+                Cálculo automático por <strong>días trabajados</strong> (Ciclo Operativo 5:00 a.m. – 4:59 a.m.) y <strong>sueldo diario o mensual</strong>, con descuento de abonos y liquidación directa a Gastos (P&amp;L).
+              </p>
             </div>
           </div>
 
-          {/* KPI Cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                  <CalendarCheck className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Días-Hombre Totales</span>
-                  <div className="text-2xl font-black text-neutral-900">
-                    {workingDaysReport.reduce((acc, r) => acc + r.diasTrabajados, 0)} <span className="text-xs font-bold text-neutral-400">días</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold">
-                  <Clock className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Horas Acumuladas</span>
-                  <div className="text-2xl font-black text-blue-700">
-                    {workingDaysReport.reduce((acc, r) => acc + r.horasTotales, 0).toFixed(1)} <span className="text-xs font-bold text-blue-400">hrs</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
-                  <Users className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Personal con Asistencia</span>
-                  <div className="text-2xl font-black text-neutral-900">
-                    {workingDaysReport.filter(r => r.diasTrabajados > 0).length} <span className="text-xs font-bold text-neutral-400">/ {workingDaysReport.length}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
-                  <Layers className="w-5 h-5" />
-                </div>
-                <div>
-                  <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">Promedio Diario</span>
-                  <div className="text-2xl font-black text-amber-800">
-                    {(() => {
-                      const totalDias = workingDaysReport.reduce((acc, r) => acc + r.diasTrabajados, 0);
-                      const totalHoras = workingDaysReport.reduce((acc, r) => acc + r.horasTotales, 0);
-                      return totalDias > 0 ? (totalHoras / totalDias).toFixed(1) : '0.0';
-                    })()} <span className="text-xs font-bold text-amber-500">hrs/día</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Tabla de Empleados y Días Trabajados */}
-          <div className="bg-white rounded-3xl border border-neutral-200 overflow-hidden shadow-sm">
-            <div className="p-4 sm:p-5 border-b border-neutral-100 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-black text-neutral-900 uppercase tracking-wider">
-                  Resumen de Días Trabajados por Empleado
-                </h3>
-                <p className="text-xs text-neutral-400">
-                  Desglose de días laborados, horas netas trabajadas y detalle de cada jornada diaria.
-                </p>
-              </div>
-              <span className="text-xs font-bold text-neutral-500 bg-neutral-100 px-3 py-1 rounded-full">
-                {workingDaysReport.length} empleados
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
-                <thead>
-                  <tr className="bg-neutral-50 text-neutral-500 border-b border-neutral-200 font-bold">
-                    <th className="p-3.5">Empleado</th>
-                    <th className="p-3.5">Puesto</th>
-                    <th className="p-3.5">Sucursal</th>
-                    <th className="p-3.5">Tipo Sueldo</th>
-                    <th className="p-3.5 text-center">Días Trabajados</th>
-                    <th className="p-3.5 text-right">Horas Totales</th>
-                    <th className="p-3.5 text-right">Promedio / Día</th>
-                    <th className="p-3.5 text-center">Detalle</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-100">
-                  {workingDaysReport.map(row => {
-                    const isExpanded = expandedEmployeeId === row.empleadoId;
-
-                    return (
-                      <React.Fragment key={row.empleadoId}>
-                        <tr className={`hover:bg-neutral-50/60 transition ${isExpanded ? 'bg-emerald-50/20' : ''}`}>
-                          <td className="p-3.5 font-bold text-neutral-900">
-                            <div className="flex items-center gap-2.5">
-                              {row.avatarUrl ? (
-                                <img src={row.avatarUrl} alt={row.nombre} className="w-8 h-8 rounded-full object-cover border border-neutral-200" />
-                              ) : (
-                                <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">
-                                  {row.nombre.charAt(0)}
-                                </div>
-                              )}
-                              <div>
-                                <span className="block text-neutral-900 font-bold">{row.nombre}</span>
-                                <span className="text-[10px] text-neutral-400 font-normal">ID: {row.empleadoId.slice(0, 6)}</span>
-                              </div>
-                            </div>
-                          </td>
-
-                          <td className="p-3.5 uppercase font-medium text-neutral-600">
-                            {row.puesto}
-                          </td>
-
-                          <td className="p-3.5 text-neutral-600 font-medium">
-                            {row.sucursal}
-                          </td>
-
-                          <td className="p-3.5">
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                              row.tipoSueldo === 'fijo' 
-                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' 
-                                : 'bg-purple-50 text-purple-700 border border-purple-200'
-                            }`}>
-                              {row.tipoSueldo === 'fijo' ? 'Fijo Mensual' : `Por Hora ($${row.tarifaHora}/h)`}
-                            </span>
-                          </td>
-
-                          <td className="p-3.5 text-center">
-                            <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-black ${
-                              row.diasTrabajados > 0
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-neutral-100 text-neutral-400'
-                            }`}>
-                              <CalendarCheck className="w-3.5 h-3.5 text-emerald-600" />
-                              {row.diasTrabajados} {row.diasTrabajados === 1 ? 'día' : 'días'}
-                            </span>
-                          </td>
-
-                          <td className="p-3.5 text-right font-mono font-bold text-sm text-neutral-900">
-                            {row.horasTotales.toFixed(1)} hrs
-                          </td>
-
-                          <td className="p-3.5 text-right font-mono font-bold text-neutral-600">
-                            {row.promedioHorasDia.toFixed(1)} hrs/día
-                          </td>
-
-                          <td className="p-3.5 text-center">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setExpandedEmployeeId(isExpanded ? null : row.empleadoId);
-                                sounds.playKeypadClick();
-                              }}
-                              disabled={row.diasTrabajados === 0}
-                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 mx-auto cursor-pointer ${
-                                row.diasTrabajados === 0 
-                                  ? 'opacity-40 cursor-not-allowed bg-neutral-100 text-neutral-400' 
-                                  : isExpanded 
-                                    ? 'bg-emerald-600 text-white shadow-xs' 
-                                    : 'bg-neutral-100 text-neutral-700 hover:bg-neutral-200'
-                              }`}
-                            >
-                              <span>{isExpanded ? 'Ocultar' : 'Ver Días'}</span>
-                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                            </button>
-                          </td>
-                        </tr>
-
-                        {/* Desglose de jornadas diarias por empleado */}
-                        {isExpanded && (
-                          <tr className="bg-emerald-50/15">
-                            <td colSpan={8} className="p-4 sm:p-6 border-b border-neutral-200">
-                              <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <h4 className="text-xs font-black uppercase tracking-wider text-emerald-900 flex items-center gap-2">
-                                    <Calendar className="w-4 h-4 text-emerald-700" />
-                                    Jornadas Diarias de {row.nombre} ({row.diasDetalle.length} días registrados)
-                                  </h4>
-                                  <span className="text-[11px] text-neutral-500 font-medium">
-                                    Ciclo: 5:00 a.m. a 4:59 a.m.
-                                  </span>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                                  {row.diasDetalle.map((dia, idx) => (
-                                    <div key={idx} className="bg-white rounded-2xl border border-emerald-200 p-3.5 space-y-2 shadow-xs">
-                                      <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
-                                        <div className="flex items-center gap-2">
-                                          <div className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 text-[10px] font-black flex items-center justify-center">
-                                            #{idx + 1}
-                                          </div>
-                                          <div>
-                                            <strong className="text-xs font-bold text-neutral-900 capitalize block">
-                                              {dia.fechaLabel}
-                                            </strong>
-                                            <span className="text-[10px] text-neutral-400 font-mono">
-                                              {dia.fechaOperativa}
-                                            </span>
-                                          </div>
-                                        </div>
-                                        <span className="text-xs font-black text-emerald-700 font-mono bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                                          {dia.horasTotales.toFixed(1)} hrs
-                                        </span>
-                                      </div>
-
-                                      {/* Turnos en este día operativo */}
-                                      <div className="space-y-1.5 text-[11px]">
-                                        {dia.turnos.map(t => {
-                                          const hInicio = t.horaInicio ? new Date(t.horaInicio).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '--:--';
-                                          const hFin = t.horaFin ? new Date(t.horaFin).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : 'En curso';
-                                          const pauseMin = t.pausasMinutos ?? (t.pausas || []).reduce((sum, p) => sum + (p.minutos || 0), 0);
-
-                                          return (
-                                            <div key={t.id} className="p-2 bg-neutral-50 rounded-xl flex items-center justify-between border border-neutral-100">
-                                              <div>
-                                                <span className="font-bold text-neutral-800">{hInicio} - {hFin}</span>
-                                                {pauseMin > 0 && (
-                                                  <span className="block text-[10px] text-amber-700 font-medium">
-                                                    Pausas: {pauseMin}m ({t.pausas?.length || 1} pausa)
-                                                  </span>
-                                                )}
-                                              </div>
-                                              <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                                t.pagado 
-                                                  ? 'bg-emerald-100 text-emerald-800' 
-                                                  : 'bg-amber-100 text-amber-800'
-                                              }`}>
-                                                {t.pagado ? 'Pagado' : 'Pendiente'}
-                                              </span>
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-
-                  {workingDaysReport.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="p-8 text-center text-neutral-400 font-medium">
-                        No se encontraron registros de turnos o empleados en el rango y filtros seleccionados.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'fijos' ? (
-        /* Vista de Sueldo Fijo Mensual */
-        <div className="space-y-6">
-          <div className="bg-white p-6 rounded-3xl border border-neutral-200 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 text-indigo-700 text-xs font-bold uppercase tracking-wider mb-1">
-                  <Wallet className="w-4 h-4" />
-                  <span>Liquidación de Sueldos Fijos Mensuales</span>
-                </div>
-                <h2 className="text-xl sm:text-2xl font-black text-neutral-900">
-                  Planilla de Sueldos Fijos
-                </h2>
-                <p className="text-xs text-neutral-500 mt-0.5">
-                  Registra los pagos mensuales de empleados con sueldo fijo. Cada pago genera un gasto contable de tipo &quot;sueldo&quot; y queda registrado para auditoría.
-                </p>
-              </div>
-
-              {/* Selector de Mes */}
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-bold text-neutral-600">Mes a Liquidar:</label>
-                <select
-                  value={fixedSalaryMonthKey}
-                  onChange={(e) => setFixedSalaryMonthKey(e.target.value)}
-                  className="px-3 py-2 rounded-xl border border-indigo-200 bg-indigo-50/50 text-xs font-black text-indigo-950 focus:ring-2 focus:ring-indigo-500"
-                >
-                  {availableMonths.map(m => (
-                    <option key={m.key} value={m.key}>{m.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Cards resumen sueldos fijos */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <span className="text-xs text-neutral-500 font-bold uppercase">Personal con Sueldo Fijo</span>
-              <div className="text-2xl font-black text-neutral-900 mt-1">
-                {fixedEmployees.length} empleados
-              </div>
-              <span className="text-[11px] text-neutral-400 mt-0.5 block">Configurados con tipoSueldo = &quot;fijo&quot;</span>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <span className="text-xs text-neutral-500 font-bold uppercase">Pagos Reales en {selectedMonthLabel}</span>
-              <div className="text-2xl font-black text-indigo-600 mt-1 font-mono">
-                ${salaryExpenses
-                  .filter(exp => 
-                    (exp.fecha || '').startsWith(fixedSalaryMonthKey) && 
-                    fixedEmployees.some(e => e.id === exp.employeeId)
-                  )
-                  .reduce((sum, exp) => sum + (exp.monto || 0), 0).toFixed(2)}
-              </div>
-              <span className="text-[11px] text-neutral-400 mt-0.5 block">Total de gastos registrados en el mes</span>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-              <span className="text-xs text-neutral-500 font-bold uppercase">Estado de Pago del Mes</span>
-              <div className="text-2xl font-black text-emerald-600 mt-1">
-                {fixedEmployees.filter(e => (e.mesesPagados || []).includes(fixedSalaryMonthKey)).length} / {fixedEmployees.length}
-              </div>
-              <span className="text-[11px] text-neutral-400 mt-0.5 block">Pagados en {selectedMonthLabel}</span>
-            </div>
-          </div>
-
-          {/* Tabla de Empleados con Sueldo Fijo */}
-          <div className="bg-white rounded-3xl border border-neutral-200 shadow-xs overflow-hidden">
-            <div className="p-5 border-b border-neutral-100 flex items-center justify-between">
-              <h3 className="font-extrabold text-sm text-neutral-900">
-                Personal con Sueldo Fijo — Periodo: {selectedMonthLabel}
-              </h3>
-              <span className="text-xs text-neutral-500">{fixedEmployees.length} miembros</span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="bg-neutral-50 border-b border-neutral-200 text-neutral-500 font-bold uppercase">
-                    <th className="p-3.5">Empleado</th>
-                    <th className="p-3.5">Puesto</th>
-                    <th className="p-3.5">Sucursal</th>
-                    <th className="p-3.5 text-right">Sueldo Base ($)</th>
-                    <th className="p-3.5 text-right text-emerald-700">Abonos en Gastos ($)</th>
-                    <th className="p-3.5 text-right text-amber-700">Saldo Pendiente ($)</th>
-                    <th className="p-3.5 text-center">Estado {selectedMonthLabel}</th>
-                    <th className="p-3.5">Historial Pagado</th>
-                    <th className="p-3.5 text-right">Acción</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-100">
-                  {fixedEmployees.map(emp => {
-                    const isPaidForSelectedMonth = (emp.mesesPagados || []).includes(fixedSalaryMonthKey);
-                    const restName = restaurantMap.get(emp.restaurantId) || 'Sucursal';
-                    
-                    const actualPaidAmount = salaryExpenses
-                      .filter(e => e.employeeId === emp.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
-                      .reduce((sum, e) => sum + (e.monto || 0), 0);
-                    
-                    const sueldoBase = emp.sueldoMensual || 0;
-                    const saldoPendiente = Math.max(0, Math.round((sueldoBase - actualPaidAmount) * 100) / 100);
-
-                    let estadoPagoFixed = 'Pendiente';
-                    if (isPaidForSelectedMonth || (actualPaidAmount >= sueldoBase && sueldoBase > 0)) {
-                      estadoPagoFixed = 'Pagado';
-                    } else if (actualPaidAmount > 0) {
-                      estadoPagoFixed = 'Abonado';
-                    }
-
-                    return (
-                      <tr key={emp.id} className="hover:bg-neutral-50/50 transition">
-                        <td className="p-3.5 font-bold text-neutral-900">
-                          <div className="flex items-center gap-2">
-                            <div className="w-7 h-7 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs">
-                              {emp.nombre.charAt(0)}
-                            </div>
-                            <div>
-                              <span>{emp.nombre}</span>
-                              <span className="block text-[10px] text-neutral-400 font-normal">ID: {emp.id.slice(0, 6)}</span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="p-3.5 uppercase font-medium text-neutral-600">{emp.puesto}</td>
-                        <td className="p-3.5 text-neutral-500">{restName}</td>
-                        <td className="p-3.5 text-right font-mono font-bold text-sm text-neutral-700">
-                          ${sueldoBase.toFixed(2)}
-                        </td>
-                        <td className="p-3.5 text-right font-mono font-bold text-sm text-emerald-600">
-                          {actualPaidAmount > 0 ? `$${actualPaidAmount.toFixed(2)}` : '-'}
-                        </td>
-                        <td className="p-3.5 text-right font-mono font-black text-sm text-amber-600 bg-amber-50/30">
-                          ${saldoPendiente.toFixed(2)}
-                        </td>
-                        <td className="p-3.5 text-center">
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
-                            estadoPagoFixed === 'Pagado'
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : estadoPagoFixed === 'Abonado'
-                                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                : 'bg-rose-50 text-rose-700 border-rose-200'
-                          }`}>
-                            {estadoPagoFixed === 'Abonado' ? `Abonado ($${actualPaidAmount.toFixed(0)})` : estadoPagoFixed}
-                          </span>
-                        </td>
-                        <td className="p-3.5">
-                          <div className="flex flex-wrap gap-1 max-w-xs">
-                            {(emp.mesesPagados || []).length > 0 ? (
-                              (emp.mesesPagados || []).slice(-3).map((m, mIdx) => (
-                                <span key={`${m}-${mIdx}`} className="px-1.5 py-0.5 rounded-md bg-neutral-100 text-neutral-600 text-[10px] font-mono">
-                                  {m}
-                                </span>
-                              ))
-                            ) : (
-                              <span className="text-neutral-400 text-[10px] italic">Sin pagos previos</span>
-                            )}
-                            {(emp.mesesPagados || []).length > 3 && (
-                              <span className="text-[10px] text-neutral-400">+{((emp.mesesPagados || []).length - 3)} más</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="p-3.5 text-right">
-                          {isPaidForSelectedMonth ? (
-                            <button
-                              disabled
-                              className="px-3 py-1.5 rounded-xl bg-neutral-100 text-neutral-400 text-xs font-bold flex items-center gap-1.5 ml-auto cursor-not-allowed"
-                            >
-                              <Lock className="w-3.5 h-3.5" />
-                              <span>Pagado</span>
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPayingFixedEmployee(emp);
-                                setFixedPayError(null);
-                                sounds.playKeypadClick();
-                              }}
-                              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1.5 ml-auto shadow-xs cursor-pointer"
-                            >
-                              <DollarSign className="w-3.5 h-3.5 text-amber-300" />
-                              <span>Pagar Sueldo</span>
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {fixedEmployees.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="p-8 text-center text-neutral-400 font-medium">
-                        No hay empleados configurados con sueldo fijo en la plantilla. Para configurar un empleado con sueldo fijo, edítalo en la sección de Empleados y asigna tipo de sueldo = &quot;Fijo Mensual&quot;.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* Vista de Asistencia por Horas y Turnos */
-        <>
-      {/* Header & Controls */}
-      <div className="bg-white p-6 rounded-3xl border border-neutral-200 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 text-purple-700 text-xs font-bold uppercase tracking-wider mb-1">
-              <Clock className="w-4 h-4" />
-              <span>Control de Asistencia, Jornadas y Sueldos</span>
-            </div>
-            <h2 className="text-xl sm:text-2xl font-black text-neutral-900">
-              Horas Trabajadas y Planilla de Pago
-            </h2>
-            <p className="text-xs text-neutral-500 mt-0.5">
-              Monitoreo de horas ordinarias, horas extra (1.5x) y liquidación de nóminas directa a gastos operativos.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            {/* Exportar Excel */}
+          {/* Botones de Acción Principal */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
-              onClick={handleExportExcel}
-              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs cursor-pointer"
+              type="button"
+              onClick={handleExportCSV}
+              className="px-3.5 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-800 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
             >
-              <FileSpreadsheet className="w-4 h-4" />
-              <span>Exportar Planilla Excel</span>
+              <Download className="w-3.5 h-3.5 text-neutral-600" />
+              <span>CSV</span>
             </button>
 
-            {/* Generar Gastos de Sueldo */}
             <button
-              onClick={handleOpenSalaryModal}
-              disabled={payrollRows.length === 0}
-              className="px-4 py-2.5 bg-neutral-900 hover:bg-black text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-xs disabled:opacity-40 cursor-pointer"
+              type="button"
+              onClick={handleExportExcel}
+              className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Exportar Excel</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenBatchSalaryModal}
+              disabled={unifiedPayrollRows.length === 0}
+              className="px-4 py-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs disabled:opacity-40 cursor-pointer"
             >
               <DollarSign className="w-4 h-4 text-amber-400" />
-              <span>Generar Gastos de Sueldo</span>
+              <span>Liquidar Planilla ({unifiedPayrollRows.filter(r => r.totalPagar > 0).length})</span>
             </button>
           </div>
         </div>
 
-        {/* Filter Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-3 border-t border-neutral-100">
-          
-          {/* Preset Periodo */}
+        {/* Barra Unificada de Filtros */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 pt-4 border-t border-neutral-100">
+          {/* Periodo */}
           <div>
-            <label className="block text-[11px] font-bold text-neutral-500 uppercase mb-1">Periodo</label>
+            <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+              Periodo de Cálculo
+            </label>
             <select
               value={dateRangePreset}
               onChange={(e) => setDateRangePreset(e.target.value as any)}
-              className="w-full p-2.5 rounded-xl border border-neutral-300 text-xs font-bold bg-neutral-50 focus:ring-2 focus:ring-purple-500"
+              className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-neutral-50 focus:bg-white"
             >
-              <option value="hoy">Hoy</option>
-              <option value="semana">Esta semana</option>
-              <option value="quincena">Última quincena (15d)</option>
-              <option value="mes">Este mes</option>
-              <option value="todos">Todo el historial</option>
+              <option value="hoy">Hoy (Día Operativo)</option>
+              <option value="semana">Esta Semana</option>
+              <option value="quincena">Última Quincena (15 días)</option>
+              <option value="mes">Mes Específico</option>
+              <option value="todos">Todo el Historial</option>
+            </select>
+          </div>
+
+          {/* Mes Operativo (activo cuando se elige 'mes') */}
+          <div>
+            <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+              Mes de Planilla
+            </label>
+            <select
+              value={selectedMonthKey}
+              onChange={(e) => {
+                setSelectedMonthKey(e.target.value);
+                setDateRangePreset('mes');
+              }}
+              className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-neutral-50 focus:bg-white"
+            >
+              {availableMonths.map(m => (
+                <option key={m.key} value={m.key}>{m.label}</option>
+              ))}
             </select>
           </div>
 
           {/* Sucursal */}
           <div>
-            <label className="block text-[11px] font-bold text-neutral-500 uppercase mb-1">Sucursal</label>
+            <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+              Sucursal / Sede
+            </label>
             <select
               value={selectedBranchId}
               onChange={(e) => setSelectedBranchId(e.target.value)}
-              className="w-full p-2.5 rounded-xl border border-neutral-300 text-xs font-bold bg-neutral-50 focus:ring-2 focus:ring-purple-500"
+              className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-neutral-50 focus:bg-white"
             >
-              <option value="all">Todas las sucursales</option>
+              <option value="all">Todas las Sucursales</option>
               {restaurants.map(r => (
                 <option key={r.id} value={r.id}>{r.nombre}</option>
               ))}
             </select>
           </div>
 
-          {/* Empleado */}
+          {/* Modalidad de Sueldo */}
           <div>
-            <label className="block text-[11px] font-bold text-neutral-500 uppercase mb-1">Empleado</label>
+            <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+              Modalidad de Sueldo
+            </label>
             <select
-              value={selectedEmployeeId}
-              onChange={(e) => setSelectedEmployeeId(e.target.value)}
-              className="w-full p-2.5 rounded-xl border border-neutral-300 text-xs font-bold bg-neutral-50 focus:ring-2 focus:ring-purple-500"
+              value={modalityFilter}
+              onChange={(e) => setModalityFilter(e.target.value as any)}
+              className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-neutral-50 focus:bg-white"
             >
-              <option value="all">Todos los empleados</option>
-              {employees.map(emp => (
-                <option key={emp.id} value={emp.id}>{emp.nombre} ({emp.puesto})</option>
-              ))}
+              <option value="all">Todas (Diario y Mensual)</option>
+              <option value="por_dia">Pago por Día ($/día)</option>
+              <option value="mes">Sueldo Fijo Mensual ($/mes)</option>
             </select>
           </div>
 
           {/* Puesto */}
           <div>
-            <label className="block text-[11px] font-bold text-neutral-500 uppercase mb-1">Puesto / Rol</label>
+            <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+              Puesto / Rol
+            </label>
             <select
               value={selectedRole}
               onChange={(e) => setSelectedRole(e.target.value)}
-              className="w-full p-2.5 rounded-xl border border-neutral-300 text-xs font-bold bg-neutral-50 focus:ring-2 focus:ring-purple-500"
+              className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-neutral-50 focus:bg-white"
             >
-              <option value="all">Todos los puestos</option>
-              <option value="mesero">Meseros</option>
+              <option value="all">Todos los Puestos</option>
+              <option value="admin">Administrador</option>
+              <option value="caja">Cajero</option>
+              <option value="mostrador">Mostrador</option>
+              <option value="mesero">Mesero</option>
               <option value="cocina">Cocina</option>
-              <option value="caja">Cajeros</option>
-              <option value="ayudante_cocina">Ayudantes de cocina</option>
+              <option value="ayudante_cocina">Ayudante Cocina</option>
               <option value="limpieza">Limpieza</option>
+            </select>
+          </div>
+
+          {/* Empleado */}
+          <div>
+            <label className="block text-[11px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
+              Empleado
+            </label>
+            <select
+              value={selectedEmployeeId}
+              onChange={(e) => setSelectedEmployeeId(e.target.value)}
+              className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs font-bold text-neutral-800 bg-neutral-50 focus:bg-white"
+            >
+              <option value="all">Todos ({employees.length})</option>
+              {employees.map(emp => (
+                <option key={emp.id} value={emp.id}>{emp.nombre} ({emp.puesto})</option>
+              ))}
             </select>
           </div>
         </div>
       </div>
 
-      {/* KPI Cards */}
+      {/* 2. TARJETAS KPI RESUMEN DE ASISTENCIA Y SUELDOS (Sin repeticiones) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Total Horas Trabajadas</span>
-          <div className="text-2xl font-black text-neutral-900 mt-1">
-            {grandTotalHours.toFixed(1)} hrs
+          <div className="flex items-center justify-between text-xs font-bold text-neutral-500 uppercase">
+            <span>Días Trabajados (Total)</span>
+            <CalendarCheck className="w-4 h-4 text-emerald-600" />
           </div>
-          <span className="text-[11px] text-neutral-400 mt-0.5 block">{filteredShifts.length} jornadas ({grandTotalOvertime.toFixed(1)}h extra)</span>
+          <div className="text-2xl sm:text-3xl font-black text-neutral-900 mt-1.5 font-mono">
+            {kpiTotals.totalDiasHombre} <span className="text-xs font-bold text-neutral-500">días</span>
+          </div>
+          <span className="text-[11px] text-neutral-400 mt-1 block">
+            {kpiTotals.empleadosActivos} de {unifiedPayrollRows.length} empleados activos en {dateFilter.label}
+          </span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Sueldo Registrado</span>
-          <div className="text-2xl font-black text-indigo-700 mt-1 font-mono">
-            ${grandTotalCalculated.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          <div className="flex items-center justify-between text-xs font-bold text-neutral-500 uppercase">
+            <span>Sueldo Total Correspondiente</span>
+            <Wallet className="w-4 h-4 text-indigo-600" />
           </div>
-          <span className="text-[11px] text-neutral-400 mt-0.5 block">Total ganado por el personal</span>
+          <div className="text-2xl sm:text-3xl font-black text-indigo-700 mt-1.5 font-mono">
+            ${kpiTotals.totalSueldoGenerado.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <span className="text-[11px] text-neutral-400 mt-1 block">
+            Calculado según días laborados y sueldo asignado
+          </span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Abonos en Gastos</span>
-          <div className="text-2xl font-black text-emerald-600 mt-1 font-mono">
-            ${grandTotalAbonado.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          <div className="flex items-center justify-between text-xs font-bold text-neutral-500 uppercase">
+            <span>Abonos y Sueldos Pagados</span>
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
           </div>
-          <span className="text-[11px] text-emerald-600/80 mt-0.5 block">Adelantos y abonos registrados</span>
+          <div className="text-2xl sm:text-3xl font-black text-emerald-600 mt-1.5 font-mono">
+            ${kpiTotals.totalAbonado.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <span className="text-[11px] text-emerald-600/80 mt-1 block">
+            Registrados en Gastos Operativos (P&amp;L)
+          </span>
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-neutral-200 shadow-xs">
-          <span className="text-xs text-neutral-500 font-bold uppercase">Saldo Pendiente por Liquidar</span>
-          <div className="text-2xl font-black text-amber-600 mt-1 font-mono">
-            ${grandTotalPending.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+          <div className="flex items-center justify-between text-xs font-bold text-neutral-500 uppercase">
+            <span>Saldo Neto por Pagar</span>
+            <DollarSign className="w-4 h-4 text-amber-600" />
           </div>
-          <span className="text-[11px] text-amber-600/80 mt-0.5 block">Monto pendiente a pagar</span>
+          <div className="text-2xl sm:text-3xl font-black text-amber-600 mt-1.5 font-mono">
+            ${kpiTotals.totalPendiente.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+          <span className="text-[11px] text-amber-700/80 mt-1 block">
+            Pendiente de liquidación en el periodo
+          </span>
         </div>
       </div>
 
-      {/* Bar Chart: Horas por Día */}
-      {chartData.length > 0 && (
-        <div className="bg-white p-6 rounded-3xl border border-neutral-200 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-extrabold text-sm text-neutral-900 flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-purple-600" />
-              <span>Horas Trabajadas por Fecha</span>
-            </h3>
-            <span className="text-xs text-neutral-500 font-medium">Horas Normales vs Horas Extra</span>
+      {/* 3. GRÁFICO VISUAL: DÍAS TRABAJADOS Y SUELDO POR EMPLEADO */}
+      {employeeChartData.length > 0 && (
+        <div className="bg-white p-5 sm:p-6 rounded-3xl border border-neutral-200 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-neutral-100">
+            <div>
+              <h3 className="font-extrabold text-sm sm:text-base text-neutral-900 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-indigo-600" />
+                <span>Días de Trabajo y Sueldo por Empleado ({dateFilter.label})</span>
+              </h3>
+              <p className="text-xs text-neutral-500">
+                Comparativa de días laborados, monto ya abonado/pagado y saldo pendiente por empleado
+              </p>
+            </div>
+            <div className="text-xs text-neutral-500 font-medium">
+              Ciclo Operativo: 5:00 a.m. – 4:59 a.m.
+            </div>
           </div>
 
-          <div className="h-64 w-full">
+          <div className="h-60 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <BarChart data={employeeChartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="fecha" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Legend wrapperStyle={{ fontSize: '11px' }} />
-                <Bar dataKey="horasNormales" name="Horas Normales" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="horasExtra" name="Horas Extra (1.5x)" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                <XAxis dataKey="nombre" tick={{ fontSize: 11, fontWeight: 600, fill: '#334155' }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11, fill: '#64748b' }} tickFormatter={(v) => `$${v}`} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: '#059669' }} tickFormatter={(v) => `${v}d`} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#0f172a',
+                    color: '#fff',
+                    borderRadius: '12px',
+                    border: 'none',
+                    fontSize: '12px'
+                  }}
+                  formatter={(val: any, name: any) => {
+                    if (name === 'Días Trabajados') return [`${val} días`, name];
+                    return [`$${Number(val).toFixed(2)}`, name];
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 700 }} />
+                <Bar yAxisId="right" dataKey="diasTrabajados" name="Días Trabajados" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={32} />
+                <Bar yAxisId="left" dataKey="sueldo" name="Sueldo Correspondiente ($)" fill="#4f46e5" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                <Bar yAxisId="left" dataKey="pagado" name="Abonado / Pagado ($)" fill="#059669" radius={[4, 4, 0, 0]} maxBarSize={36} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
       )}
 
-      {/* Table of Employee Summaries */}
+      {/* 4. TABLA CONSOLIDADA ÚNICA: DÍAS DE TRABAJO POR EMPLEADO Y SUELDO */}
       <div className="bg-white rounded-3xl border border-neutral-200 shadow-xs overflow-hidden">
-        <div className="p-5 border-b border-neutral-100 flex items-center justify-between">
-          <h3 className="font-extrabold text-sm text-neutral-900">
-            Resumen Consolidado por Empleado
-          </h3>
-          <span className="text-xs text-neutral-500">{payrollRows.length} miembros del personal</span>
+        <div className="p-5 border-b border-neutral-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="font-black text-sm sm:text-base text-neutral-900">
+              Planilla Consolidada: Días de Trabajo por Empleado y Sueldo
+            </h3>
+            <p className="text-xs text-neutral-500">
+              Haz clic en <strong>&quot;Ver Días&quot;</strong> en cualquier empleado para inspeccionar las fechas exactas trabajadas, horarios de entrada/salida y liquidar jornadas individuales.
+            </p>
+          </div>
+          <span className="text-xs font-bold text-neutral-600 bg-neutral-100 px-3 py-1 rounded-full self-start sm:self-auto">
+            {unifiedPayrollRows.length} empleados en planilla
+          </span>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+          <table className="w-full text-left text-xs border-collapse">
             <thead>
-              <tr className="bg-neutral-50 border-b border-neutral-200 text-neutral-500 font-bold uppercase">
+              <tr className="bg-neutral-50 border-b border-neutral-200 text-neutral-500 font-bold uppercase text-[10px] tracking-wider">
                 <th className="p-3.5">Empleado</th>
-                <th className="p-3.5">Puesto</th>
-                <th className="p-3.5">Sucursal</th>
-                <th className="p-3.5 text-right">Tarifa ($/h)</th>
-                <th className="p-3.5 text-right">Horas Totales</th>
-                <th className="p-3.5 text-right text-indigo-900">Sueldo Registrado ($)</th>
-                <th className="p-3.5 text-right text-emerald-700">Abonos en Gastos ($)</th>
-                <th className="p-3.5 text-right text-amber-700">Saldo Pendiente ($)</th>
+                <th className="p-3.5">Puesto / Sede</th>
+                <th className="p-3.5">Modalidad &amp; Sueldo Base</th>
+                <th className="p-3.5 text-center">Días de Trabajo</th>
+                <th className="p-3.5 text-right text-indigo-900">Sueldo Correspondiente ($)</th>
+                <th className="p-3.5 text-right text-emerald-700">Abonos / Pagado ($)</th>
+                <th className="p-3.5 text-right text-amber-700">Saldo a Pagar ($)</th>
                 <th className="p-3.5 text-center">Estado</th>
+                <th className="p-3.5 text-right">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
-              {payrollRows.map(row => (
-                <tr key={row.empleadoId} className="hover:bg-neutral-50/50 transition">
-                  <td className="p-3.5 font-bold text-neutral-900">{row.nombre}</td>
-                  <td className="p-3.5 uppercase font-medium text-neutral-600">{row.puesto}</td>
-                  <td className="p-3.5 text-neutral-500">{row.sucursal}</td>
-                  <td className="p-3.5 text-right font-mono">${row.tarifaHora.toFixed(2)}</td>
-                  <td className="p-3.5 text-right font-mono font-bold text-neutral-900">{row.horasTotales} h</td>
-                  <td className="p-3.5 text-right font-mono font-bold text-indigo-900">
-                    ${row.sueldoCalculado.toFixed(2)}
-                  </td>
-                  <td className="p-3.5 text-right font-mono font-bold text-emerald-600">
-                    {row.totalAbonado > 0 ? `$${row.totalAbonado.toFixed(2)}` : '-'}
-                  </td>
-                  <td className="p-3.5 text-right font-mono font-black text-amber-600 text-sm">
-                    ${row.totalPagar.toFixed(2)}
-                  </td>
-                  <td className="p-3.5 text-center">
-                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${
-                      row.estadoPago === 'Pagado'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : row.estadoPago === 'Abonado'
-                          ? 'bg-amber-50 text-amber-800 border-amber-200'
-                          : row.estadoPago === 'Pendiente'
-                            ? 'bg-rose-50 text-rose-700 border-rose-200'
-                            : 'bg-neutral-100 text-neutral-600 border-neutral-200'
-                    }`}>
-                      {row.estadoPago === 'Abonado' ? `Abonado ($${row.totalAbonado.toFixed(0)})` : row.estadoPago}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {payrollRows.length === 0 && (
+              {unifiedPayrollRows.map(row => {
+                const isExpanded = expandedEmployeeId === row.empleadoId;
+
+                return (
+                  <React.Fragment key={row.empleadoId}>
+                    <tr className={`hover:bg-neutral-50/70 transition ${isExpanded ? 'bg-indigo-50/20' : ''}`}>
+                      {/* Empleado */}
+                      <td className="p-3.5 font-bold text-neutral-900">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
+                            {row.nombre.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="block text-neutral-900 font-extrabold text-xs">{row.nombre}</span>
+                            <span className="text-[10px] text-neutral-400 font-mono">ID: {row.empleadoId.slice(0, 6)}</span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Puesto / Sede */}
+                      <td className="p-3.5">
+                        <span className="font-bold uppercase text-[10px] text-neutral-700 block">
+                          {row.puesto === 'ayudante_cocina' ? 'Ayudante Cocina' : row.puesto}
+                        </span>
+                        <span className="text-[11px] text-neutral-400">{row.sucursal}</span>
+                      </td>
+
+                      {/* Modalidad & Sueldo Base (Sin valores por hora) */}
+                      <td className="p-3.5">
+                        <div className="font-bold text-neutral-800">
+                          {row.isMonthlyFixed ? (
+                            <span className="text-indigo-700">
+                              Mensual: <strong className="font-mono">${row.sueldoMensual.toFixed(2)}/mes</strong>
+                            </span>
+                          ) : (
+                            <span className="text-emerald-700">
+                              Diario: <strong className="font-mono">${row.valorDiario.toFixed(2)}/día</strong>
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-neutral-400 font-mono block">
+                          Equiv. diario: ${row.valorDiario.toFixed(2)} / día
+                        </span>
+                      </td>
+
+                      {/* Días de Trabajo */}
+                      <td className="p-3.5 text-center">
+                        <div className="inline-flex flex-col items-center">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black font-mono ${
+                            row.diasTrabajados > 0
+                              ? 'bg-emerald-100 text-emerald-900'
+                              : 'bg-neutral-100 text-neutral-400'
+                          }`}>
+                            <CalendarCheck className="w-3.5 h-3.5 text-emerald-600" />
+                            {row.diasTrabajados} {row.diasTrabajados === 1 ? 'día' : 'días'}
+                          </span>
+                          {row.turnosContados > 0 && (
+                            <span className="text-[10px] text-neutral-400 mt-0.5">
+                              {row.turnosContados} {row.turnosContados === 1 ? 'jornada' : 'jornadas'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Sueldo Correspondiente */}
+                      <td className="p-3.5 text-right font-mono font-black text-sm text-indigo-950">
+                        ${row.sueldoCalculado.toFixed(2)}
+                        <span className="block text-[10px] font-normal text-neutral-400">
+                          {row.isMonthlyFixed && (dateRangePreset === 'mes' || dateRangePreset === 'todos')
+                            ? 'Sueldo fijo mensual'
+                            : `${row.diasTrabajados}d × $${row.valorDiario.toFixed(2)}`}
+                        </span>
+                      </td>
+
+                      {/* Abonos / Pagado */}
+                      <td className="p-3.5 text-right font-mono font-bold text-sm text-emerald-600">
+                        {row.totalAbonado > 0 ? `$${row.totalAbonado.toFixed(2)}` : '—'}
+                      </td>
+
+                      {/* Saldo Neto a Pagar */}
+                      <td className="p-3.5 text-right font-mono font-black text-sm text-amber-600 bg-amber-50/30">
+                        ${row.totalPagar.toFixed(2)}
+                      </td>
+
+                      {/* Estado */}
+                      <td className="p-3.5 text-center">
+                        <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
+                          row.estadoPago === 'Pagado'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : row.estadoPago === 'Abonado'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : row.estadoPago === 'Pendiente'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-neutral-100 text-neutral-500 border-neutral-200'
+                        }`}>
+                          {row.estadoPago === 'Pagado' && <Lock className="w-2.5 h-2.5" />}
+                          <span>{row.estadoPago}</span>
+                        </span>
+                      </td>
+
+                      {/* Acciones: Liquidar y Ver Días */}
+                      <td className="p-3.5 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {row.totalPagar > 0 && row.estadoPago !== 'Pagado' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                sounds.playKeypadClick();
+                                setPayingSingleRow(row);
+                                setSinglePayError(null);
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                              title="Liquidar y registrar pago de sueldo en Gastos"
+                            >
+                              <DollarSign className="w-3 h-3 text-amber-300" />
+                              <span>Pagar</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              sounds.playKeypadClick();
+                              setExpandedEmployeeId(isExpanded ? null : row.empleadoId);
+                            }}
+                            disabled={row.diasDetalle.length === 0}
+                            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                              row.diasDetalle.length === 0
+                                ? 'opacity-40 cursor-not-allowed bg-neutral-100 text-neutral-400'
+                                : isExpanded
+                                  ? 'bg-neutral-900 text-white'
+                                  : 'bg-neutral-100 hover:bg-neutral-200 text-neutral-700'
+                            }`}
+                          >
+                            <span>{isExpanded ? 'Ocultar' : 'Ver Días'}</span>
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {/* Desglose desplegable de los Días Trabajados y Turnos del Empleado */}
+                    {isExpanded && (
+                      <tr className="bg-neutral-50/80">
+                        <td colSpan={9} className="p-4 sm:p-5 border-b border-neutral-200">
+                          <div className="space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <h4 className="text-xs font-black uppercase tracking-wider text-neutral-800 flex items-center gap-2">
+                                <Calendar className="w-4 h-4 text-emerald-600" />
+                                <span>
+                                  Detalle de Días Trabajados de {row.nombre} ({row.diasDetalle.length} {row.diasDetalle.length === 1 ? 'día laborado' : 'días laborados'})
+                                </span>
+                              </h4>
+                              <div className="text-xs text-neutral-500 font-mono">
+                                Valor diario: <strong>${row.valorDiario.toFixed(2)}/día</strong> • Ventas generadas en turnos: <strong className="text-emerald-700">${row.ventasGeneradas.toFixed(2)}</strong>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {row.diasDetalle.map((dia, idx) => (
+                                <div key={dia.fechaOperativa} className="bg-white rounded-2xl border border-neutral-200 p-3.5 space-y-2.5 shadow-2xs">
+                                  <div className="flex items-center justify-between pb-2 border-b border-neutral-100">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 text-[10px] font-black flex items-center justify-center">
+                                        D{row.diasDetalle.length - idx}
+                                      </span>
+                                      <div>
+                                        <strong className="text-xs font-bold text-neutral-900 capitalize block">
+                                          {dia.fechaLabel}
+                                        </strong>
+                                        <span className="text-[10px] text-neutral-400 font-mono">
+                                          Día Operativo: {dia.fechaOperativa}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    <div className="text-right">
+                                      <span className="text-xs font-black text-indigo-700 font-mono block">
+                                        ${row.valorDiario.toFixed(2)}
+                                      </span>
+                                      <span className="text-[10px] text-neutral-400">1 día trabajado</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Jornadas dentro de este día operativo */}
+                                  <div className="space-y-1.5 text-[11px]">
+                                    {dia.turnos.map(t => {
+                                      const hInicio = t.horaInicio ? new Date(t.horaInicio).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+                                      const hFin = t.horaFin ? new Date(t.horaFin).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : 'En curso';
+                                      const isShiftPaid = Boolean(t.pagado || t.sueldoPagado);
+                                      const isShiftClosed = t.estado === 'cerrado';
+
+                                      return (
+                                        <div key={t.id} className="p-2 bg-neutral-50 rounded-xl flex items-center justify-between border border-neutral-100 gap-2">
+                                          <div>
+                                            <span className="font-bold text-neutral-800 font-mono">
+                                              Entrada: {hInicio} → Salida: {hFin}
+                                            </span>
+                                            {(t.ventasGeneradas || 0) > 0 && (
+                                              <span className="block text-[10px] text-emerald-700 font-semibold">
+                                                Ventas atendidas: ${(t.ventasGeneradas || 0).toFixed(2)} ({t.pedidosTomados || 0} ped.)
+                                              </span>
+                                            )}
+                                            {t.reporteLabores && (
+                                              <span className="block text-[10px] text-neutral-500 italic truncate max-w-[210px]" title={t.reporteLabores}>
+                                                &ldquo;{t.reporteLabores}&rdquo;
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          <div className="shrink-0">
+                                            {isShiftPaid || row.estadoPago === 'Pagado' ? (
+                                              <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                                                Pagado
+                                              </span>
+                                            ) : !row.isMonthlyFixed && isShiftClosed ? (
+                                              <button
+                                                type="button"
+                                                disabled={payingShiftId === t.id}
+                                                onClick={() => handlePaySingleShift(t, row.employeeObj)}
+                                                className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] cursor-pointer disabled:opacity-50"
+                                              >
+                                                {payingShiftId === t.id ? '...' : `Pagar $${row.valorDiario.toFixed(0)}`}
+                                              </button>
+                                            ) : (
+                                              <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">
+                                                {isShiftClosed ? 'Pendiente' : 'En turno'}
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+
+              {unifiedPayrollRows.length === 0 && (
                 <tr>
                   <td colSpan={9} className="p-8 text-center text-neutral-400 font-medium">
-                    No se encontraron registros de turnos en el rango seleccionado.
+                    No se encontraron empleados ni registros de asistencia con los filtros seleccionados.
                   </td>
                 </tr>
               )}
@@ -1519,87 +1265,118 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         </div>
       </div>
 
-      {/* Detailed Shifts Table with lock indicators and sales metrics */}
-      <div className="bg-white rounded-3xl border border-neutral-200 shadow-xs overflow-hidden">
-        <div className="p-5 border-b border-neutral-100 flex items-center justify-between">
-          <h3 className="font-extrabold text-sm text-neutral-900">
-            Detalle Individual de Turnos Registrados
-          </h3>
-          <span className="text-xs text-neutral-500">{filteredShifts.length} turnos</span>
+      {/* MODAL 1: Liquidación Individual de Empleado */}
+      {payingSingleRow && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-neutral-100 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-neutral-900">
+                    Liquidar Sueldo de {payingSingleRow.nombre}
+                  </h3>
+                  <p className="text-xs text-neutral-500">
+                    Periodo: {dateFilter.label} • {payingSingleRow.diasTrabajados} {payingSingleRow.diasTrabajados === 1 ? 'día trabajado' : 'días trabajados'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPayingSingleRow(null)}
+                className="text-neutral-400 hover:text-neutral-600 p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {singlePayError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-bold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{singlePayError}</span>
+              </div>
+            )}
+
+            <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-600 font-semibold">Modalidad de Sueldo:</span>
+                <span className="font-bold text-indigo-950">{payingSingleRow.modalidadLabel}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-600 font-semibold">Días Trabajados en el Periodo:</span>
+                <span className="font-mono font-bold text-emerald-800">{payingSingleRow.diasTrabajados} días</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-600 font-semibold">Sueldo Correspondiente:</span>
+                <span className="font-mono font-bold text-neutral-900">${payingSingleRow.sueldoCalculado.toFixed(2)}</span>
+              </div>
+              {payingSingleRow.totalAbonado > 0 && (
+                <div className="flex items-center justify-between text-emerald-700 font-bold">
+                  <span>Abonos / Adelantos Previos:</span>
+                  <span className="font-mono">-${payingSingleRow.totalAbonado.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2 border-t border-indigo-200 text-sm font-black">
+                <span className="text-indigo-950">Saldo Neto a Pagar:</span>
+                <span className="font-mono text-indigo-700 text-lg">${payingSingleRow.totalPagar.toFixed(2)}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-neutral-700 mb-1">
+                Método de Pago:
+              </label>
+              <select
+                value={singlePayMethod}
+                onChange={(e) => setSinglePayMethod(e.target.value as PaymentMethod)}
+                className="w-full h-10 px-3 rounded-xl border border-neutral-300 font-bold text-xs text-neutral-800"
+              >
+                <option value="transferencia">🏦 Transferencia Bancaria</option>
+                <option value="efectivo">💵 Efectivo (Caja)</option>
+                <option value="yape">📱 Yape / Plin / Pago Móvil</option>
+                <option value="tarjeta">💳 Tarjeta</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-neutral-700 mb-1">
+                Notas / Observaciones (Opcional):
+              </label>
+              <input
+                type="text"
+                value={singlePayNotes}
+                onChange={(e) => setSinglePayNotes(e.target.value)}
+                placeholder="Ej: Pago de quincena / liquidación de días trabajados"
+                className="w-full h-10 px-3 rounded-xl border border-neutral-300 text-xs"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setPayingSingleRow(null)}
+                className="py-2.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isProcessingSinglePay}
+                onClick={handleConfirmSingleEmployeePay}
+                className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm disabled:opacity-50 cursor-pointer"
+              >
+                {isProcessingSinglePay ? 'Procesando...' : `Confirmar Pago ($${payingSingleRow.totalPagar.toFixed(2)})`}
+              </button>
+            </div>
+          </div>
         </div>
-
-        <div className="overflow-x-auto max-h-96">
-          <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-neutral-50 border-b border-neutral-200 text-neutral-500 font-bold uppercase z-10">
-              <tr>
-                <th className="p-3.5">Fecha</th>
-                <th className="p-3.5">Empleado</th>
-                <th className="p-3.5">Horario</th>
-                <th className="p-3.5 text-right">Horas</th>
-                <th className="p-3.5 text-right">Pedidos Atendidos</th>
-                <th className="p-3.5 text-right">Ventas Generadas ($)</th>
-                <th className="p-3.5">Reporte de Labores</th>
-                <th className="p-3.5 text-center">Estado Pago</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-100">
-              {filteredShifts.map(shift => {
-                const hoursWorked = Math.round(((shift.minutosTrabajados || 0) / 60) * 10) / 10;
-                const isOvertime = hoursWorked > 8;
-                const startTime = shift.horaInicio ? new Date(shift.horaInicio).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
-                const endTime = shift.horaFin ? new Date(shift.horaFin).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'En curso';
-
-                return (
-                  <tr key={shift.id} className="hover:bg-neutral-50/50 transition">
-                    <td className="p-3.5 font-mono text-neutral-700">{shift.fecha || '-'}</td>
-                    <td className="p-3.5 font-bold text-neutral-900">
-                      {shift.employeeName || 'Empleado'}
-                    </td>
-                    <td className="p-3.5 font-mono text-neutral-500">
-                      {startTime} - {endTime}
-                    </td>
-                    <td className="p-3.5 text-right font-mono font-bold">
-                      <span className={isOvertime ? 'text-red-600' : 'text-neutral-800'}>
-                        {hoursWorked} h
-                      </span>
-                    </td>
-                    <td className="p-3.5 text-right font-mono text-neutral-700">
-                      {shift.pedidosTomados || 0}
-                    </td>
-                    <td className="p-3.5 text-right font-mono font-bold text-emerald-600">
-                      ${(shift.ventasGeneradas || 0).toFixed(2)}
-                    </td>
-                    <td className="p-3.5 text-neutral-500 max-w-xs truncate" title={shift.reporteLabores || ''}>
-                      {shift.reporteLabores || <span className="text-neutral-300 italic">Sin reporte</span>}
-                    </td>
-                    <td className="p-3.5 text-center">
-                      {shift.pagado ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-2 py-0.5 rounded-full">
-                          <Lock className="w-2.5 h-2.5" />
-                          Pagado
-                        </span>
-                      ) : (
-                        <span className="inline-block text-[10px] font-bold text-amber-700 bg-amber-100/70 px-2 py-0.5 rounded-full">
-                          Pendiente
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-        </>
       )}
 
-      {/* Modal de Confirmación de Pago de Sueldos por Turnos */}
+      {/* MODAL 2: Liquidación Masiva de Planilla */}
       {showPayrollModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-neutral-100 space-y-6 max-h-[90vh] overflow-y-auto">
-            
             <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-black">
@@ -1607,10 +1384,10 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                 </div>
                 <div>
                   <h3 className="font-extrabold text-base text-neutral-900">
-                    Generar Gastos de Sueldo Operativo
+                    Liquidar Planilla de Sueldos ({dateFilter.label})
                   </h3>
                   <p className="text-xs text-neutral-500">
-                    Periodo: {dateFilter.label} — Registra asientos en gastos y marca turnos como pagados
+                    Registra el pago en Gastos Operativos (P&amp;L) según los días trabajados y sueldo de cada empleado
                   </p>
                 </div>
               </div>
@@ -1622,28 +1399,27 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
               </button>
             </div>
 
-            {/* List of employees to pay */}
             <div className="space-y-3">
               <span className="text-xs font-bold text-neutral-700 block">
                 Selecciona los empleados a liquidar:
               </span>
 
-              <div className="border border-neutral-200 rounded-2xl divide-y divide-neutral-100 overflow-hidden max-h-60 overflow-y-auto">
-                {payrollRows.filter(r => r.estadoPago !== 'Pagado').length === 0 ? (
+              <div className="border border-neutral-200 rounded-2xl divide-y divide-neutral-100 overflow-hidden max-h-64 overflow-y-auto">
+                {unifiedPayrollRows.filter(r => r.totalPagar > 0 && r.estadoPago !== 'Pagado').length === 0 ? (
                   <div className="p-6 text-center space-y-2 bg-emerald-50/50">
                     <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
                     <p className="text-xs font-bold text-emerald-900">
-                      ¡Todos los turnos de este periodo ({dateFilter.label}) se encuentran liquidados y registrados en gastos!
+                      ¡Todos los sueldos y días trabajados de este periodo ({dateFilter.label}) ya fueron pagados!
                     </p>
                   </div>
                 ) : (
-                  payrollRows.filter(r => r.estadoPago !== 'Pagado').map(row => {
+                  unifiedPayrollRows.filter(r => r.totalPagar > 0 && r.estadoPago !== 'Pagado').map(row => {
                     const isChecked = !!selectedForPayment[row.empleadoId];
                     return (
-                      <label 
+                      <label
                         key={row.empleadoId}
                         className={`p-3.5 flex items-center justify-between cursor-pointer transition ${
-                          isChecked ? 'bg-purple-50/50' : 'hover:bg-neutral-50'
+                          isChecked ? 'bg-indigo-50/50' : 'hover:bg-neutral-50'
                         }`}
                       >
                         <div className="flex items-center gap-3">
@@ -1656,21 +1432,23 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
                                 [row.empleadoId]: e.target.checked
                               }));
                             }}
-                            className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500"
+                            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
                           />
                           <div>
                             <strong className="text-xs text-neutral-900 block">{row.nombre}</strong>
-                            <span className="text-[10px] text-neutral-400 uppercase">{row.puesto} • {row.horasTotales} hrs</span>
+                            <span className="text-[10px] text-neutral-500 uppercase">
+                              {row.puesto} • {row.diasTrabajados} {row.diasTrabajados === 1 ? 'día trabajado' : 'días trabajados'} • {row.modalidadLabel}
+                            </span>
                             {row.totalAbonado > 0 && (
                               <span className="block text-[10px] font-medium text-emerald-700">
-                                Sueldo bruto: ${row.sueldoCalculado.toFixed(2)} | Abonos en gastos: -${row.totalAbonado.toFixed(2)}
+                                Sueldo: ${row.sueldoCalculado.toFixed(2)} | Abonos previos: -${row.totalAbonado.toFixed(2)}
                               </span>
                             )}
                           </div>
                         </div>
                         <div className="text-right">
                           <strong className="text-sm font-black text-emerald-600 font-mono">${row.totalPagar.toFixed(2)}</strong>
-                          <span className="text-[10px] text-neutral-400 block font-medium">Pendiente a liquidar</span>
+                          <span className="text-[10px] text-neutral-400 block font-medium">Neto a liquidar</span>
                         </div>
                       </label>
                     );
@@ -1679,23 +1457,21 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
               </div>
             </div>
 
-            {/* Grand Total Summary */}
             <div className="p-4 bg-neutral-900 text-white rounded-2xl flex items-center justify-between">
               <div>
-                <span className="text-[11px] text-neutral-400 uppercase font-bold block">Total a liquidar en gastos:</span>
+                <span className="text-[11px] text-neutral-400 uppercase font-bold block">Total a registrar en Gastos (P&amp;L):</span>
                 <span className="text-xs text-neutral-300">
                   {Object.values(selectedForPayment).filter(Boolean).length} empleados seleccionados
                 </span>
               </div>
               <div className="text-2xl font-black text-emerald-400 font-mono">
-                ${payrollRows
+                ${unifiedPayrollRows
                   .filter(r => selectedForPayment[r.empleadoId])
                   .reduce((sum, r) => sum + r.totalPagar, 0)
                   .toFixed(2)}
               </div>
             </div>
 
-            {/* Actions */}
             <div className="grid grid-cols-2 gap-3 pt-2">
               <button
                 type="button"
@@ -1717,166 +1493,6 @@ export const StaffAttendanceAdminView: React.FC<StaffAttendanceAdminViewProps> =
         </div>
       )}
 
-      {/* Modal de Pago de Sueldo Fijo Mensual */}
-      {payingFixedEmployee && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border border-neutral-100 space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black">
-                  <DollarSign className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-base text-neutral-900">
-                    Pagar Sueldo Fijo Mensual
-                  </h3>
-                  <p className="text-xs text-neutral-500">
-                    Periodo: {selectedMonthLabel} ({fixedSalaryMonthKey})
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setPayingFixedEmployee(null)}
-                className="text-neutral-400 hover:text-neutral-600 p-1 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {fixedPayError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-bold flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>{fixedPayError}</span>
-              </div>
-            )}
-
-            {/* Datos del empleado */}
-            {(() => {
-              const base = payingFixedEmployee.sueldoMensual || 0;
-              const abonos = salaryExpenses
-                .filter(e => e.employeeId === payingFixedEmployee.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
-                .reduce((sum, e) => sum + (e.monto || 0), 0);
-              const netPending = Math.max(0, Math.round((base - abonos) * 100) / 100);
-
-              return (
-                <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-100 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="text-xs font-black text-indigo-950 block">{payingFixedEmployee.nombre}</span>
-                      <span className="text-[11px] text-indigo-700 font-medium uppercase">{payingFixedEmployee.puesto} • {restaurantMap.get(payingFixedEmployee.restaurantId) || 'Sucursal'}</span>
-                    </div>
-                    <div className="text-right">
-                      <span className="text-[10px] text-indigo-500 uppercase font-bold block">Sueldo Base</span>
-                      <span className="text-sm font-black text-indigo-900 font-mono">${base.toFixed(2)}</span>
-                    </div>
-                  </div>
-                  {abonos > 0 && (
-                    <div className="flex items-center justify-between pt-2 border-t border-indigo-200/60 text-xs">
-                      <span className="text-emerald-700 font-bold">Abonos previos en Gastos:</span>
-                      <span className="font-mono font-bold text-emerald-700">-${abonos.toFixed(2)}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between pt-2 border-t border-indigo-200 text-sm font-black">
-                    <span className="text-indigo-950">Saldo Neto a Liquidar:</span>
-                    <span className="font-mono text-indigo-700 text-lg">${netPending.toFixed(2)}</span>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Selector de Método de Pago */}
-            <div>
-              <label className="block text-[11px] font-bold text-neutral-700 mb-1">
-                Método de Pago:
-              </label>
-              <select
-                value={fixedPayMethod}
-                onChange={(e) => setFixedPayMethod(e.target.value as any)}
-                className="w-full h-10 px-3 rounded-xl border border-neutral-300 font-bold text-xs text-neutral-800 focus:ring-2 focus:ring-indigo-500 outline-hidden"
-              >
-                <option value="transferencia">🏦 Transferencia Bancaria</option>
-                <option value="efectivo">💵 Efectivo (Caja Chica / Salón)</option>
-                <option value="tarjeta">💳 Tarjeta / Depósito</option>
-                <option value="otro">🧾 Cheque / Otro</option>
-              </select>
-            </div>
-
-            {/* Notas opcionales */}
-            <div>
-              <label className="block text-[11px] font-bold text-neutral-700 mb-1">
-                Notas / Glosa de Pago:
-              </label>
-              <input
-                type="text"
-                placeholder={`Liquidación sueldo ${selectedMonthLabel} transferido`}
-                value={fixedPayNotes}
-                onChange={(e) => setFixedPayNotes(e.target.value)}
-                className="w-full h-9 px-3 rounded-xl border border-neutral-300 text-xs text-neutral-800 focus:ring-2 focus:ring-indigo-500 outline-hidden"
-              />
-            </div>
-
-            <p className="text-[10px] text-neutral-500">
-              ℹ️ Al confirmar, se creará un gasto de tipo <strong className="text-neutral-800">sueldo</strong> por el saldo pendiente neto, se actualizará el dailyStats de hoy y el mes <strong className="text-neutral-800">{fixedSalaryMonthKey}</strong> quedará marcado como pagado.
-            </p>
-
-            {/* Actions */}
-            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-neutral-100">
-              <button
-                type="button"
-                onClick={() => setPayingFixedEmployee(null)}
-                className="py-2.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs transition cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={isProcessingFixedPay}
-                onClick={async () => {
-                  if (!payingFixedEmployee) return;
-                  setIsProcessingFixedPay(true);
-                  setFixedPayError(null);
-                  try {
-                    const base = payingFixedEmployee.sueldoMensual || 0;
-                    const abonos = salaryExpenses
-                      .filter(e => e.employeeId === payingFixedEmployee.id && (e.fecha || '').startsWith(fixedSalaryMonthKey))
-                      .reduce((sum, e) => sum + (e.monto || 0), 0);
-
-                    const res = await payFixedSalaryExpense({
-                      employee: payingFixedEmployee,
-                      monthKey: fixedSalaryMonthKey,
-                      monthLabel: selectedMonthLabel,
-                      amount: base,
-                      abonoPrevio: abonos,
-                      userDisplayName: currentUserName,
-                      paymentMethod: fixedPayMethod,
-                      notes: fixedPayNotes
-                    });
-
-                    if (!res.success) {
-                      setFixedPayError(res.error || 'Error al procesar el pago');
-                    } else {
-                      sounds.playCashRegister();
-                      setSalarySuccessToast(`¡Sueldo fijo de ${selectedMonthLabel} pagado a ${payingFixedEmployee.nombre} exitosamente!`);
-                      setPayingFixedEmployee(null);
-                      setFixedPayNotes('');
-                      setTimeout(() => setSalarySuccessToast(null), 5000);
-                    }
-                  } catch (err: any) {
-                    setFixedPayError(err.message || 'Error inesperado al pagar sueldo');
-                  } finally {
-                    setIsProcessingFixedPay(false);
-                  }
-                }}
-                className="py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs transition shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
-              >
-                <Check className="w-4 h-4" />
-                <span>{isProcessingFixedPay ? 'Procesando...' : 'Confirmar y Pagar'}</span>
-              </button>
-            </div>
-
-          </div>
-        </div>
-      )}
     </div>
   );
 };

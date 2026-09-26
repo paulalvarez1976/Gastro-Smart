@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Business, BusinessSubscription, Restaurant } from '../types';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Business, BusinessSubscription, Restaurant, Employee } from '../types';
 import { LogoUploader } from './LogoUploader';
 import { 
   createBusiness, 
@@ -9,7 +9,9 @@ import {
   updateUserAccount,
   deleteBusinessCascade,
   resetTestOperationalData,
-  setAllBusinessesToTrialMode
+  setAllBusinessesToTrialMode,
+  assignOrCreateBranchCodeForBusiness,
+  generateUniqueBranchCode
 } from '../services/dataService';
 import { 
   Building2, 
@@ -42,24 +44,33 @@ import {
   RotateCcw,
   Eraser,
   AlertOctagon,
-  Wand2
+  Wand2,
+  MapPin,
+  Phone,
+  Hash,
+  ExternalLink
 } from 'lucide-react';
 import { sounds } from '../utils/sound';
 
 interface CreatorDashboardProps {
   businesses: Business[];
   allRestaurants: Restaurant[];
+  allEmployees?: Employee[];
   onSelectBusinessContext?: (businessId: string) => void;
+  onInspectRestaurant?: (restaurant: Restaurant) => void;
 }
 
 export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
   businesses,
   allRestaurants,
-  onSelectBusinessContext
+  allEmployees = [],
+  onSelectBusinessContext,
+  onInspectRestaurant
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'activo' | 'suspendido' | 'vencido' | 'prueba'>('all');
   const [planFilter, setPlanFilter] = useState<'all' | 'basico' | 'pro' | 'enterprise'>('all');
+  const [viewMode, setViewMode] = useState<'all_unified' | 'restaurants_db'>('all_unified');
 
   // Modal para editar suscripción y credenciales
   const [editingBusiness, setEditingBusiness] = useState<Business | null>(null);
@@ -75,6 +86,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     ownerEmail: string;
     ownerClave: string;
     ownerNombre: string;
+    codigoSede: string;
     logoUrl?: string;
   }>({
     plan: 'pro',
@@ -88,18 +100,20 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     ownerEmail: '',
     ownerClave: '',
     ownerNombre: '',
+    codigoSede: '',
     logoUrl: ''
   });
 
   // Modal para registrar nuevo restaurante
   const [showNewTenantModal, setShowNewTenantModal] = useState(false);
-  const [createdCredsModal, setCreatedCredsModal] = useState<{ businessName: string; email: string; clave: string } | null>(null);
+  const [createdCredsModal, setCreatedCredsModal] = useState<{ businessName: string; email: string; clave: string; codigoSede: string } | null>(null);
   const [tenantForm, setTenantForm] = useState({
     nombre: '',
     rif_o_ruc: '',
     ownerName: '',
     email: '',
     clave: 'Gastro' + Math.floor(1000 + Math.random() * 9000),
+    codigoSede: Math.floor(1000 + Math.random() * 9000).toString(),
     plan: 'pro' as 'basico' | 'pro' | 'enterprise',
     diasValidez: 30,
     limiteSucursales: 3,
@@ -120,6 +134,64 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
   const [passwordModalBiz, setPasswordModalBiz] = useState<Business | null>(null);
   const [newPasswordValue, setNewPasswordValue] = useState<string>('');
   const [isUpdatingPass, setIsUpdatingPass] = useState(false);
+
+  // Modal dedicado para asignar o crear el Código de 4 Dígitos (Empresa / Sede)
+  const [branchCodeModal, setBranchCodeModal] = useState<{
+    biz: Business;
+    restaurantId?: string;
+    restaurantName?: string;
+  } | null>(null);
+  const [newBranchCodeValue, setNewBranchCodeValue] = useState<string>('');
+  const [isUpdatingBranchCode, setIsUpdatingBranchCode] = useState(false);
+
+  const handleOpenBranchCodeModal = (biz: Business, rest?: Restaurant) => {
+    sounds.playKeypadClick();
+    const bizRests = allRestaurants.filter(r => r.businessId === biz.id);
+    const targetRest = rest || bizRests[0];
+    const existingCode = targetRest?.codigoSede || biz.codigoSede || '';
+    const existingCodesSet = new Set(allRestaurants.map(r => r.codigoSede).filter(Boolean) as string[]);
+    setBranchCodeModal({
+      biz,
+      restaurantId: targetRest?.id,
+      restaurantName: targetRest?.nombre || `${biz.nombre} - Sede Principal`
+    });
+    setNewBranchCodeValue(existingCode || generateUniqueBranchCode(existingCodesSet));
+  };
+
+  const handleGenerateRandomBranchCode = () => {
+    sounds.playKeypadClick();
+    const existingCodesSet = new Set(allRestaurants.map(r => r.codigoSede).filter(Boolean) as string[]);
+    if (newBranchCodeValue) existingCodesSet.add(newBranchCodeValue);
+    setNewBranchCodeValue(generateUniqueBranchCode(existingCodesSet));
+  };
+
+  const handleSaveBranchCode = async () => {
+    if (!branchCodeModal) return;
+    const cleanCode = newBranchCodeValue.replace(/\D/g, '').slice(0, 4);
+    if (cleanCode.length !== 4) {
+      alert('El código de la empresa / sede debe tener exactamente 4 dígitos numéricos (ej: 3592).');
+      return;
+    }
+    try {
+      setIsUpdatingBranchCode(true);
+      sounds.playKeypadClick();
+      await assignOrCreateBranchCodeForBusiness({
+        businessId: branchCodeModal.biz.id,
+        businessName: branchCodeModal.biz.nombre,
+        codigoSede: cleanCode,
+        restaurantId: branchCodeModal.restaurantId,
+        logoUrl: branchCodeModal.biz.logoUrl || null
+      });
+      sounds.playCashRegister();
+      setSuccessMsg(`¡Código de 4 dígitos (${cleanCode}) asignado exitosamente a "${branchCodeModal.biz.nombre}"!`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+      setBranchCodeModal(null);
+    } catch (err: any) {
+      alert('Error asignando el código de 4 dígitos: ' + err.message);
+    } finally {
+      setIsUpdatingBranchCode(false);
+    }
+  };
 
   const handleOpenPasswordModal = (biz: Business) => {
     sounds.playKeypadClick();
@@ -184,24 +256,108 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     }
   };
 
-  // Mapear sucursales por negocio
-  const branchesByBiz = useMemo(() => {
-    const map = new Map<string, number>();
+  // Mapear sucursales por negocio (conteo y lista detallada)
+  const restaurantsByBiz = useMemo(() => {
+    const map = new Map<string, Restaurant[]>();
     allRestaurants.forEach(r => {
-      const bizId = r.businessId || 'default';
-      map.set(bizId, (map.get(bizId) || 0) + 1);
+      const bizId = r.businessId || ('biz_' + r.id);
+      const list = map.get(bizId) || [];
+      list.push(r);
+      map.set(bizId, list);
     });
     return map;
   }, [allRestaurants]);
 
+  const branchesByBiz = useMemo(() => {
+    const map = new Map<string, number>();
+    restaurantsByBiz.forEach((list, bizId) => {
+      map.set(bizId, list.length);
+    });
+    return map;
+  }, [restaurantsByBiz]);
+
+  // Unificar negocios registrados en 'businesses' con cualquier restaurante creado en 'restaurants' que aún no tenga documento en 'businesses'
+  const effectiveBusinesses = useMemo(() => {
+    const bizMap = new Map<string, Business>();
+    businesses.forEach(b => {
+      bizMap.set(b.id, b);
+    });
+
+    allRestaurants.forEach(r => {
+      const bizId = r.businessId || ('biz_' + r.id);
+      if (!bizMap.has(bizId)) {
+        const cleanName = r.nombre.replace(/\s*-\s*Sede Principal$/i, '').trim() || r.nombre;
+        const fechaInicio = r.creadoEn || new Date().toISOString();
+        const fechaVenc = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();
+        bizMap.set(bizId, {
+          id: bizId,
+          nombre: cleanName,
+          rif_o_ruc: 'J-00000000-0',
+          plan: 'pro',
+          activo: r.activo !== false,
+          creadoEn: fechaInicio,
+          ownerUid: 'owner_' + bizId,
+          ownerEmail: 'admin@gastrosmart.com',
+          ownerNombre: 'Administrador (' + cleanName + ')',
+          ownerClave: 'Gastro1234',
+          email: 'admin@gastrosmart.com',
+          codigoSede: r.codigoSede || '',
+          logoUrl: r.logoUrl || null,
+          appId: 'gastro_smart',
+          suscripcion: {
+            plan: 'pro',
+            estado: r.activo !== false ? 'activo' : 'suspendido',
+            fechaInicio,
+            fechaVencimiento: fechaVenc,
+            limiteSucursales: 3,
+            limiteMesasPorSucursal: Math.max(20, r.numeroMesas || 10),
+            limiteUsuarios: 10,
+            precioMensualUSD: 49,
+            notasSuscripcion: 'Sincronizado automáticamente desde restaurante en BD'
+          }
+        });
+      } else {
+        const current = bizMap.get(bizId)!;
+        if (!current.codigoSede && r.codigoSede) {
+          bizMap.set(bizId, { ...current, codigoSede: r.codigoSede });
+        }
+      }
+    });
+
+    return Array.from(bizMap.values());
+  }, [businesses, allRestaurants]);
+
+  // Auto-sincronizar en Firestore cualquier restaurante huérfano que no tenga su documento en 'businesses'
+  const syncedOrphanBizIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const existingIds = new Set(businesses.map(b => b.id));
+    effectiveBusinesses.forEach(eb => {
+      if (!existingIds.has(eb.id) && !syncedOrphanBizIdsRef.current.has(eb.id)) {
+        syncedOrphanBizIdsRef.current.add(eb.id);
+        const { id, ...restData } = eb;
+        createBusiness(restData, id).catch(() => {});
+      }
+    });
+  }, [businesses, effectiveBusinesses]);
+
   // Lista de Negocios Filtrada
   const filteredBusinesses = useMemo(() => {
-    return businesses.filter(b => {
-      const matchSearch = !searchTerm.trim() || 
-        b.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        b.rif_o_ruc.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (b.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (b.ownerEmail || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const q = searchTerm.trim().toLowerCase();
+    return effectiveBusinesses.filter(b => {
+      const bizRests = restaurantsByBiz.get(b.id) || [];
+      const matchRest = bizRests.some(r =>
+        r.nombre.toLowerCase().includes(q) ||
+        (r.direccion || '').toLowerCase().includes(q) ||
+        (r.telefono || '').toLowerCase().includes(q) ||
+        (r.codigoSede || '').toLowerCase().includes(q)
+      );
+
+      const matchSearch = !q || 
+        b.nombre.toLowerCase().includes(q) ||
+        (b.rif_o_ruc || '').toLowerCase().includes(q) ||
+        (b.email || '').toLowerCase().includes(q) ||
+        (b.ownerEmail || '').toLowerCase().includes(q) ||
+        matchRest;
 
       const subState = b.suscripcion?.estado || (b.activo ? 'activo' : 'suspendido');
       const matchStatus = statusFilter === 'all' || subState === statusFilter;
@@ -211,7 +367,32 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
 
       return matchSearch && matchStatus && matchPlan;
     });
-  }, [businesses, searchTerm, statusFilter, planFilter]);
+  }, [effectiveBusinesses, restaurantsByBiz, searchTerm, statusFilter, planFilter]);
+
+  // Lista de Todos los Restaurantes (Sucursales en BD) Filtrada
+  const filteredAllRestaurants = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return allRestaurants.filter(r => {
+      const parentBiz = effectiveBusinesses.find(b => b.id === r.businessId);
+      const matchSearch = !q ||
+        r.nombre.toLowerCase().includes(q) ||
+        (r.direccion || '').toLowerCase().includes(q) ||
+        (r.telefono || '').toLowerCase().includes(q) ||
+        (r.codigoSede || '').toLowerCase().includes(q) ||
+        (r.id || '').toLowerCase().includes(q) ||
+        (parentBiz?.nombre || '').toLowerCase().includes(q) ||
+        (parentBiz?.ownerEmail || '').toLowerCase().includes(q);
+
+      if (!matchSearch) return false;
+      if (parentBiz) {
+        const subState = parentBiz.suscripcion?.estado || (parentBiz.activo ? 'activo' : 'suspendido');
+        if (statusFilter !== 'all' && subState !== statusFilter) return false;
+        const currentPlan = parentBiz.suscripcion?.plan || parentBiz.plan || 'basico';
+        if (planFilter !== 'all' && currentPlan !== planFilter) return false;
+      }
+      return true;
+    });
+  }, [allRestaurants, effectiveBusinesses, searchTerm, statusFilter, planFilter]);
 
   // Estadísticas globales del SaaS
   const stats = useMemo(() => {
@@ -221,7 +402,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     let pruebas = 0;
     let mrrEstimado = 0;
 
-    businesses.forEach(b => {
+    effectiveBusinesses.forEach(b => {
       const st = b.suscripcion?.estado || (b.activo ? 'activo' : 'suspendido');
       if (st === 'activo') activas++;
       else if (st === 'suspendido') suspendidas++;
@@ -235,20 +416,23 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
     });
 
     return {
-      total: businesses.length,
+      total: effectiveBusinesses.length,
+      totalRestaurantsDb: allRestaurants.length,
       activas,
       suspendidas,
       vencidas,
       pruebas,
       mrrEstimado
     };
-  }, [businesses]);
+  }, [effectiveBusinesses, allRestaurants.length]);
 
   // Abrir modal de edición de suscripción
   const handleOpenEditSub = (biz: Business) => {
     sounds.playKeypadClick();
     setEditingBusiness(biz);
     const sub = biz.suscripcion;
+    const bizRests = restaurantsByBiz.get(biz.id) || [];
+    const primaryCode = bizRests[0]?.codigoSede || biz.codigoSede || '';
     setSubForm({
       plan: sub?.plan || biz.plan || 'pro',
       estado: sub?.estado || (biz.activo ? 'activo' : 'suspendido'),
@@ -263,6 +447,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
       ownerEmail: biz.email || biz.ownerEmail || '',
       ownerClave: biz.ownerClave || 'Gastro1234',
       ownerNombre: biz.ownerNombre || 'Administrador',
+      codigoSede: primaryCode,
       logoUrl: biz.logoUrl || ''
     });
   };
@@ -270,6 +455,11 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
   // Guardar cambios de suscripción
   const handleSaveSub = async () => {
     if (!editingBusiness) return;
+    const cleanCode = (subForm.codigoSede || '').replace(/\D/g, '').slice(0, 4);
+    if (subForm.codigoSede.trim() && cleanCode.length !== 4) {
+      alert('El código de sede debe tener exactamente 4 dígitos numéricos.');
+      return;
+    }
     try {
       sounds.playKeypadClick();
       const updatedSub: BusinessSubscription = {
@@ -294,8 +484,18 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         ownerEmail: subForm.ownerEmail.trim(),
         ownerNombre: subForm.ownerNombre.trim(),
         email: subForm.ownerEmail.trim(),
+        ...(cleanCode.length === 4 ? { codigoSede: cleanCode } : {}),
         logoUrl: subForm.logoUrl ? subForm.logoUrl.trim() : null
       });
+
+      if (cleanCode.length === 4) {
+        await assignOrCreateBranchCodeForBusiness({
+          businessId: editingBusiness.id,
+          businessName: editingBusiness.nombre,
+          codigoSede: cleanCode,
+          logoUrl: subForm.logoUrl ? subForm.logoUrl.trim() : editingBusiness.logoUrl
+        });
+      }
 
       // También actualizar la cuenta en la colección users si existe
       const ownerUid = editingBusiness.ownerUid || ('owner_' + editingBusiness.id);
@@ -437,6 +637,9 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
       };
 
       const assignedClave = tenantForm.clave.trim() || ('Gastro' + Math.floor(1000 + Math.random() * 9000));
+      const cleanCustomCode = (tenantForm.codigoSede || '').replace(/\D/g, '').slice(0, 4);
+      const existingCodesSet = new Set(allRestaurants.map(r => r.codigoSede).filter(Boolean) as string[]);
+      const assignedCodigoSede = cleanCustomCode.length === 4 ? cleanCustomCode : generateUniqueBranchCode(existingCodesSet);
 
       const newBizData: Omit<Business, 'id'> = {
         nombre: tenantForm.nombre.trim(),
@@ -450,12 +653,18 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         ownerNombre: tenantForm.ownerName.trim() || 'Administrador',
         ownerClave: assignedClave,
         email: tenantForm.email.trim(),
+        codigoSede: assignedCodigoSede,
         logoUrl: tenantForm.logoUrl ? tenantForm.logoUrl.trim() : null,
         appId: 'gastro_smart'
       };
 
       await createBusiness(newBizData, newBizId);
-      await bootstrapNewBusinessDefaults(newBizId, tenantForm.nombre.trim(), tenantForm.logoUrl ? tenantForm.logoUrl.trim() : null);
+      const bootResult = await bootstrapNewBusinessDefaults(
+        newBizId,
+        tenantForm.nombre.trim(),
+        tenantForm.logoUrl ? tenantForm.logoUrl.trim() : null,
+        assignedCodigoSede
+      );
 
       // Crear cuenta de usuario Administrador en colección users
       if (tenantForm.email.trim()) {
@@ -475,7 +684,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
       setCreatedCredsModal({
         businessName: tenantForm.nombre.trim(),
         email: tenantForm.email.trim(),
-        clave: assignedClave
+        clave: assignedClave,
+        codigoSede: bootResult.codigoSede || assignedCodigoSede
       });
 
       setShowNewTenantModal(false);
@@ -485,6 +695,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         ownerName: '',
         email: '',
         clave: 'Gastro' + Math.floor(1000 + Math.random() * 9000),
+        codigoSede: Math.floor(1000 + Math.random() * 9000).toString(),
         plan: 'pro',
         diasValidez: 30,
         limiteSucursales: 3,
@@ -576,11 +787,14 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
         {/* Total Registrados */}
         <div className="p-4 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-1">
           <div className="flex items-center justify-between text-neutral-400">
-            <span className="text-xs font-bold uppercase tracking-wider">Total Clientes</span>
-            <Building2 className="w-4 h-4 text-purple-400" />
+            <span className="text-xs font-bold uppercase tracking-wider">Restaurantes en BD</span>
+            <Store className="w-4 h-4 text-purple-400" />
           </div>
-          <div className="text-2xl font-black text-white">{stats.total}</div>
-          <div className="text-[10px] text-neutral-500">Restaurantes en el SaaS</div>
+          <div className="text-2xl font-black text-white flex items-baseline gap-2">
+            <span>{stats.totalRestaurantsDb}</span>
+            <span className="text-xs font-bold text-purple-400">({stats.total} negocios)</span>
+          </div>
+          <div className="text-[10px] text-neutral-500">Todos los locales creados en Firestore</div>
         </div>
 
         {/* Activos */}
@@ -691,10 +905,244 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
 
       </div>
 
-      {/* LISTADO DE SUSCRIPCIONES Y CLIENTES SAAS */}
+      {/* SELECTOR DE VISTA: SUSCRIPCIONES UNIFICADAS vs DIRECTORIO DE RESTAURANTES EN BD */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-neutral-950 p-2.5 rounded-2xl border border-neutral-800">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => {
+              sounds.playKeypadClick();
+              setViewMode('all_unified');
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 cursor-pointer ${
+              viewMode === 'all_unified'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/25'
+                : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400 border border-neutral-800'
+            }`}
+          >
+            <Building2 className="w-4 h-4" />
+            <span>Negocios & Suscripciones ({filteredBusinesses.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              sounds.playKeypadClick();
+              setViewMode('restaurants_db');
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 cursor-pointer ${
+              viewMode === 'restaurants_db'
+                ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg shadow-purple-600/25'
+                : 'bg-neutral-900 hover:bg-neutral-800 text-neutral-400 border border-neutral-800'
+            }`}
+          >
+            <Store className="w-4 h-4" />
+            <span>Todos los Restaurantes / Sedes en Base de Datos ({filteredAllRestaurants.length})</span>
+          </button>
+        </div>
+
+        <div className="text-[11px] text-neutral-400 px-2">
+          Sincronización en tiempo real con colección <code className="text-purple-300 font-mono">restaurants</code> y <code className="text-purple-300 font-mono">businesses</code>
+        </div>
+      </div>
+
+      {/* VISTA 1: DIRECTORIO DIRECTO DE TODOS LOS RESTAURANTES CREADOS EN LA BASE DE DATOS */}
+      {viewMode === 'restaurants_db' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs font-bold text-neutral-400 px-1">
+            <span>Mostrando {filteredAllRestaurants.length} restaurante(s) creados en la base de datos</span>
+            <span>Colección Firestore: restaurants</span>
+          </div>
+
+          {filteredAllRestaurants.length === 0 ? (
+            <div className="p-12 rounded-3xl bg-neutral-950 border border-neutral-800 text-center space-y-3">
+              <Store className="w-12 h-12 text-neutral-700 mx-auto" />
+              <h3 className="font-bold text-neutral-300">No se encontraron restaurantes en la base de datos</h3>
+              <p className="text-xs text-neutral-500 max-w-md mx-auto">
+                Intenta limpiar el buscador o crea un nuevo restaurante desde el botón superior.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredAllRestaurants.map(rest => {
+                const parentBiz = effectiveBusinesses.find(b => b.id === rest.businessId);
+                const restEmployees = allEmployees.filter(emp => emp.restaurantId === rest.id && emp.activo !== false);
+                const sedeCode = rest.codigoSede || '----';
+
+                return (
+                  <div
+                    key={rest.id}
+                    className="p-5 rounded-3xl bg-neutral-950 border border-neutral-800 hover:border-purple-700/70 transition shadow-xl space-y-4 flex flex-col justify-between"
+                  >
+                    <div className="space-y-3">
+                      {/* Cabecera del Restaurante */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {(rest.logoUrl || parentBiz?.logoUrl) ? (
+                            <div className="w-11 h-11 rounded-2xl bg-neutral-900 border border-neutral-800 p-1 flex items-center justify-center shrink-0 overflow-hidden shadow-md">
+                              <img
+                                src={(rest.logoUrl || parentBiz?.logoUrl)!}
+                                alt={rest.nombre}
+                                className="w-full h-full object-contain"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          ) : (
+                            <div className="w-11 h-11 rounded-2xl bg-purple-950/80 border border-purple-800/80 text-purple-300 flex items-center justify-center shrink-0">
+                              <Store className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <h3 className="font-extrabold text-base text-white truncate">
+                              {rest.nombre}
+                            </h3>
+                            <div className="text-[11px] font-mono text-purple-400 truncate">
+                              ID Sede: {rest.id}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border shrink-0 ${
+                          rest.activo !== false
+                            ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700'
+                            : 'bg-red-950/80 text-red-300 border-red-700'
+                        }`}>
+                          {rest.activo !== false ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </div>
+
+                      {/* Código de Sede de 4 dígitos y Datos Operativos */}
+                      <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800 space-y-2 text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-neutral-400 font-semibold flex items-center gap-1.5">
+                            <Hash className="w-3.5 h-3.5 text-amber-400" />
+                            Código 4 Dígitos:
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-300 font-mono font-black text-sm tracking-widest">
+                              {sedeCode}
+                            </span>
+                            {parentBiz && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenBranchCodeModal(parentBiz, rest)}
+                                className="px-2 py-1 rounded-lg bg-amber-950/80 hover:bg-amber-900 border border-amber-700/70 text-amber-200 font-bold text-[10px] flex items-center gap-1 transition cursor-pointer"
+                                title="Asignar o crear nuevo código de 4 dígitos"
+                              >
+                                <Edit3 className="w-3 h-3 text-amber-400" />
+                                <span>Asignar</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-neutral-300 text-[11px]">
+                          <span className="flex items-center gap-1 text-neutral-400 truncate">
+                            <MapPin className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                            <span className="truncate">{rest.direccion || 'Sin dirección'}</span>
+                          </span>
+                          <span className="flex items-center gap-1 text-neutral-400 shrink-0 ml-2">
+                            <Phone className="w-3 h-3 text-purple-400" />
+                            <span>{rest.telefono || 'S/N'}</span>
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-neutral-800 text-[11px]">
+                          <div>
+                            <span className="text-neutral-500 block text-[10px] uppercase font-bold">Mesas</span>
+                            <span className="font-extrabold text-white">{rest.numeroMesas || 10} mesas</span>
+                          </div>
+                          <div>
+                            <span className="text-neutral-500 block text-[10px] uppercase font-bold">Modo KDS</span>
+                            <span className="font-extrabold text-purple-300">
+                              {rest.usaCocina !== false ? '🔥 Con Cocina' : '⚡ Sin Cocina'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Negocio / Dueño Vinculado */}
+                      {parentBiz && (
+                        <div className="p-2.5 rounded-xl bg-neutral-900/70 border border-neutral-800/90 text-[11px] space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-neutral-400 font-semibold">Negocio / Suscripción:</span>
+                            <span className="font-bold text-white truncate ml-2">{parentBiz.nombre}</span>
+                          </div>
+                          <div className="flex items-center justify-between text-neutral-400 font-mono text-[10px]">
+                            <span className="truncate">{parentBiz.email || parentBiz.ownerEmail || 'Sin correo'}</span>
+                            <span className="text-emerald-400 font-bold ml-2 shrink-0">🔑 {parentBiz.ownerClave || 'Gastro1234'}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Empleados de la sede y sus códigos de 8 dígitos */}
+                      <div className="p-2.5 rounded-xl bg-neutral-900/50 border border-neutral-800/80 text-[11px] space-y-1.5">
+                        <div className="flex items-center justify-between text-neutral-400 font-bold text-[10px] uppercase">
+                          <span className="flex items-center gap-1">
+                            <Users className="w-3 h-3 text-purple-400" />
+                            Personal ({restEmployees.length})
+                          </span>
+                          <span>Código 8 Dígitos</span>
+                        </div>
+                        {restEmployees.length === 0 ? (
+                          <div className="text-[11px] text-neutral-500 italic">Sin empleados registrados</div>
+                        ) : (
+                          <div className="space-y-1 max-h-28 overflow-y-auto pr-1">
+                            {restEmployees.map(emp => (
+                              <div key={emp.id} className="flex items-center justify-between bg-neutral-950 px-2 py-1 rounded-lg border border-neutral-800">
+                                <div className="truncate pr-2">
+                                  <span className="font-bold text-neutral-200">{emp.nombre}</span>
+                                  <span className="text-[10px] text-neutral-500 ml-1 uppercase">({emp.puesto})</span>
+                                </div>
+                                <span className="font-mono font-black text-emerald-400 text-xs shrink-0">
+                                  {sedeCode}{emp.pin}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Acciones Rápidas del Restaurante */}
+                    <div className="pt-3 border-t border-neutral-800/80 grid grid-cols-2 gap-2">
+                      {onInspectRestaurant && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            sounds.playKeypadClick();
+                            onInspectRestaurant(rest);
+                          }}
+                          className="py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer shadow-md shadow-purple-600/20"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>Abrir Panel Sede</span>
+                        </button>
+                      )}
+                      {parentBiz && (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditSub(parentBiz)}
+                          className="py-2 px-3 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-purple-200 border border-purple-700/70 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-purple-300" />
+                          <span>Suscripción</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* LISTADO DE SUSCRIPCIONES Y CLIENTES SAAS (UNIFICADO CON TODOS LOS RESTAURANTES EN BD) */}
+      {viewMode === 'all_unified' && (
       <div className="space-y-3">
         <div className="flex items-center justify-between text-xs font-bold text-neutral-400 px-1">
-          <span>Mostrando {filteredBusinesses.length} suscripciones</span>
+          <span>Mostrando {filteredBusinesses.length} negocios ({allRestaurants.length} restaurantes en BD)</span>
           <span>SaaS Tenant ID Isolation Level: Strict</span>
         </div>
 
@@ -712,7 +1160,8 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
               const sub = biz.suscripcion;
               const subState = sub?.estado || (biz.activo ? 'activo' : 'suspendido');
               const planName = sub?.plan || biz.plan || 'basico';
-              const branchCount = branchesByBiz.get(biz.id) || 1;
+              const bizRestaurants = restaurantsByBiz.get(biz.id) || [];
+              const branchCount = bizRestaurants.length || branchesByBiz.get(biz.id) || 1;
               const maxBranches = sub?.limiteSucursales || (planName === 'enterprise' ? 10 : planName === 'pro' ? 3 : 1);
 
               // Días para vencimiento
@@ -767,45 +1216,85 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                       </span>
                     </div>
 
-                    {/* Datos del Dueño y Clave Otorgada */}
-                    <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800 text-xs space-y-1.5">
-                      <div className="flex items-center justify-between text-neutral-400">
-                        <span className="font-semibold text-neutral-300">Administrador / Dueño:</span>
-                        <span className="font-bold text-white">{biz.ownerNombre || 'No asignado'}</span>
-                      </div>
-                      <div className="text-neutral-400 font-mono text-[11px] truncate flex items-center justify-between">
-                        <span className="truncate">{biz.email || biz.ownerEmail || 'Sin email'}</span>
-                        <span className="text-emerald-400 font-bold ml-2 shrink-0">🔑 {biz.ownerClave || 'Gastro1234'}</span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5 mt-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            sounds.playKeypadClick();
-                            const email = biz.email || biz.ownerEmail || '';
-                            const clave = biz.ownerClave || 'Gastro1234';
-                            const textToCopy = `🔑 CREDENCIALES DE ACCESO GASTRO SMART\n\nRestaurante: ${biz.nombre}\nUsuario / Email: ${email}\nClave Asignada: ${clave}\n\nIngresa desde: ${window.location.origin}`;
-                            navigator.clipboard.writeText(textToCopy);
-                            setSuccessMsg(`Credenciales de "${biz.nombre}" copiadas al portapapeles.`);
-                            setTimeout(() => setSuccessMsg(null), 3000);
-                          }}
-                          className="py-1.5 px-2 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-purple-300 font-bold text-[10px] transition flex items-center justify-center gap-1 cursor-pointer"
-                        >
-                          <Key className="w-3 h-3 text-purple-400" />
-                          <span>Copiar</span>
-                        </button>
+                    {/* Datos de la Empresa: Dueño, Código de 4 Dígitos y Clave Otorgada */}
+                    {(() => {
+                      const primaryBranchCode = bizRestaurants[0]?.codigoSede || biz.codigoSede || '';
+                      return (
+                        <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800 text-xs space-y-2">
+                          <div className="flex items-center justify-between text-neutral-400">
+                            <span className="font-semibold text-neutral-300">Administrador / Dueño:</span>
+                            <span className="font-bold text-white">{biz.ownerNombre || 'No asignado'}</span>
+                          </div>
+                          <div className="text-neutral-400 font-mono text-[11px] truncate flex items-center justify-between">
+                            <span className="truncate">{biz.email || biz.ownerEmail || 'Sin email'}</span>
+                            <span className="text-emerald-400 font-bold ml-2 shrink-0">🔑 {biz.ownerClave || 'Gastro1234'}</span>
+                          </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleOpenPasswordModal(biz)}
-                          className="py-1.5 px-2 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-300 font-bold text-[10px] transition flex items-center justify-center gap-1 cursor-pointer"
-                          title="Cambiar o generar una nueva clave de acceso para el administrador"
-                        >
-                          <RefreshCw className="w-3 h-3 text-emerald-400" />
-                          <span>Nueva Clave</span>
-                        </button>
-                      </div>
-                    </div>
+                          {/* Fila destacada: Los 4 dígitos de la empresa / sede */}
+                          <div className="pt-2 border-t border-neutral-800 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <Hash className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <span className="font-bold text-amber-200 text-[11px]">Código 4 Dígitos (Sede):</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/20 border border-amber-500/50 text-amber-300 font-mono font-black text-sm tracking-widest shadow-xs">
+                                {primaryBranchCode || 'SIN CÓD.'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenBranchCodeModal(biz, bizRestaurants[0])}
+                                className="py-1 px-2 rounded-lg bg-amber-950/90 hover:bg-amber-800/80 border border-amber-700/80 text-amber-200 font-bold text-[10px] transition flex items-center gap-1 cursor-pointer"
+                                title="Asignar o crear el código de 4 dígitos de esta empresa"
+                              >
+                                <Edit3 className="w-3 h-3 text-amber-400" />
+                                <span>{primaryBranchCode ? 'Cambiar' : 'Crear 4 Díg.'}</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-1.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                sounds.playKeypadClick();
+                                const email = biz.email || biz.ownerEmail || '';
+                                const clave = biz.ownerClave || 'Gastro1234';
+                                const codeText = primaryBranchCode || 'Pendiente';
+                                const textToCopy = `🔑 CREDENCIALES DE ACCESO GASTRO SMART\n\nRestaurante / Empresa: ${biz.nombre}\nCódigo de Empresa / Sede (4 dígitos): ${codeText}\nUsuario / Email: ${email}\nClave Asignada: ${clave}\n\nIngresa desde: ${window.location.origin}`;
+                                navigator.clipboard.writeText(textToCopy);
+                                setSuccessMsg(`Credenciales y código (${codeText}) de "${biz.nombre}" copiados al portapapeles.`);
+                                setTimeout(() => setSuccessMsg(null), 3000);
+                              }}
+                              className="py-1.5 px-2 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-purple-300 font-bold text-[10px] transition flex items-center justify-center gap-1 cursor-pointer"
+                              title="Copiar correo, clave y código de 4 dígitos"
+                            >
+                              <Key className="w-3 h-3 text-purple-400" />
+                              <span>Copiar Todo</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenBranchCodeModal(biz, bizRestaurants[0])}
+                              className="py-1.5 px-2 rounded-lg bg-amber-950/80 hover:bg-amber-900 border border-amber-800/80 text-amber-300 font-bold text-[10px] transition flex items-center justify-center gap-1 cursor-pointer"
+                              title="Asignar o generar código de 4 dígitos para la empresa"
+                            >
+                              <Hash className="w-3 h-3 text-amber-400" />
+                              <span>4 Dígitos</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPasswordModal(biz)}
+                              className="py-1.5 px-2 rounded-lg bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-300 font-bold text-[10px] transition flex items-center justify-center gap-1 cursor-pointer"
+                              title="Cambiar o generar una nueva clave de acceso para el administrador"
+                            >
+                              <RefreshCw className="w-3 h-3 text-emerald-400" />
+                              <span>Nueva Clave</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Ficha Técnica de Suscripción */}
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -836,6 +1325,60 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                         {daysLeft > 0 ? `${daysLeft} días restantes` : 'Expirado'}
                       </span>
                     </div>
+
+                    {/* Restaurantes / Sucursales Creados en BD para este Negocio */}
+                    {bizRestaurants.length > 0 && (
+                      <div className="p-3 rounded-2xl bg-neutral-900/90 border border-neutral-800 space-y-2">
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-purple-300">
+                          <span className="flex items-center gap-1">
+                            <Store className="w-3 h-3 text-purple-400" />
+                            Restaurantes en BD ({bizRestaurants.length})
+                          </span>
+                          <span>Cód. Sede</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {bizRestaurants.map(rest => (
+                            <div
+                              key={rest.id}
+                              className="p-2 rounded-xl bg-neutral-950 border border-neutral-800 flex items-center justify-between gap-2 text-xs"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-bold text-white truncate flex items-center gap-1.5">
+                                  <span className="truncate">{rest.nombre}</span>
+                                </div>
+                                <div className="text-[10px] text-neutral-400 truncate">
+                                  {rest.direccion || 'Sin dirección'} • {rest.numeroMesas || 10} mesas
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenBranchCodeModal(biz, rest)}
+                                  className="px-2 py-0.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-mono font-black text-xs flex items-center gap-1 transition cursor-pointer"
+                                  title="Clic para cambiar o asignar los 4 dígitos de esta sede"
+                                >
+                                  <span>{rest.codigoSede || '----'}</span>
+                                  <Edit3 className="w-2.5 h-2.5 text-amber-400" />
+                                </button>
+                                {onInspectRestaurant && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      sounds.playKeypadClick();
+                                      onInspectRestaurant(rest);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-purple-900/70 hover:bg-purple-700 text-purple-200 border border-purple-700/60 transition cursor-pointer"
+                                    title={`Abrir panel de ${rest.nombre}`}
+                                  >
+                                    <ExternalLink className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                   </div>
 
@@ -907,6 +1450,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
           </div>
         )}
       </div>
+      )}
 
       {/* MODAL EDITAR SUSCRIPCIÓN Y LÍMITES */}
       {editingBusiness && (
@@ -978,7 +1522,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                   <span className="text-[10px] text-purple-400 font-normal">Gestionadas por Creador</span>
                 </span>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-[10px] text-neutral-400 font-bold mb-1">Correo de Acceso</label>
                     <input
@@ -1006,6 +1550,30 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                       value={subForm.ownerClave}
                       onChange={(e) => setSubForm({ ...subForm, ownerClave: e.target.value })}
                       className="w-full h-10 px-3 rounded-xl bg-neutral-900 border border-neutral-800 font-mono text-xs text-emerald-400 font-bold focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[10px] text-amber-300 font-bold">Código 4 Dígitos</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const existingCodes = new Set(allRestaurants.map(r => r.codigoSede).filter(Boolean) as string[]);
+                          setSubForm({ ...subForm, codigoSede: generateUniqueBranchCode(existingCodes) });
+                        }}
+                        className="text-[9px] font-bold text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <RefreshCw className="w-2.5 h-2.5" /> Crear 4 Díg.
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      maxLength={4}
+                      value={subForm.codigoSede}
+                      onChange={(e) => setSubForm({ ...subForm, codigoSede: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                      placeholder="Ej: 3592"
+                      className="w-full h-10 px-3 rounded-xl bg-neutral-900 border border-amber-700/60 font-mono text-sm text-amber-300 font-black tracking-widest text-center focus:outline-none focus:border-amber-400"
                     />
                   </div>
                 </div>
@@ -1192,7 +1760,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block font-bold text-neutral-300 mb-1">Nombre Completo del Dueño</label>
                   <input
@@ -1206,7 +1774,7 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="block font-bold text-neutral-300">Clave de Acceso Otorgada *</label>
+                    <label className="block font-bold text-neutral-300">Clave de Acceso *</label>
                     <button
                       type="button"
                       onClick={() => setTenantForm({ ...tenantForm, clave: 'Gastro' + Math.floor(1000 + Math.random() * 9000) })}
@@ -1223,6 +1791,32 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                     onChange={(e) => setTenantForm({ ...tenantForm, clave: e.target.value })}
                     placeholder="Ej: Gastro9824"
                     className="w-full h-11 px-3.5 rounded-xl bg-neutral-950 border border-neutral-800 font-mono text-purple-300 font-bold focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-amber-300">Código 4 Dígitos *</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const existingCodes = new Set(allRestaurants.map(r => r.codigoSede).filter(Boolean) as string[]);
+                        setTenantForm({ ...tenantForm, codigoSede: generateUniqueBranchCode(existingCodes) });
+                      }}
+                      className="text-[10px] font-bold text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      <span>Crear 4 Díg.</span>
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    maxLength={4}
+                    value={tenantForm.codigoSede}
+                    onChange={(e) => setTenantForm({ ...tenantForm, codigoSede: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    placeholder="Ej: 3592"
+                    className="w-full h-11 px-3.5 rounded-xl bg-neutral-950 border border-amber-600/70 font-mono text-base text-amber-300 font-black tracking-widest text-center focus:outline-none focus:border-amber-400"
                   />
                 </div>
               </div>
@@ -1336,7 +1930,16 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
             </div>
 
             <div className="bg-neutral-950 p-4 rounded-2xl border border-neutral-800 text-left space-y-3 font-mono text-xs">
-              <div>
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/40">
+                <div>
+                  <span className="text-amber-300/80 font-sans block text-[10px] uppercase font-bold">Código de Empresa / Sede (4 Dígitos):</span>
+                  <span className="text-[10px] font-sans text-neutral-400">Prefijo para terminales de personal</span>
+                </div>
+                <span className="text-amber-300 font-black text-xl tracking-widest px-3 py-1 rounded-lg bg-amber-500/20 border border-amber-500/40">
+                  {createdCredsModal.codigoSede}
+                </span>
+              </div>
+              <div className="pt-1">
                 <span className="text-neutral-500 font-sans block text-[10px] uppercase font-bold">Correo de Acceso:</span>
                 <span className="text-purple-300 font-bold">{createdCredsModal.email || 'No especificado'}</span>
               </div>
@@ -1351,9 +1954,9 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                 type="button"
                 onClick={() => {
                   sounds.playKeypadClick();
-                  const textToCopy = `🔑 CREDENCIALES ACREDITADAS POR EL CREADOR (GASTRO SMART)\n\nRestaurante: ${createdCredsModal.businessName}\nUsuario / Email Acreditado: ${createdCredsModal.email}\nClave de Acceso Asignada: ${createdCredsModal.clave}\n\nAcceso a la Plataforma: ${window.location.origin}`;
+                  const textToCopy = `🔑 CREDENCIALES ACREDITADAS POR EL CREADOR (GASTRO SMART)\n\nRestaurante / Empresa: ${createdCredsModal.businessName}\nCódigo de Empresa / Sede (4 dígitos): ${createdCredsModal.codigoSede}\nUsuario / Email Acreditado: ${createdCredsModal.email}\nClave de Acceso Asignada: ${createdCredsModal.clave}\n\nAcceso a la Plataforma: ${window.location.origin}`;
                   navigator.clipboard.writeText(textToCopy);
-                  setSuccessMsg('¡Credenciales acreditadas copiadas al portapapeles! Listo para enviar por WhatsApp / Email.');
+                  setSuccessMsg('¡Credenciales y código de 4 dígitos copiados al portapapeles! Listo para enviar por WhatsApp / Email.');
                   setTimeout(() => setSuccessMsg(null), 4000);
                 }}
                 className="w-full h-12 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 font-black text-xs text-white shadow-lg shadow-purple-600/30 transition flex items-center justify-center gap-2 cursor-pointer"
@@ -1557,6 +2160,111 @@ export const CreatorDashboard: React.FC<CreatorDashboardProps> = ({
                 type="button"
                 disabled={isUpdatingPass}
                 onClick={() => setPasswordModalBiz(null)}
+                className="w-full h-11 rounded-xl bg-neutral-800 hover:bg-neutral-700 font-bold text-xs text-neutral-300 transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DEDICADO: ASIGNAR O CREAR CÓDIGO DE 4 DÍGITOS DE LA EMPRESA / SEDE */}
+      {branchCodeModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-neutral-900 border border-amber-500/50 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5 text-neutral-100">
+            
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 rounded-2xl bg-amber-900/80 text-amber-300 border border-amber-700">
+                  <Hash className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-black text-lg text-white">Código de 4 Dígitos de Empresa</h3>
+                  <p className="text-xs text-neutral-400">{branchCodeModal.biz.nombre}</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setBranchCodeModal(null)}
+                className="text-neutral-400 hover:text-white p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="p-3 rounded-2xl bg-neutral-950 border border-neutral-800 space-y-1">
+                <span className="text-[10px] text-neutral-500 font-bold uppercase block">Empresa / Sucursal Objetivo</span>
+                <div className="font-bold text-sm text-white truncate">
+                  {branchCodeModal.restaurantName || branchCodeModal.biz.nombre}
+                </div>
+                <div className="text-[11px] text-neutral-400 font-mono">
+                  ID Empresa: {branchCodeModal.biz.id}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block font-bold text-amber-300">Asignar o Crear Código (4 Dígitos) *</label>
+                  <button
+                    type="button"
+                    onClick={handleGenerateRandomBranchCode}
+                    className="text-xs font-bold text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Wand2 className="w-3.5 h-3.5" /> Generar 4 Dígitos Aleatorios
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    maxLength={4}
+                    value={newBranchCodeValue}
+                    onChange={(e) => setNewBranchCodeValue(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="Ej: 3592"
+                    className="w-full h-14 px-4 rounded-xl bg-neutral-950 border-2 border-amber-600/80 font-mono text-2xl text-amber-300 font-black tracking-[0.35em] text-center focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playKeypadClick();
+                      navigator.clipboard.writeText(newBranchCodeValue);
+                      setSuccessMsg(`Código de 4 dígitos "${newBranchCodeValue}" copiado al portapapeles.`);
+                      setTimeout(() => setSuccessMsg(null), 3000);
+                    }}
+                    className="absolute right-2.5 top-3 h-8 px-3 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Copiar</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-950/30 border border-amber-800/50 text-amber-200/90 text-[11px] space-y-1 leading-relaxed">
+                <div className="font-bold text-amber-300">🔢 ¿Cómo funciona este código de 4 dígitos?</div>
+                <p>
+                  Identifica de forma única a esta empresa/sede. Los empleados ingresan al terminal marcando <strong>8 dígitos</strong>:
+                </p>
+                <div className="font-mono text-xs bg-neutral-950 px-2.5 py-1.5 rounded-lg border border-amber-900/60 text-center text-white mt-1">
+                  <span className="text-amber-400 font-black">{newBranchCodeValue.padEnd(4, '•')}</span> (Empresa) + <span className="text-emerald-400 font-black">1234</span> (PIN Empleado) = <span className="font-black text-purple-300">{newBranchCodeValue.padEnd(4, '•')}1234</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-neutral-800">
+              <button
+                type="button"
+                disabled={isUpdatingBranchCode || newBranchCodeValue.replace(/\D/g, '').length !== 4}
+                onClick={handleSaveBranchCode}
+                className="w-full h-12 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 font-black text-xs text-white shadow-lg shadow-amber-600/30 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <Check className="w-4 h-4 stroke-[3]" />
+                <span>{isUpdatingBranchCode ? 'Guardando Código en BD...' : 'Guardar y Asignar Código de 4 Dígitos'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isUpdatingBranchCode}
+                onClick={() => setBranchCodeModal(null)}
                 className="w-full h-11 rounded-xl bg-neutral-800 hover:bg-neutral-700 font-bold text-xs text-neutral-300 transition cursor-pointer"
               >
                 Cancelar

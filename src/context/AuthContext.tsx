@@ -171,27 +171,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   // 3. Suscribirse al negocio del usuario logueado o default
+  const isSuperAdmin = currentUserAccount?.rol === 'superadmin';
   const loggedInBusinessId = currentUserAccount?.businessId || currentEmployee?.businessId || null;
+  const activeTenantBusinessId = isSuperAdmin
+    ? (allRestaurants.find(r => r.id === selectedRestaurantId)?.businessId || loggedInBusinessId)
+    : loggedInBusinessId;
 
   useEffect(() => {
-    if (!loggedInBusinessId) return;
-    const unsubBiz = subscribeToBusiness(loggedInBusinessId, (biz) => {
+    if (!activeTenantBusinessId) return;
+    const unsubBiz = subscribeToBusiness(activeTenantBusinessId, (biz) => {
       setCurrentBusiness(biz);
     });
-    const unsubAlerts = subscribeToSecurityAlerts(loggedInBusinessId, (alerts) => {
+    const unsubAlerts = subscribeToSecurityAlerts(activeTenantBusinessId, (alerts) => {
       setSecurityAlerts(alerts);
     });
     return () => {
       unsubBiz();
       unsubAlerts();
     };
-  }, [loggedInBusinessId]);
+  }, [activeTenantBusinessId]);
 
   // 4. Suscribirse a restaurantes y empleados:
-  // Si hay sesión activa (Admin/Dueño o Empleado): suscripción acotada a su businessId.
-  // Si NO hay sesión (Pantalla de login / Terminal PIN): suscribir a todos los restaurantes y empleados de Gastro Smart.
+  // Si hay sesión activa de un cliente/empleado (NO superadmin): suscripción acotada a su businessId.
+  // Si es SuperAdmin (Creador) o NO hay sesión (Pantalla de login / Terminal PIN): suscribir a TODOS los restaurantes y empleados de Gastro Smart.
   useEffect(() => {
-    if (loggedInBusinessId) {
+    if (loggedInBusinessId && !isSuperAdmin) {
       const unsubRestaurants = subscribeToRestaurants(loggedInBusinessId, (data) => {
         setAllRestaurants(data);
         if (data.length > 0) {
@@ -237,7 +241,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         unsubEmployees();
       };
     }
-  }, [loggedInBusinessId]);
+  }, [loggedInBusinessId, isSuperAdmin]);
 
   // 4. Suscribirse al turno activo del empleado operativo
   useEffect(() => {

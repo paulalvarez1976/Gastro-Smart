@@ -33,6 +33,7 @@ const MainAppContent: React.FC = () => {
     currentRestaurant, 
     allRestaurants, 
     allEmployees,
+    selectRestaurant,
     isLoadingAuth 
   } = useAuth();
   
@@ -69,7 +70,10 @@ const MainAppContent: React.FC = () => {
 
   // Subscriptions to Firestore collections
   const activeUser = currentUserAccount || currentEmployee;
-  const activeBizId = currentUserAccount?.businessId || currentEmployee?.businessId || allRestaurants[0]?.businessId || UNIQUE_BUSINESS_ID;
+  const isSuperAdmin = currentUserAccount?.rol === 'superadmin';
+  const activeBizId = isSuperAdmin
+    ? (currentRestaurant?.businessId || allRestaurants[0]?.businessId || currentUserAccount?.businessId || UNIQUE_BUSINESS_ID)
+    : (currentUserAccount?.businessId || currentEmployee?.businessId || currentRestaurant?.businessId || allRestaurants[0]?.businessId || UNIQUE_BUSINESS_ID);
 
   useEffect(() => {
     if (!activeUser) return;
@@ -149,6 +153,11 @@ const MainAppContent: React.FC = () => {
           <CreatorDashboard 
             businesses={allBusinesses}
             allRestaurants={allRestaurants}
+            allEmployees={allEmployees}
+            onInspectRestaurant={(rest) => {
+              selectRestaurant(rest.id);
+              setSaasView('restaurant');
+            }}
           />
         ) : (
           <AdminDashboard 
