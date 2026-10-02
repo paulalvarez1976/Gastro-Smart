@@ -735,27 +735,42 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
           </div>
         </div>
 
-        {/* Selector de Sucursal */}
+        {/* Selector de Sucursal & Modo Consolidado */}
         <div className="flex flex-col gap-1.5 w-full md:w-auto">
           <label className="text-[11px] font-extrabold uppercase tracking-wider text-neutral-500 flex items-center gap-1.5">
             <Building2 className="w-3.5 h-3.5 text-orange-600" />
-            <span>Sucursal / Sede</span>
+            <span>Alcance / Sucursales</span>
           </label>
           
           {accessibleRestaurants.length > 1 ? (
-            <div className="relative">
-              <select
-                value={selectedBranchId}
-                onChange={(e) => handleBranchChange(e.target.value)}
-                className="h-10 pl-3.5 pr-8 rounded-xl bg-neutral-50 border border-neutral-300 font-bold text-xs text-neutral-800 focus:ring-2 focus:ring-blue-500 focus:outline-hidden cursor-pointer"
-              >
-                {isOwner && <option value="all">🏢 Todas las sucursales ({accessibleRestaurants.length})</option>}
-                {accessibleRestaurants.map(r => (
-                  <option key={r.id} value={r.id}>
-                    📍 {r.nombre}
-                  </option>
-                ))}
-              </select>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <div className="relative">
+                <select
+                  value={selectedBranchId}
+                  onChange={(e) => handleBranchChange(e.target.value)}
+                  className="h-10 pl-3.5 pr-8 rounded-xl bg-neutral-50 border border-neutral-300 font-bold text-xs text-neutral-800 focus:ring-2 focus:ring-blue-500 focus:outline-hidden cursor-pointer shadow-2xs"
+                >
+                  <option value="all">🏢 Todas las sucursales (Consolidado General - {accessibleRestaurants.length} Sedes)</option>
+                  {accessibleRestaurants.map(r => (
+                    <option key={r.id} value={r.id}>
+                      📍 {r.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Botón rápido para alternar a Consolidado General */}
+              {selectedBranchId !== 'all' && (
+                <button
+                  type="button"
+                  onClick={() => handleBranchChange('all')}
+                  className="h-10 px-3 rounded-xl bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 text-xs font-black transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  title="Ver consolidado general de todas las sucursales"
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>Ver Consolidado</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="h-10 px-3.5 rounded-xl bg-neutral-100 border border-neutral-200 flex items-center gap-2 text-xs font-bold text-neutral-700">
@@ -2036,29 +2051,91 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
 
       </div>
 
-      {/* 6. COMPARATIVO MULTI-SUCURSAL (Gráfico de líneas dinámico reemplazando tabla de solo texto) */}
+      {/* 6. CENTRO DE REPORTES CONSOLIDADOS MULTI-SUCURSAL (Toda la Empresa) */}
       {selectedBranchId === 'all' && accessibleRestaurants.length > 1 && (
-        <div className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-xs space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-4 border-b border-neutral-100">
-            <div>
-              <h4 className="font-black text-neutral-900 text-base flex items-center gap-2">
-                <Building2 className="w-5 h-5 text-orange-600" />
-                <span>Comparativa de Rendimiento de Ventas entre Sucursales</span>
-              </h4>
-              <p className="text-xs text-neutral-500 mt-0.5">
-                Visualización dinámica de ventas, gastos y ganancia neta por sede en el periodo seleccionado.
-              </p>
+        <div className="bg-white rounded-3xl border-2 border-indigo-100 p-6 shadow-sm space-y-5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-neutral-100">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-black shadow-md shadow-indigo-600/20 shrink-0 mt-0.5">
+                <Building2 className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-black text-neutral-900 text-base sm:text-lg">
+                    Reporte Consolidado de la Empresa ({accessibleRestaurants.length} Sucursales)
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-black uppercase tracking-wider">
+                    Vista Global
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-500 mt-0.5">
+                  Análisis comparativo de rendimiento comercial, desglose de costos operativos y margen por sede.
+                </p>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                sounds.playKeypadClick();
-                setShowBranchTextTable(prev => !prev);
-              }}
-              className="px-3 py-1.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-xs font-bold transition cursor-pointer"
-            >
-              {showBranchTextTable ? 'Ver Gráfico de Líneas Dinámico' : 'Ver Tabla de Datos'}
-            </button>
+
+            {/* Quick action buttons for consolidated reports */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowPdfReport(true)}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black transition flex items-center gap-1.5 shadow-sm shadow-indigo-600/20 cursor-pointer"
+                title="Generar e imprimir Reporte Ejecutivo Consolidado en PDF"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>PDF Consolidado</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportExcel}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black transition flex items-center gap-1.5 shadow-sm shadow-emerald-600/20 cursor-pointer"
+                title="Exportar balance consolidado de todas las sucursales a Excel"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Excel Consolidado</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  sounds.playKeypadClick();
+                  setShowBranchTextTable(prev => !prev);
+                }}
+                className="px-3 py-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-800 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-neutral-200"
+              >
+                <BarChart3 className="w-3.5 h-3.5 text-neutral-600" />
+                <span>{showBranchTextTable ? 'Ver Gráfico Dinámico' : 'Ver Tabla Detallada'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Cards de Métricas Consolidadas Rápidas */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 rounded-2xl bg-neutral-50 border border-neutral-200">
+              <span className="text-[10px] uppercase font-bold text-neutral-400 block">Total Facturado Empresa</span>
+              <span className="text-base sm:text-lg font-black font-mono text-emerald-700">
+                ${summaryData?.ventasTotales.actual.toFixed(2) || '0.00'}
+              </span>
+            </div>
+            <div className="p-3 rounded-2xl bg-neutral-50 border border-neutral-200">
+              <span className="text-[10px] uppercase font-bold text-neutral-400 block">Gastos Globales</span>
+              <span className="text-base sm:text-lg font-black font-mono text-rose-600">
+                ${summaryData?.gastosOperativos.actual.toFixed(2) || '0.00'}
+              </span>
+            </div>
+            <div className="p-3 rounded-2xl bg-neutral-50 border border-neutral-200">
+              <span className="text-[10px] uppercase font-bold text-neutral-400 block">Utilidad Neta Global</span>
+              <span className="text-base sm:text-lg font-black font-mono text-indigo-700">
+                ${summaryData?.gananciaNeta.actual.toFixed(2) || '0.00'}
+              </span>
+            </div>
+            <div className="p-3 rounded-2xl bg-neutral-50 border border-neutral-200">
+              <span className="text-[10px] uppercase font-bold text-neutral-400 block">Margen Operativo Promedio</span>
+              <span className="text-base sm:text-lg font-black font-mono text-neutral-900">
+                {summaryData?.margenPorcentaje.actual || 0}%
+              </span>
+            </div>
           </div>
 
           {!showBranchTextTable ? (
@@ -2125,9 +2202,9 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-2xl border border-neutral-200">
               <table className="w-full text-left text-xs">
-                <thead className="bg-neutral-50 text-neutral-500 font-bold uppercase text-[10px] border-b border-neutral-200">
+                <thead className="bg-neutral-100 text-neutral-600 font-bold uppercase text-[10px] border-b border-neutral-200">
                   <tr>
                     <th 
                       onClick={() => handleToggleSort('nombre')}
@@ -2192,41 +2269,54 @@ export const FinancialDashboard: React.FC<FinancialDashboardProps> = ({
                         {sortField === 'margen' && (sortAsc ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />)}
                       </div>
                     </th>
+                    <th className="p-3 text-right">
+                      <span>Part. %</span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100">
-                  {sortedBranches.map((branch, idx) => (
-                    <tr key={`${branch.restaurantId}-${idx}`} className="hover:bg-neutral-50/70 transition">
-                      <td className="p-3 font-bold text-neutral-900 flex items-center gap-2">
-                        <Building2 className="w-3.5 h-3.5 text-neutral-400" />
-                        <span>{branch.nombre}</span>
-                      </td>
-                      <td className="p-3 text-right font-black font-mono text-neutral-900">
-                        ${branch.ventas.toFixed(2)}
-                      </td>
-                      <td className="p-3 text-right font-black font-mono text-rose-600">
-                        ${branch.gastos.toFixed(2)}
-                      </td>
-                      <td className="p-3 text-right font-black font-mono text-emerald-700">
-                        ${branch.ganancia.toFixed(2)}
-                      </td>
-                      <td className="p-3 text-right font-bold text-neutral-700">
-                        {branch.pedidos}
-                      </td>
-                      <td className="p-3 text-right font-mono text-neutral-700">
-                        ${branch.ticketPromedio.toFixed(2)}
-                      </td>
-                      <td className="p-3 text-right">
-                        <span className={`px-2 py-0.5 rounded-full font-extrabold text-[11px] ${
-                          branch.margen >= 20 ? 'bg-emerald-100 text-emerald-800' :
-                          branch.margen >= 10 ? 'bg-amber-100 text-amber-800' :
-                          'bg-rose-100 text-rose-800'
-                        }`}>
-                          {branch.margen.toFixed(1)}%
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {sortedBranches.map((branch, idx) => {
+                    const totalCompanySales = summaryData?.ventasTotales.actual || 0;
+                    const sharePct = totalCompanySales > 0 
+                      ? Math.round((branch.ventas / totalCompanySales) * 1000) / 10
+                      : 0;
+
+                    return (
+                      <tr key={`${branch.restaurantId}-${idx}`} className="hover:bg-neutral-50/70 transition">
+                        <td className="p-3 font-bold text-neutral-900 flex items-center gap-2">
+                          <Building2 className="w-3.5 h-3.5 text-neutral-400" />
+                          <span>{branch.nombre}</span>
+                        </td>
+                        <td className="p-3 text-right font-black font-mono text-neutral-900">
+                          ${branch.ventas.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-right font-black font-mono text-rose-600">
+                          ${branch.gastos.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-right font-black font-mono text-emerald-700">
+                          ${branch.ganancia.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-right font-bold text-neutral-700">
+                          {branch.pedidos}
+                        </td>
+                        <td className="p-3 text-right font-mono text-neutral-700">
+                          ${branch.ticketPromedio.toFixed(2)}
+                        </td>
+                        <td className="p-3 text-right">
+                          <span className={`px-2 py-0.5 rounded-full font-extrabold text-[11px] ${
+                            branch.margen >= 20 ? 'bg-emerald-100 text-emerald-800' :
+                            branch.margen >= 10 ? 'bg-amber-100 text-amber-800' :
+                            'bg-rose-100 text-rose-800'
+                          }`}>
+                            {branch.margen.toFixed(1)}%
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-bold font-mono text-neutral-800">
+                          {sharePct}%
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

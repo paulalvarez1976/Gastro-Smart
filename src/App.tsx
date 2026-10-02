@@ -16,13 +16,16 @@ import {
   subscribeToTables, 
   subscribeToShifts, 
   subscribeToClients, 
+  subscribeToInventoryItems,
   updateOrderStatus 
 } from './services/dataService';
-import { Order, MenuItem, Table, Shift, Client } from './types';
+import { Order, MenuItem, Table, Shift, Client, InventoryItem } from './types';
 import { UtensilsCrossed, ShieldAlert, Loader2 } from 'lucide-react';
 import { sounds } from './utils/sound';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { TestModeBanner } from './components/TestModeBanner';
+import { CookieConsentBanner } from './components/CookieConsentBanner';
+import { ConfidentialityContractModal } from './components/ConfidentialityContractModal';
 
 const MainAppContent: React.FC = () => {
   const { 
@@ -40,12 +43,22 @@ const MainAppContent: React.FC = () => {
   // App-wide Real-Time State (Firestore onSnapshot)
   const [orders, setOrders] = useState<Order[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
 
   // Vista SaaS (Panel Creador vs Panel Restaurante)
   const [saasView, setSaasView] = useState<'restaurant' | 'superadmin'>('restaurant');
+
+  // Modal global para Contrato de Confidencialidad
+  const [showGlobalContractModal, setShowGlobalContractModal] = useState(false);
+
+  useEffect(() => {
+    const handleOpenContract = () => setShowGlobalContractModal(true);
+    window.addEventListener('open-confidentiality-contract', handleOpenContract);
+    return () => window.removeEventListener('open-confidentiality-contract', handleOpenContract);
+  }, []);
 
   useEffect(() => {
     if (currentUserAccount?.rol === 'superadmin') {
@@ -100,12 +113,17 @@ const MainAppContent: React.FC = () => {
       setClients(data);
     }, activeBizId);
 
+    const unsubInventory = subscribeToInventoryItems(currentRestId, (data) => {
+      setInventoryItems(data);
+    }, activeBizId);
+
     return () => {
       unsubOrders();
       unsubMenu();
       unsubTables();
       unsubShifts();
       unsubClients();
+      unsubInventory();
     };
   }, [activeUser, currentRestaurant, activeBizId]);
 
@@ -205,7 +223,7 @@ const MainAppContent: React.FC = () => {
         />
 
         {currentEmployee.puesto === 'cocina' && (
-          <KitchenDisplay orders={orders} />
+          <KitchenDisplay orders={orders} inventoryItems={inventoryItems} menuItems={menuItems} />
         )}
 
         {currentEmployee.puesto === 'mesero' && (
@@ -314,11 +332,41 @@ const MainAppContent: React.FC = () => {
           </div>
         )}
 
+        {/* Modal Global de Contrato de Confidencialidad */}
+        {showGlobalContractModal && (
+          <ConfidentialityContractModal
+            businessName={currentBusiness?.nombre || currentRestaurant?.nombre || 'Mi Restaurante'}
+            businessRif={currentBusiness?.rif_o_ruc || 'J-00000000-0'}
+            representativeName={currentUserAccount?.nombre || currentEmployee?.nombre || 'Administrador'}
+            onClose={() => setShowGlobalContractModal(false)}
+          />
+        )}
+
+        {/* Banner de Autorización de Cookies & Privacidad */}
+        <CookieConsentBanner 
+          onOpenContract={() => setShowGlobalContractModal(true)} 
+        />
+
       </div>
     );
   }
 
-  return <PinLogin />;
+  return (
+    <>
+      <PinLogin />
+      {showGlobalContractModal && (
+        <ConfidentialityContractModal
+          businessName={currentBusiness?.nombre || 'Mi Restaurante'}
+          businessRif={currentBusiness?.rif_o_ruc || 'J-00000000-0'}
+          representativeName="Administrador"
+          onClose={() => setShowGlobalContractModal(false)}
+        />
+      )}
+      <CookieConsentBanner 
+        onOpenContract={() => setShowGlobalContractModal(true)} 
+      />
+    </>
+  );
 };
 
 export default function App() {

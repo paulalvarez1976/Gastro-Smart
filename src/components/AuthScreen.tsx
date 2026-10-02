@@ -943,8 +943,25 @@ export const AuthScreen: React.FC = () => {
       )}
 
       {/* Footer info */}
-      <div className="mt-6 text-center text-xs text-neutral-500 font-medium">
-        Gastro Smart POS • Gestión Segura de Restaurantes
+      <div className="mt-6 text-center text-xs text-neutral-500 font-medium space-y-1.5">
+        <div className="flex items-center justify-center gap-3 text-[11px] text-neutral-500 flex-wrap">
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('open-confidentiality-contract'))}
+            className="hover:text-orange-600 hover:underline cursor-pointer flex items-center gap-1"
+          >
+            <span>📜 Contrato de Confidencialidad</span>
+          </button>
+          <span>•</span>
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('open-cookie-settings'))}
+            className="hover:text-orange-600 hover:underline cursor-pointer flex items-center gap-1"
+          >
+            <span>🍪 Autorización de Cookies</span>
+          </button>
+        </div>
+        <div>Gastro Smart POS • Gestión Segura de Restaurantes & Cumplimiento RGPD</div>
       </div>
 
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { MenuItem, Table, OrderItem, Order, Client, OrderDiner } from '../types';
 import { OrderSetupData } from './WaiterOrderSetup';
 import { sounds } from '../utils/sound';
@@ -101,6 +101,70 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
 
   // Fullscreen Modal State (Expands to 100vw / 100vh on open with z-index, restored upon Aceptar)
   const [isFullScreenModal, setIsFullScreenModal] = useState<boolean>(true);
+
+  // Vertical Scroll Reference & Position
+  const menuScrollRef = useRef<HTMLDivElement>(null);
+  const [scrollProgress, setScrollProgress] = useState<number>(0);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    if (target.scrollHeight > target.clientHeight) {
+      const progress = (target.scrollTop / (target.scrollHeight - target.clientHeight)) * 100;
+      setScrollProgress(progress);
+    }
+  };
+
+  const scrollToTop = () => {
+    sounds.playKeypadClick();
+    menuScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const scrollToBottom = () => {
+    sounds.playKeypadClick();
+    if (menuScrollRef.current) {
+      menuScrollRef.current.scrollTo({ top: menuScrollRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  };
+
+  // Toggle true hardware fullscreen + viewport overlay
+  const handleToggleFullscreen = async () => {
+    sounds.playKeypadClick();
+    try {
+      if (!document.fullscreenElement) {
+        if (document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+        }
+        setIsFullScreenModal(true);
+      } else {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        }
+        setIsFullScreenModal(!isFullScreenModal);
+      }
+    } catch {
+      setIsFullScreenModal(prev => !prev);
+    }
+  };
+
+  // Keyboard shortcut support for scrolling (PgUp, PgDn, Home, End)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['input', 'textarea', 'select'].includes((e.target as HTMLElement)?.tagName?.toLowerCase())) {
+        return;
+      }
+      if (e.key === 'Home') {
+        scrollToTop();
+      } else if (e.key === 'End') {
+        scrollToBottom();
+      } else if (e.key === 'PageUp') {
+        menuScrollRef.current?.scrollBy({ top: -400, behavior: 'smooth' });
+      } else if (e.key === 'PageDown') {
+        menuScrollRef.current?.scrollBy({ top: 400, behavior: 'smooth' });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Categories list & counts
   const categories = useMemo(() => {
@@ -279,10 +343,7 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
           {/* Botón de Alternar Modo Pantalla Completa (100vw / 100vh vs Normal) */}
           <button
             type="button"
-            onClick={() => {
-              sounds.playKeypadClick();
-              setIsFullScreenModal(!isFullScreenModal);
-            }}
+            onClick={handleToggleFullscreen}
             className={`p-2 rounded-xl transition cursor-pointer flex items-center gap-1 text-xs font-bold border ${
               isFullScreenModal 
                 ? 'bg-neutral-800 text-orange-400 border-orange-500/40 hover:bg-neutral-700' 
@@ -536,6 +597,7 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                 onClick={() => {
                   sounds.playKeypadClick();
                   setSelectedCategory(cat);
+                  menuScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer shrink-0 flex items-center gap-1.5 ${
                   isCatActive
@@ -555,11 +617,21 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
         </div>
       </div>
 
+      {/* Indicador visual de progreso de scroll arriba-abajo */}
+      <div className="w-full h-1 bg-neutral-800/80 shrink-0 overflow-hidden">
+        <div 
+          className="h-full bg-gradient-to-r from-orange-500 via-amber-400 to-orange-600 transition-all duration-75"
+          style={{ width: `${Math.min(100, Math.max(0, scrollProgress))}%` }}
+        />
+      </div>
+
       {/* ========================================================================= */}
-      {/* 4. ÁREA PRINCIPAL DE VISUALIZACIÓN DEL MENÚ (PANTALLA COMPLETA)           */}
+      {/* 4. ÁREA PRINCIPAL DE VISUALIZACIÓN DEL MENÚ (PANTALLA COMPLETA & SCROLL)  */}
       {/* ========================================================================= */}
       <main 
-        className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 overscroll-contain touch-pan-y"
+        ref={menuScrollRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-5 overscroll-y-contain touch-pan-y scroll-smooth scrollbar-thin scrollbar-thumb-neutral-700 scrollbar-track-transparent pb-36 sm:pb-44"
         style={{ WebkitOverflowScrolling: 'touch' }}
       >
         {filteredItems.length === 0 ? (
@@ -582,8 +654,8 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
             </button>
           </div>
         ) : viewMode === 'large' ? (
-          /* VISTA 1: DOBLE COLUMNA PARA EVITAR SCROLL Y MAXIMIZAR ESPACIO */
-          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-2.5 sm:gap-3.5 pb-24">
+          /* VISTA 1: CUADRÍCULA CON FOTO COMPACTA (MÁXIMA DENSIDAD Y PRESENTACIÓN DE PLATOS) */
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 3xl:grid-cols-8 gap-2 sm:gap-2.5 pb-24">
             {filteredItems.map((item, idx) => {
               const countInActiveDiner = cart
                 .filter(i => i.menuItemId === item.id && (setupData.orderTargetType !== 'mesa' || i.comensalId === activeDinerId))
@@ -596,11 +668,11 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
               return (
                 <div
                   key={`item-lg-${item.id}-${idx}`}
-                  className={`group relative bg-neutral-800 rounded-2xl border transition-all flex flex-col justify-between overflow-hidden select-none shadow-sm ${
+                  className={`group relative bg-neutral-800 rounded-2xl border transition-all flex flex-col justify-between overflow-hidden select-none shadow-xs ${
                     !item.disponible
                       ? 'opacity-40 border-neutral-800 cursor-not-allowed'
                       : countInActiveDiner > 0
-                        ? 'border-orange-500 bg-neutral-800/90 ring-2 ring-orange-500/30 shadow-lg shadow-orange-500/10'
+                        ? 'border-orange-500 bg-neutral-800/90 ring-2 ring-orange-500/30 shadow-md shadow-orange-500/10'
                         : 'border-neutral-700/80 hover:border-neutral-500 hover:bg-neutral-750 cursor-pointer'
                   }`}
                   onClick={() => {
@@ -611,15 +683,15 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                 >
                   {/* Badge de cantidad asignada al comensal activo */}
                   {countInActiveDiner > 0 && (
-                    <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1 bg-orange-600 text-white font-black text-xs px-2.5 py-1 rounded-full shadow-lg border border-orange-400/40 animate-in zoom-in-50">
-                      <Check className="w-3.5 h-3.5 stroke-[3]" />
+                    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 bg-orange-600 text-white font-black text-[11px] px-2 py-0.5 rounded-full shadow-md border border-orange-400/40 animate-in zoom-in-50">
+                      <Check className="w-3 h-3 stroke-[3]" />
                       <span>{countInActiveDiner}x</span>
                     </div>
                   )}
 
-                  {/* Imagen del Plato con etiquetas */}
+                  {/* Contenedor de Foto del Plato (Más compacto y estilizado) */}
                   <div 
-                    className="relative w-full h-36 sm:h-40 bg-neutral-900 overflow-hidden cursor-pointer shrink-0"
+                    className="relative w-full h-24 sm:h-28 md:h-30 bg-neutral-900 overflow-hidden cursor-pointer shrink-0"
                     onClick={() => {
                       if (item.disponible) onAddToCart(item);
                     }}
@@ -634,8 +706,8 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                       />
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center text-neutral-600 bg-neutral-900/80">
-                        <Utensils className="w-10 h-10 mb-1 opacity-40" />
-                        <span className="text-[10px] uppercase font-bold tracking-widest text-neutral-500">Carta</span>
+                        <Utensils className="w-7 h-7 mb-0.5 opacity-40" />
+                        <span className="text-[9px] uppercase font-bold tracking-widest text-neutral-500">Carta</span>
                       </div>
                     )}
 
@@ -643,8 +715,8 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                     <div className="absolute inset-0 bg-gradient-to-t from-neutral-950/80 via-transparent to-black/20" />
 
                     {/* Badge de Categoría & Ruta */}
-                    <div className="absolute bottom-2 left-2 flex items-center gap-1.5 z-10">
-                      <span className="px-2 py-0.5 rounded-md bg-neutral-900/80 backdrop-blur-xs text-neutral-300 text-[10px] font-bold border border-neutral-700/50">
+                    <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 z-10">
+                      <span className="px-1.5 py-0.5 rounded-md bg-neutral-900/85 backdrop-blur-xs text-neutral-300 text-[9px] font-bold border border-neutral-700/50 truncate max-w-[100px]">
                         {item.categoria}
                       </span>
                       {item.requiereCocina === false ? (
@@ -683,17 +755,17 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
 
                   {/* Detalle del Plato */}
                   <div 
-                    className="p-3 sm:p-3.5 flex-1 flex flex-col justify-between space-y-2 cursor-pointer"
+                    className="p-2 sm:p-2.5 flex-1 flex flex-col justify-between space-y-1.5 cursor-pointer"
                     onClick={() => {
                       if (item.disponible) onAddToCart(item);
                     }}
                   >
                     <div>
-                      <h4 className="font-black text-sm sm:text-base text-white line-clamp-1 leading-snug group-hover:text-orange-400 transition" title={item.nombre}>
+                      <h4 className="font-black text-xs sm:text-sm text-white line-clamp-1 leading-snug group-hover:text-orange-400 transition" title={item.nombre}>
                         {item.nombre}
                       </h4>
                       {item.descripcion && (
-                        <p className="text-[11px] text-neutral-400 line-clamp-2 mt-1 leading-relaxed">
+                        <p className="text-[10px] text-neutral-400 line-clamp-1 mt-0.5 leading-tight">
                           {item.descripcion}
                         </p>
                       )}
@@ -701,37 +773,37 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
 
                     {/* Indicador si otros comensales ya pidieron este plato */}
                     {setupData.orderTargetType === 'mesa' && totalCountAllDiners > countInActiveDiner && (
-                      <div className="text-[10px] text-neutral-400 font-semibold bg-neutral-900/60 px-2 py-0.5 rounded border border-neutral-700/50">
-                        Total mesa: {totalCountAllDiners} unds
+                      <div className="text-[9px] text-neutral-400 font-semibold bg-neutral-900/60 px-1.5 py-0.5 rounded border border-neutral-700/50">
+                        Total mesa: {totalCountAllDiners}x
                       </div>
                     )}
 
                     {/* Fila de Precio y Controles Táctiles */}
-                    <div className="pt-2 border-t border-neutral-700/60 flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className="font-mono font-black text-base sm:text-lg text-emerald-400">
+                    <div className="pt-1.5 border-t border-neutral-700/60 flex items-center justify-between gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <span className="font-mono font-black text-xs sm:text-sm text-emerald-400">
                         ${item.precio.toFixed(2)}
                       </span>
 
                       {countInActiveDiner > 0 ? (
-                        <div className="flex items-center gap-1 bg-neutral-950 p-1 rounded-xl border border-orange-500/40">
+                        <div className="flex items-center gap-0.5 bg-neutral-950 p-0.5 rounded-lg border border-orange-500/40">
                           <button
                             type="button"
                             onClick={() => onSubtractItem(item)}
-                            className="w-7 h-7 rounded-lg bg-neutral-800 text-neutral-200 hover:bg-neutral-700 active:bg-orange-600 flex items-center justify-center transition cursor-pointer active:scale-90"
+                            className="w-6 h-6 rounded-md bg-neutral-800 text-neutral-200 hover:bg-neutral-700 active:bg-orange-600 flex items-center justify-center transition cursor-pointer active:scale-90"
                             title="Restar una unidad"
                           >
-                            <Minus className="w-3.5 h-3.5" />
+                            <Minus className="w-3 h-3" />
                           </button>
-                          <span className="font-mono font-black text-xs text-orange-400 px-1.5 min-w-[20px] text-center">
+                          <span className="font-mono font-black text-[11px] text-orange-400 px-1 min-w-[16px] text-center">
                             {countInActiveDiner}
                           </span>
                           <button
                             type="button"
                             onClick={() => onAddToCart(item)}
-                            className="w-7 h-7 rounded-lg bg-orange-600 text-white hover:bg-orange-500 active:bg-orange-700 flex items-center justify-center transition cursor-pointer active:scale-90 shadow-xs"
+                            className="w-6 h-6 rounded-md bg-orange-600 text-white hover:bg-orange-500 active:bg-orange-700 flex items-center justify-center transition cursor-pointer active:scale-90 shadow-xs"
                             title="Sumar otra unidad"
                           >
-                            <Plus className="w-3.5 h-3.5" />
+                            <Plus className="w-3 h-3" />
                           </button>
                         </div>
                       ) : (
@@ -740,10 +812,10 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                             type="button"
                             onClick={() => onAddToCart(item)}
                             disabled={!item.disponible}
-                            className="h-8 px-2.5 sm:px-3 rounded-xl bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white font-black text-xs flex items-center gap-1 shadow-md shadow-orange-600/20 transition cursor-pointer active:scale-95 disabled:opacity-40"
+                            className="h-7 px-2 sm:px-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-white font-black text-[11px] flex items-center gap-1 shadow-xs transition cursor-pointer active:scale-95 disabled:opacity-40"
                             title="Agregar al pedido con su preparación por defecto"
                           >
-                            <Plus className="w-3.5 h-3.5 stroke-[3]" />
+                            <Plus className="w-3 h-3 stroke-[3]" />
                             <span>Agregar</span>
                           </button>
 
@@ -754,7 +826,7 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                               e.stopPropagation();
                               onAddToCart(item, item.requiereCocina !== false ? 'express' : 'cocina');
                             }}
-                            className={`h-8 px-2 rounded-xl text-[10px] font-black flex items-center gap-1 border transition cursor-pointer disabled:opacity-40 ${
+                            className={`h-7 px-1.5 rounded-lg text-[9px] font-black flex items-center gap-0.5 border transition cursor-pointer disabled:opacity-40 ${
                               item.requiereCocina !== false
                                 ? 'bg-neutral-800 hover:bg-emerald-950/80 hover:text-emerald-400 text-neutral-300 border-neutral-700 hover:border-emerald-700/60'
                                 : 'bg-neutral-800 hover:bg-orange-950/80 hover:text-orange-400 text-neutral-300 border-neutral-700 hover:border-orange-700/60'
@@ -763,12 +835,12 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                           >
                             {item.requiereCocina !== false ? (
                               <>
-                                <Zap className="w-3 h-3 text-emerald-400" />
+                                <Zap className="w-2.5 h-2.5 text-emerald-400" />
                                 <span className="hidden sm:inline">Xpress</span>
                               </>
                             ) : (
                               <>
-                                <ChefHat className="w-3 h-3 text-orange-400" />
+                                <ChefHat className="w-2.5 h-2.5 text-orange-400" />
                                 <span className="hidden sm:inline">Cocina</span>
                               </>
                             )}
@@ -782,43 +854,62 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
             })}
           </div>
         ) : viewMode === 'compact' ? (
-          /* VISTA 2: CUADRÍCULA COMPACTA (MÁS PLATOS EN PANTALLA) */
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-2.5 pb-28">
+          /* VISTA 2: CUADRÍCULA COMPACTA CON MINI-FOTO (MÁXIMA CANTIDAD DE PLATOS POR PANTALLA) */
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-8 gap-2 pb-28">
             {filteredItems.map((item, idx) => {
               const countInActiveDiner = cart
                 .filter(i => i.menuItemId === item.id && (setupData.orderTargetType !== 'mesa' || i.comensalId === activeDinerId))
                 .reduce((sum, i) => sum + i.cantidad, 0);
 
+              const photoSrc = item.fotoUrl || item.imagenUrl;
+
               return (
                 <div
                   key={`item-compact-${item.id}-${idx}`}
-                  className={`relative p-2.5 bg-neutral-800 rounded-xl border flex flex-col justify-between transition cursor-pointer ${
+                  className={`relative p-2 bg-neutral-800 rounded-xl border flex flex-col justify-between transition cursor-pointer select-none shadow-2xs ${
                     !item.disponible
-                      ? 'opacity-40 border-neutral-800'
+                      ? 'opacity-40 border-neutral-800 cursor-not-allowed'
                       : countInActiveDiner > 0
                         ? 'border-orange-500 bg-neutral-800 ring-2 ring-orange-500/20'
-                        : 'border-neutral-700/70 hover:border-neutral-500'
+                        : 'border-neutral-700/70 hover:border-neutral-500 hover:bg-neutral-750'
                   }`}
                   onClick={() => {
                     if (item.disponible) onAddToCart(item);
                   }}
                 >
                   {countInActiveDiner > 0 && (
-                    <span className="absolute top-1.5 right-1.5 bg-orange-600 text-white font-black text-[10px] px-1.5 py-0.5 rounded-full z-10">
+                    <span className="absolute top-1.5 right-1.5 bg-orange-600 text-white font-black text-[10px] px-1.5 py-0.5 rounded-full z-20 shadow-xs">
                       {countInActiveDiner}x
                     </span>
                   )}
 
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-neutral-400 font-semibold block truncate">
+                  {/* Mini foto compacta */}
+                  <div className="w-full h-14 sm:h-16 rounded-lg bg-neutral-900 overflow-hidden mb-1.5 relative shrink-0">
+                    {photoSrc ? (
+                      <img
+                        src={photoSrc}
+                        alt={item.nombre}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-neutral-600 bg-neutral-900/80">
+                        <Utensils className="w-5 h-5 opacity-40" />
+                      </div>
+                    )}
+                    <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded bg-neutral-950/80 text-neutral-300 text-[8px] font-bold truncate max-w-[80px]">
                       {item.categoria}
                     </span>
-                    <h5 className="font-bold text-xs text-white line-clamp-2 leading-tight">
+                  </div>
+
+                  <div className="space-y-0.5 min-w-0">
+                    <h5 className="font-bold text-xs text-white line-clamp-1 leading-tight" title={item.nombre}>
                       {item.nombre}
                     </h5>
                   </div>
 
-                  <div className="mt-2 pt-1.5 border-t border-neutral-700/60 flex items-center justify-between">
+                  <div className="mt-1.5 pt-1 border-t border-neutral-700/60 flex items-center justify-between">
                     <span className="font-mono font-black text-xs text-emerald-400">
                       ${item.precio.toFixed(2)}
                     </span>
@@ -828,7 +919,8 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
                         e.stopPropagation();
                         if (item.disponible) onAddToCart(item);
                       }}
-                      className="w-6 h-6 rounded-lg bg-orange-600/30 text-orange-400 hover:bg-orange-600 hover:text-white flex items-center justify-center font-black text-xs transition"
+                      className="w-6 h-6 rounded-md bg-orange-600/30 hover:bg-orange-600 text-orange-400 hover:text-white flex items-center justify-center font-black text-xs transition"
+                      title="Agregar al pedido"
                     >
                       +
                     </button>
@@ -973,6 +1065,26 @@ export const FullScreenPOSMenu: React.FC<FullScreenPOSMenuProps> = ({
           </div>
         )}
       </main>
+
+      {/* Floating Quick Scroll Controls (Desplazamiento Arriba / Abajo) */}
+      <div className="fixed right-3 sm:right-5 bottom-24 sm:bottom-28 z-40 flex flex-col gap-2 pointer-events-auto">
+        <button
+          type="button"
+          onClick={scrollToTop}
+          className="w-10 h-10 rounded-2xl bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 shadow-xl flex items-center justify-center transition active:scale-90 cursor-pointer backdrop-blur-md"
+          title="Desplazarse al inicio del menú"
+        >
+          <ChevronUp className="w-5 h-5 text-orange-400 stroke-[2.5]" />
+        </button>
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="w-10 h-10 rounded-2xl bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-700 shadow-xl flex items-center justify-center transition active:scale-90 cursor-pointer backdrop-blur-md"
+          title="Desplazarse al final del menú"
+        >
+          <ChevronDown className="w-5 h-5 text-orange-400 stroke-[2.5]" />
+        </button>
+      </div>
 
       {/* ========================================================================= */}
       {/* 5. BARRA FIJA INFERIOR DE ACCIÓN RÁPIDA (FLOATING DOCKED BAR)             */}

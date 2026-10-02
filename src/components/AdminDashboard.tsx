@@ -1,16 +1,5 @@
 import { UNIQUE_BUSINESS_ID } from '../config/business';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ReferenceLine
-} from 'recharts';
 import { useAuth } from '../context/AuthContext';
 import { MenuItem, Restaurant, Employee, Shift, Order, EmployeeSalaryType, CashRegisterClose, MenuAuditLog, MenuAuditActionType, MenuAuditLogChange, InventoryItem, Expense, DailyStat } from '../types';
 import { 
@@ -63,6 +52,8 @@ import { FinancialDashboard } from './FinancialDashboard';
 import { DeliveryReconciliation } from './DeliveryReconciliation';
 import { StaffAttendanceAdminView } from './StaffAttendanceAdminView';
 import { DailySalesExpensesTrendChart } from './DailySalesExpensesTrendChart';
+import { SalesTrendChart } from './SalesTrendChart';
+import { BranchPerformanceComparison } from './BranchPerformanceComparison';
 import { AdminRepairModal } from './AdminRepairModal';
 import { DishCostProfitReport } from './DishCostProfitReport';
 import { KeyIndicatorsPanel } from './KeyIndicatorsPanel';
@@ -73,6 +64,10 @@ import { QuickRestockModal } from './QuickRestockModal';
 import { AdminPdfReportsModal } from './AdminPdfReportsModal';
 import { MenuAuditLogsTable } from './MenuAuditLogsTable';
 import { InventoryManager } from './InventoryManager';
+import { AccountCancellationModal } from './AccountCancellationModal';
+import { ConfidentialityContractModal } from './ConfidentialityContractModal';
+import { AdminProfileModal } from './AdminProfileModal';
+import { QuickStartGuideModal } from './QuickStartGuideModal';
 import { 
   ShieldCheck, 
   ShieldAlert,
@@ -125,7 +120,11 @@ import {
   ClipboardList,
   Info,
   Building2,
-  Sparkles
+  Sparkles,
+  FileArchive,
+  Cookie,
+  FileText,
+  Download
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -161,8 +160,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   
   const activeBizId = currentUserAccount?.businessId || currentBusiness?.id || UNIQUE_BUSINESS_ID;
   
-  // Navigation tabs (Indicadores unificados, historial, finanzas, asistencia, gestión, inventario, configuración de negocio y pruebas)
-  const [activeTab, setActiveTab] = useState<'indicadores' | 'inventario' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'negocio' | 'peligro'>('indicadores');
+  // Navigation tabs (Indicadores unificados, historial, finanzas, comparativa de sucursales, asistencia, gestión, inventario, configuración de negocio y pruebas)
+  const [activeTab, setActiveTab] = useState<'indicadores' | 'comparativa_sucursales' | 'inventario' | 'historial_pedidos' | 'financiero' | 'conciliacion' | 'asistencia' | 'restaurantes' | 'empleados' | 'menu' | 'auditoria_menu' | 'turnos' | 'negocio' | 'peligro'>('indicadores');
 
   // Configuración del Negocio & Parámetros Fiscales (Impuestos, IVA, RIF, Fidelización, Datos Empresa)
   const [bizForm, setBizForm] = useState({
@@ -180,6 +179,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   });
   const [isSavingBiz, setIsSavingBiz] = useState(false);
   const [bizSavedToast, setBizSavedToast] = useState<string | null>(null);
+  const [showCancellationModal, setShowCancellationModal] = useState(false);
+  const [showContractModal, setShowContractModal] = useState(false);
+  const [showGuideModal, setShowGuideModal] = useState(false);
 
   // Sincronizar formulario de negocio con los datos reactivos de Firestore
   useEffect(() => {
@@ -250,12 +252,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Estados para Gráfico de Líneas Dinámico de Evolución Diaria de Ventas (Recharts)
   const [adminExpenses, setAdminExpenses] = useState<Expense[]>([]);
   const [adminDailyStats, setAdminDailyStats] = useState<DailyStat[]>([]);
-  const [salesChartDaysRange, setSalesChartDaysRange] = useState<'7d' | '14d' | '30d'>('14d');
-  const [salesChartBranchFilter, setSalesChartBranchFilter] = useState<string>('all');
-  const [showAdminSalesLine, setShowAdminSalesLine] = useState<boolean>(true);
-  const [showAdminProfitLine, setShowAdminProfitLine] = useState<boolean>(true);
-  const [showAdminExpensesLine, setShowAdminExpensesLine] = useState<boolean>(true);
-  const [showAdminTicketLine, setShowAdminTicketLine] = useState<boolean>(false);
 
   // Suscripción en tiempo real a auditoría de menú y stock + insumos de inventario + estadísticas diarias
   useEffect(() => {
@@ -283,91 +279,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (unsubDaily) unsubDaily();
     };
   }, [activeBizId, currentRestaurant?.id]);
-
-  // Evolución diaria de las ventas calculada dinámicamente para Recharts LineChart
-  const dailySalesEvolutionData = useMemo(() => {
-    const daysCount = salesChartDaysRange === '7d' ? 7 : salesChartDaysRange === '14d' ? 14 : 30;
-    const now = new Date();
-    const effectiveBranch = salesChartBranchFilter !== 'all' ? salesChartBranchFilter : (currentRestaurant?.id || 'all');
-
-    const branchOrders = effectiveBranch === 'all'
-      ? orders
-      : orders.filter(o => o.restaurantId === effectiveBranch);
-    const branchExpenses = effectiveBranch === 'all'
-      ? adminExpenses
-      : adminExpenses.filter(e => e.restaurantId === effectiveBranch);
-    const branchStats = effectiveBranch === 'all'
-      ? adminDailyStats
-      : adminDailyStats.filter(s => s.restaurantId === effectiveBranch);
-
-    const points: {
-      fecha: string;
-      label: string;
-      ventas: number;
-      gastos: number;
-      ganancia: number;
-      pedidos: number;
-      ticketPromedio: number;
-    }[] = [];
-
-    for (let i = daysCount - 1; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      const dateStr = getOperationalDateString(d);
-
-      const dayOrders = branchOrders.filter(o => {
-        const isPaid = o.estado === 'cobrado' || o.estadoPago === 'cobrado';
-        if (!isPaid) return false;
-        const refDate = o.pagadoEn || o.creadoEn;
-        return refDate && getOperationalDateString(new Date(refDate)) === dateStr;
-      });
-      const liveSales = dayOrders.reduce((sum, o) => sum + (Number(o.total) || 0), 0);
-      const liveCount = dayOrders.length;
-
-      const statDocs = branchStats.filter(s => s.fecha === dateStr);
-      const statSales = statDocs.reduce((sum, s) => sum + (Number(s.ventasTotales) || 0), 0);
-      const statCount = statDocs.reduce((sum, s) => sum + (Number(s.pedidosCobrados) || 0), 0);
-
-      const dSales = Math.max(liveSales, statSales);
-      const dCount = Math.max(liveCount, statCount);
-
-      const dExp = branchExpenses
-        .filter(e => e.fecha && getOperationalDateString(new Date(e.fecha)) === dateStr)
-        .reduce((sum, e) => sum + (Number(e.monto) || 0), 0);
-
-      const labelStr = d.toLocaleDateString('es-ES', {
-        weekday: daysCount <= 14 ? 'short' : undefined,
-        day: '2-digit',
-        month: 'short'
-      });
-
-      points.push({
-        fecha: dateStr,
-        label: labelStr,
-        ventas: Math.round(dSales * 100) / 100,
-        gastos: Math.round(dExp * 100) / 100,
-        ganancia: Math.round((dSales - dExp) * 100) / 100,
-        pedidos: dCount,
-        ticketPromedio: dCount > 0 ? Math.round((dSales / dCount) * 100) / 100 : 0
-      });
-    }
-
-    return points;
-  }, [orders, adminExpenses, adminDailyStats, salesChartDaysRange, salesChartBranchFilter, currentRestaurant?.id]);
-
-  const dailySalesEvolutionStats = useMemo(() => {
-    if (dailySalesEvolutionData.length === 0) {
-      return { totalSales: 0, avgDailySales: 0, bestDay: null as null | typeof dailySalesEvolutionData[0], totalOrders: 0 };
-    }
-    const totalSales = dailySalesEvolutionData.reduce((acc, p) => acc + p.ventas, 0);
-    const totalOrders = dailySalesEvolutionData.reduce((acc, p) => acc + p.pedidos, 0);
-    const avgDailySales = totalSales / dailySalesEvolutionData.length;
-    const bestDay = dailySalesEvolutionData.reduce(
-      (best, curr) => (curr.ventas > (best?.ventas ?? -1) ? curr : best),
-      dailySalesEvolutionData[0]
-    );
-    return { totalSales, avgDailySales, bestDay, totalOrders };
-  }, [dailySalesEvolutionData]);
 
   // Modal Centro de Mensajes & Avisos de Seguridad
   const [showMessageCenterModal, setShowMessageCenterModal] = useState(false);
@@ -486,6 +397,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setRunningDiagnostic(false);
     }, 400);
   };
+
+  // Admin Profile & Full Backup ZIP Modal State
+  const [showAdminProfileModal, setShowAdminProfileModal] = useState(false);
 
   // Employee Modal State
   const [showEmpModal, setShowEmpModal] = useState(false);
@@ -784,9 +698,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   const handleMigratePhotos = async () => {
-    if (!window.confirm('¿Desea migrar todas las fotos de platos guardadas en formato Base64 a Firebase Storage? Esto mejorará la velocidad y sincronización en todos los dispositivos.')) {
-      return;
-    }
     setIsMigratingPhotos(true);
     try {
       const { migratedCount, errorsCount } = await migrateBase64MenuItemsToStorage();
@@ -1194,12 +1105,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* Admin Subheader & Tab Controls */}
       <div className="bg-white border-b border-neutral-200 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
-          <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center shrink-0">
             <ShieldCheck className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="font-black text-neutral-900 text-base sm:text-lg">Panel de Administración Global</h2>
-            <p className="text-xs text-neutral-500">Gestión de locales, personal, cartas y turnos</p>
+            <div className="flex items-center gap-2">
+              <h2 className="font-black text-neutral-900 text-base sm:text-lg">Panel de Administración Global</h2>
+              {restaurants.length > 1 && (
+                <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-black uppercase">
+                  <Building2 className="w-3 h-3" />
+                  {restaurants.length} Sedes Consolidadas
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-neutral-500">
+              {restaurants.length > 1
+                ? `Gestión integral de ${restaurants.length} sucursales, finanzas P&L consolidadas, personal y cartas`
+                : 'Gestión de locales, personal, cartas y turnos'}
+            </p>
           </div>
         </div>
 
@@ -1207,6 +1130,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="flex items-center gap-1.5 p-1 bg-neutral-100 rounded-xl border border-neutral-200 overflow-x-auto">
           {[
             { id: 'indicadores', label: 'Indicadores & Finanzas (P&L)', icon: BarChart3 },
+            { id: 'comparativa_sucursales', label: 'Comparativa de Sucursales & Consolidado', icon: Building2 },
             { id: 'asistencia', label: 'Asistencia & Planilla', icon: Users },
             { id: 'inventario', label: 'Inventario & Insumos', icon: Boxes },
             { id: 'historial_pedidos', label: 'Historial de Pedidos', icon: ReceiptText },
@@ -1223,6 +1147,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             const isDanger = tab.id === 'peligro';
             const isFinancial = tab.id === 'financiero' || tab.id === 'conciliacion' || tab.id === 'asistencia';
             const isIndicator = tab.id === 'indicadores' || tab.id === 'historial_pedidos';
+            const isBranchComp = tab.id === 'comparativa_sucursales';
             const isInventory = tab.id === 'inventario';
             const isAudit = tab.id === 'auditoria_menu';
             const isBiz = tab.id === 'negocio';
@@ -1237,50 +1162,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 onClick={() => { sounds.playKeypadClick(); setActiveTab(tab.id as any); }}
                 className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap ${
                   isActive 
-                    ? isIndicator
-                      ? 'bg-orange-600 text-white shadow-xs'
-                      : isInventory
-                        ? 'bg-amber-600 text-white shadow-xs'
-                        : isDanger 
-                          ? 'bg-red-600 text-white shadow-xs' 
-                          : isFinancial 
-                            ? 'bg-blue-600 text-white shadow-xs' 
-                            : isAudit
-                              ? 'bg-purple-700 text-white shadow-xs'
-                              : isBiz
-                                ? 'bg-indigo-600 text-white shadow-xs'
-                                : 'bg-white text-neutral-900 shadow-xs' 
-                    : isIndicator
-                      ? 'text-orange-700 hover:bg-orange-50 font-black'
-                      : isInventory
-                        ? 'text-amber-800 hover:bg-amber-50 font-black'
-                        : isDanger 
-                          ? 'text-red-600 hover:bg-red-50' 
-                          : isFinancial
-                            ? 'text-blue-700 hover:bg-blue-50 font-black'
-                            : isAudit
-                              ? 'text-purple-700 hover:bg-purple-50 font-bold'
-                              : isBiz
-                                ? 'text-indigo-700 hover:bg-indigo-50 font-bold'
-                                : 'text-neutral-600 hover:text-neutral-900'
+                    ? isBranchComp
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : isIndicator
+                        ? 'bg-orange-600 text-white shadow-xs'
+                        : isInventory
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : isDanger 
+                            ? 'bg-red-600 text-white shadow-xs' 
+                            : isFinancial 
+                              ? 'bg-blue-600 text-white shadow-xs' 
+                              : isAudit
+                                ? 'bg-purple-700 text-white shadow-xs'
+                                : isBiz
+                                  ? 'bg-indigo-600 text-white shadow-xs'
+                                  : 'bg-white text-neutral-900 shadow-xs' 
+                    : isBranchComp
+                      ? 'text-indigo-700 hover:bg-indigo-50 font-black'
+                      : isIndicator
+                        ? 'text-orange-700 hover:bg-orange-50 font-black'
+                        : isInventory
+                          ? 'text-amber-800 hover:bg-amber-50 font-black'
+                          : isDanger 
+                            ? 'text-red-600 hover:bg-red-50' 
+                            : isFinancial
+                              ? 'text-blue-700 hover:bg-blue-50 font-black'
+                              : isAudit
+                                ? 'text-purple-700 hover:bg-purple-50 font-bold'
+                                : isBiz
+                                  ? 'text-indigo-700 hover:bg-indigo-50 font-bold'
+                                  : 'text-neutral-600 hover:text-neutral-900'
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 ${
                   isActive 
                     ? 'text-white' 
-                    : isIndicator
-                      ? 'text-orange-600'
-                      : isInventory
-                        ? 'text-amber-600'
-                        : isDanger 
-                          ? 'text-red-500' 
-                          : isFinancial 
-                            ? 'text-blue-600' 
-                            : isAudit
-                              ? 'text-purple-600'
-                              : isBiz
-                                ? 'text-indigo-600'
-                                : 'text-neutral-400'
+                    : isBranchComp
+                      ? 'text-indigo-600'
+                      : isIndicator
+                        ? 'text-orange-600'
+                        : isInventory
+                          ? 'text-amber-600'
+                          : isDanger 
+                            ? 'text-red-500' 
+                            : isFinancial 
+                              ? 'text-blue-600' 
+                              : isAudit
+                                ? 'text-purple-600'
+                                : isBiz
+                                  ? 'text-indigo-600'
+                                  : 'text-neutral-400'
                 }`} />
                 <span>{tab.label}</span>
                 {isInventory && criticalSupplyCount > 0 && (
@@ -1294,6 +1225,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Botón Guía Admin */}
+          <button
+            id="admin-quick-guide-btn"
+            type="button"
+            onClick={() => { sounds.playKeypadClick(); setShowGuideModal(true); }}
+            className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black transition flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer active:scale-95"
+            title="Guía de Inicio Rápido para el Administrador y Propietario"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-amber-200" />
+            <span>Guía Admin</span>
+          </button>
+
+          {/* Botón Perfil & Respaldo ZIP */}
+          <button
+            id="admin-profile-backup-btn"
+            type="button"
+            onClick={() => { sounds.playKeypadClick(); setShowAdminProfileModal(true); }}
+            className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer"
+            title="Perfil del Administrador y Descarga del Historial Completo (.ZIP)"
+          >
+            <FileArchive className="w-3.5 h-3.5 text-amber-300" />
+            <span>Perfil & Respaldo .ZIP</span>
+          </button>
+
           {/* Botón Exportar Reportes PDF */}
           <button
             id="admin-export-pdf-btn"
@@ -1371,6 +1326,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           />
         </div>
 
+        {/* VIEW COMPARATIVA DE RENDIMIENTO ENTRE SUCURSALES & REPORTE CONSOLIDADO */}
+        {activeTab === 'comparativa_sucursales' && (
+          <div className="max-w-7xl mx-auto space-y-6">
+            <BranchPerformanceComparison
+              restaurants={restaurants}
+              orders={orders}
+              expenses={adminExpenses}
+              dailyStats={adminDailyStats}
+            />
+          </div>
+        )}
+
         {/* VIEW INVENTARIO E INSUMOS: Descuento automático al marcar pedido como entregado y alertas críticas */}
         {activeTab === 'inventario' && (
           <InventoryManager
@@ -1388,6 +1355,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* VIEW UNIFICADO: Indicadores Operativos + Finanzas & P&L (Sin reportes repetidos) */}
         {(activeTab === 'indicadores' || activeTab === 'financiero') && (
           <div className="max-w-7xl mx-auto space-y-6">
+            {restaurants.length > 1 && (
+              <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-indigo-900 rounded-3xl p-4 sm:p-5 text-white shadow-md flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border border-indigo-700/50">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-amber-300 shrink-0">
+                    <Store className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm text-white flex items-center gap-2">
+                      <span>Análisis Consolidado & Rendimiento Multi-Sucursal</span>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-400 text-neutral-950 text-[10px] font-black uppercase">
+                        {restaurants.length} Sedes
+                      </span>
+                    </h4>
+                    <p className="text-xs text-indigo-200 mt-0.5 font-medium">
+                      Compara ventas, costos y flujo de caja en paralelo entre todas tus sucursales para evaluar qué sede tiene mejor desempeño.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sounds.playKeypadClick();
+                    setActiveTab('comparativa_sucursales');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-white text-indigo-950 hover:bg-amber-300 text-xs font-black transition shadow-sm cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5"
+                >
+                  <BarChart3 className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Ver Comparativa de Sedes</span>
+                </button>
+              </div>
+            )}
+
             <FinancialDashboard 
               restaurants={restaurants}
               orders={orders}
@@ -1397,256 +1396,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               onEditDish={handleOpenEditDish}
               onDeleteDish={handleConfirmDeleteMenuItemWithAudit}
               customDailySalesChart={
-                <div className="bg-white rounded-2xl border border-neutral-200 p-5 shadow-2xs flex flex-col justify-between">
-                  <div>
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-4">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-base font-black text-neutral-900">
-                            Evolución Diaria de las Ventas
-                          </h3>
-                          <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase">
-                            Gráfico Dinámico
-                          </span>
-                        </div>
-                        <p className="text-xs text-neutral-500">
-                          Tendencia día a día de ingresos cobrados, utilidad neta y ticket promedio en tiempo real
-                        </p>
-                      </div>
-
-                      {/* Controles de Rango Diario y Sucursal */}
-                      <div className="flex flex-wrap items-center gap-2">
-                        {restaurants.length > 1 && (
-                          <select
-                            value={salesChartBranchFilter}
-                            onChange={(e) => setSalesChartBranchFilter(e.target.value)}
-                            className="h-7 px-2.5 rounded-lg border border-neutral-200 bg-neutral-50 text-[11px] font-bold text-neutral-700 outline-none focus:border-neutral-900"
-                          >
-                            <option value="all">Todas las sucursales</option>
-                            {restaurants.map(r => (
-                              <option key={r.id} value={r.id}>{r.nombre}</option>
-                            ))}
-                          </select>
-                        )}
-                        <div className="flex items-center bg-neutral-100 p-1 rounded-xl border border-neutral-200">
-                          {([
-                            { id: '7d', label: '7 Días' },
-                            { id: '14d', label: '14 Días' },
-                            { id: '30d', label: '30 Días' }
-                          ] as const).map(opt => (
-                            <button
-                              key={opt.id}
-                              type="button"
-                              onClick={() => {
-                                sounds.playClick();
-                                setSalesChartDaysRange(opt.id);
-                              }}
-                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
-                                salesChartDaysRange === opt.id
-                                  ? 'bg-neutral-900 text-white shadow-2xs'
-                                  : 'text-neutral-600 hover:text-neutral-900'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Resumen rápido del periodo diario y toggles de series */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-neutral-100">
-                      <div className="flex flex-wrap items-center gap-4 text-xs">
-                        <div>
-                          <span className="text-neutral-400 font-bold uppercase text-[10px] block">Acumulado Periodo</span>
-                          <span className="font-mono font-black text-emerald-700 text-sm">
-                            ${dailySalesEvolutionStats.totalSales.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                        <div className="h-6 w-px bg-neutral-200" />
-                        <div>
-                          <span className="text-neutral-400 font-bold uppercase text-[10px] block">Promedio Diario</span>
-                          <span className="font-mono font-black text-neutral-800 text-sm">
-                            ${dailySalesEvolutionStats.avgDailySales.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                        <div className="h-6 w-px bg-neutral-200" />
-                        <div>
-                          <span className="text-neutral-400 font-bold uppercase text-[10px] block">Mejor Día</span>
-                          <span className="font-mono font-bold text-indigo-700 text-xs">
-                            {dailySalesEvolutionStats.bestDay && dailySalesEvolutionStats.bestDay.ventas > 0
-                              ? `${dailySalesEvolutionStats.bestDay.label} ($${dailySalesEvolutionStats.bestDay.ventas.toFixed(0)})`
-                              : 'Sin ventas'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Toggles interactivos de líneas */}
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setShowAdminSalesLine(v => !v)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
-                            showAdminSalesLine
-                              ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
-                          }`}
-                        >
-                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                          Ventas Diarias
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowAdminProfitLine(v => !v)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
-                            showAdminProfitLine
-                              ? 'bg-indigo-50 border-indigo-300 text-indigo-800'
-                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
-                          }`}
-                        >
-                          <span className="w-2 h-2 rounded-full bg-indigo-600" />
-                          Ganancia Neta
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowAdminExpensesLine(v => !v)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
-                            showAdminExpensesLine
-                              ? 'bg-red-50 border-red-300 text-red-800'
-                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
-                          }`}
-                        >
-                          <span className="w-2 h-2 rounded-full bg-red-500" />
-                          Gastos
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowAdminTicketLine(v => !v)}
-                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer ${
-                            showAdminTicketLine
-                              ? 'bg-amber-50 border-amber-300 text-amber-800'
-                              : 'bg-neutral-50 border-neutral-200 text-neutral-400'
-                          }`}
-                        >
-                          <span className="w-2 h-2 rounded-full bg-amber-500" />
-                          Ticket Prom.
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Lienzo Recharts LineChart */}
-                    <div className="h-72 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={dailySalesEvolutionData} margin={{ top: 10, right: 16, left: -10, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f5f5f5" />
-                          <XAxis
-                            dataKey="label"
-                            tick={{ fontSize: 11, fill: '#737373', fontWeight: 600 }}
-                            axisLine={{ stroke: '#e5e5e5' }}
-                            tickLine={false}
-                          />
-                          <YAxis
-                            yAxisId="left"
-                            tick={{ fontSize: 11, fill: '#737373' }}
-                            axisLine={false}
-                            tickLine={false}
-                            tickFormatter={(val) => `$${val}`}
-                          />
-                          {showAdminTicketLine && (
-                            <YAxis
-                              yAxisId="right"
-                              orientation="right"
-                              tick={{ fontSize: 10, fill: '#d97706' }}
-                              axisLine={false}
-                              tickLine={false}
-                              tickFormatter={(val) => `$${val}`}
-                            />
-                          )}
-                          <Tooltip
-                            contentStyle={{
-                              backgroundColor: '#171717',
-                              border: 'none',
-                              borderRadius: '12px',
-                              color: '#fff',
-                              fontSize: '12px',
-                              fontWeight: 600,
-                              boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.3)'
-                            }}
-                            formatter={(value: any, name: string) => [
-                              `$${Number(value).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-                              name
-                            ]}
-                            labelFormatter={(label, payload) => {
-                              const item = payload?.[0]?.payload;
-                              return item
-                                ? `${label} (${item.fecha}) · ${item.pedidos} pedido(s)`
-                                : label;
-                            }}
-                          />
-                          <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} />
-                          {dailySalesEvolutionStats.avgDailySales > 0 && showAdminSalesLine && (
-                            <ReferenceLine
-                              yAxisId="left"
-                              y={dailySalesEvolutionStats.avgDailySales}
-                              stroke="#10b981"
-                              strokeDasharray="4 4"
-                              strokeOpacity={0.5}
-                            />
-                          )}
-                          {showAdminSalesLine && (
-                            <Line
-                              yAxisId="left"
-                              type="monotone"
-                              dataKey="ventas"
-                              name="Ventas Diarias"
-                              stroke="#10b981"
-                              strokeWidth={3}
-                              dot={{ r: 4, fill: '#10b981', strokeWidth: 2, stroke: '#ffffff' }}
-                              activeDot={{ r: 6, fill: '#059669', stroke: '#ffffff', strokeWidth: 2 }}
-                            />
-                          )}
-                          {showAdminProfitLine && (
-                            <Line
-                              yAxisId="left"
-                              type="monotone"
-                              dataKey="ganancia"
-                              name="Ganancia Neta"
-                              stroke="#4f46e5"
-                              strokeWidth={2.5}
-                              dot={{ r: 3.5, fill: '#4f46e5', strokeWidth: 1.5, stroke: '#ffffff' }}
-                              activeDot={{ r: 5 }}
-                            />
-                          )}
-                          {showAdminExpensesLine && (
-                            <Line
-                              yAxisId="left"
-                              type="monotone"
-                              dataKey="gastos"
-                              name="Gastos Operativos"
-                              stroke="#ef4444"
-                              strokeWidth={2}
-                              strokeDasharray="4 4"
-                              dot={{ r: 3, fill: '#ef4444' }}
-                              activeDot={{ r: 5 }}
-                            />
-                          )}
-                          {showAdminTicketLine && (
-                            <Line
-                              yAxisId="right"
-                              type="monotone"
-                              dataKey="ticketPromedio"
-                              name="Ticket Promedio"
-                              stroke="#f59e0b"
-                              strokeWidth={2}
-                              dot={{ r: 3, fill: '#f59e0b' }}
-                              activeDot={{ r: 5 }}
-                            />
-                          )}
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
+                <SalesTrendChart
+                  orders={orders}
+                  restaurants={restaurants}
+                  adminExpenses={adminExpenses}
+                  adminDailyStats={adminDailyStats}
+                  defaultBranchId={currentRestaurant?.id || 'all'}
+                />
               }
             />
           </div>
@@ -2912,6 +2668,149 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <option value="es">Español (ES/LATAM)</option>
                     <option value="en">English (US/UK)</option>
                   </select>
+                </div>
+              </div>
+            </div>
+
+            {/* SECCIÓN 4: Privacidad, Contrato de Confidencialidad & Cookies */}
+            <div className="bg-white rounded-3xl border border-neutral-200 p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-sm text-neutral-900">
+                      Privacidad, Contrato de Confidencialidad & Cookies
+                    </h4>
+                    <p className="text-[11px] text-neutral-500">
+                      Garantías legales de secreto comercial, protección de recetas y gestión de consentimiento
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  RGPD / GDPR
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div className="sm:col-span-2 p-5 rounded-2xl bg-gradient-to-r from-indigo-900 via-neutral-900 to-indigo-950 text-white border border-indigo-700/60 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-md">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center text-indigo-300 shrink-0">
+                      <FileArchive className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h4 className="font-black text-sm text-white flex items-center gap-2">
+                        <span>Perfil del Administrador & Descarga de Respaldo Completo (.ZIP)</span>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-400 text-neutral-950 text-[10px] font-black uppercase">
+                          Portabilidad RGPD
+                        </span>
+                      </h4>
+                      <p className="text-xs text-neutral-300 mt-0.5 leading-relaxed">
+                        Genera un archivo comprimido oficial con todas las ventas, cartas de menú, stock de inventario, finanzas, asistencias y configuraciones del negocio.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playKeypadClick();
+                      setShowAdminProfileModal(true);
+                    }}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-neutral-950 font-black text-xs transition shadow-md flex items-center gap-2 shrink-0 cursor-pointer active:scale-95"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Descargar Historial .ZIP</span>
+                  </button>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-neutral-50 border border-neutral-200 flex flex-col justify-between space-y-3">
+                  <div className="space-y-1">
+                    <span className="font-bold text-xs text-neutral-900 flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-indigo-600" />
+                      Contrato de Confidencialidad & Secreto Comercial
+                    </span>
+                    <p className="text-[11px] text-neutral-500 leading-relaxed">
+                      Consulta los términos de confidencialidad perpetua sobre tus recetas, costos de insumos, márgenes de ganancia y bases de clientes.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playKeypadClick();
+                      setShowContractModal(true);
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-white hover:bg-neutral-100 border border-neutral-300 text-neutral-800 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Ver Contrato Oficial / Descargar PDF</span>
+                  </button>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-neutral-50 border border-neutral-200 flex flex-col justify-between space-y-3">
+                  <div className="space-y-1">
+                    <span className="font-bold text-xs text-neutral-900 flex items-center gap-1.5">
+                      <Cookie className="w-4 h-4 text-amber-600" />
+                      Autorización & Preferencias de Cookies
+                    </span>
+                    <p className="text-[11px] text-neutral-500 leading-relaxed">
+                      Administra los permisos de almacenamiento local para sesiones operativas, tickets térmicos y caché sin conexión.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playKeypadClick();
+                      window.dispatchEvent(new CustomEvent('open-cookie-settings'));
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-white hover:bg-neutral-100 border border-neutral-300 text-neutral-800 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+                  >
+                    <Cookie className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Ajustar Preferencias de Cookies</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* SECCIÓN 5: Baja Definitiva del Servicio, Descarga en ZIP & Supresión Total */}
+            <div className="bg-red-50/70 rounded-3xl border-2 border-red-200/90 p-6 shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-red-200/80">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-red-600 text-white flex items-center justify-center">
+                    <Trash2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-sm text-red-950">
+                      Baja del Servicio, Portabilidad en ZIP & Supresión Total de Datos
+                    </h4>
+                    <p className="text-[11px] text-red-800">
+                      Derecho al olvido y portabilidad total según la normativa internacional de protección de datos
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-red-200/80 text-red-900 border border-red-300">
+                  Zona Sensible
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                <p className="text-xs text-red-900 leading-relaxed">
+                  Si decides cancelar o no continuar con el servicio de Gastro Smart, puedes <strong>descargar un archivo ZIP completo</strong> con todo tu historial de ventas, carta de platos, recetas, inventario de insumos, turnos de empleados, clientes y arqueos de caja. Tras la descarga, <strong>todos tus datos serán eliminados permanentemente e irreversiblemente de la base de datos de Gastro Smart</strong>.
+                </p>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sounds.playKeypadClick();
+                      setShowCancellationModal(true);
+                    }}
+                    className="px-5 py-3 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-black text-xs shadow-md shadow-red-600/20 active:scale-95 transition flex items-center gap-2 cursor-pointer"
+                  >
+                    <FileArchive className="w-4 h-4" />
+                    <span>Descargar Todo en ZIP y Eliminar Cuenta Permanentemente</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -4389,6 +4288,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         restaurants={restaurants}
         businessName={currentBusiness?.nombre || 'Gastro Smart'}
         currentUserName={currentUserAccount?.nombre || 'Administrador'}
+      />
+
+      {/* Modal de Baja Definitiva del Servicio y Descarga en ZIP (RGPD) */}
+      {showCancellationModal && (
+        <AccountCancellationModal
+          businessId={activeBizId}
+          businessName={bizForm.nombre || currentBusiness?.nombre || 'Mi Restaurante'}
+          onClose={() => setShowCancellationModal(false)}
+          onSuccessPurge={() => {
+            setShowCancellationModal(false);
+          }}
+        />
+      )}
+
+      {/* Modal del Contrato de Confidencialidad & Secreto Comercial */}
+      {showContractModal && (
+        <ConfidentialityContractModal
+          businessName={bizForm.nombre || currentBusiness?.nombre || 'Mi Restaurante'}
+          businessRif={bizForm.rif_o_ruc || currentBusiness?.rif_o_ruc || 'J-00000000-0'}
+          representativeName={currentUserAccount?.nombre || bizForm.email || 'Administrador'}
+          onClose={() => setShowContractModal(false)}
+        />
+      )}
+
+      {/* Modal de Perfil del Administrador & Descarga de Respaldo ZIP */}
+      <AdminProfileModal
+        isOpen={showAdminProfileModal}
+        onClose={() => setShowAdminProfileModal(false)}
+        currentUserAccount={currentUserAccount}
+        currentEmployee={currentEmployee}
+        currentBusiness={currentBusiness}
+        restaurants={restaurants}
+        businessId={activeBizId}
+      />
+
+      {/* Modal de Guía de Inicio Rápido para Admin */}
+      <QuickStartGuideModal
+        isOpen={showGuideModal}
+        onClose={() => setShowGuideModal(false)}
+        initialRole="admin"
+        onNavigateToTab={(tab) => {
+          if (tab === 'perfil') {
+            setShowAdminProfileModal(true);
+          } else {
+            setActiveTab(tab as any);
+          }
+        }}
       />
 
     </div>

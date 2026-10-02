@@ -210,6 +210,7 @@ export interface Client {
   nombre: string;
   telefono?: string;
   email?: string;
+  documento?: string; // DNI / RUC / NIT / RFC / Cédula para facturación
   direccion?: string;
   puntosFidelidad?: number;
   totalGastadoAcumulado?: number;
@@ -295,6 +296,10 @@ export interface OrderDiner {
   numero: number; // 1, 2, 3...
   nombre?: string; // ej: 'Rosa', 'Carlos'
   telefono?: string; // opcional para vincular historial de cliente al cobrar
+  documento?: string; // DNI / RUC / Cédula para facturación individual
+  email?: string;
+  direccion?: string;
+  tipoComprobante?: 'factura' | 'boleta' | 'ticket' | string;
   pagado?: boolean;
   montoPagado?: number;
   total?: number;
@@ -323,6 +328,10 @@ export interface PartialPayment {
   cajeroNombre?: string;
   clienteNombre?: string;
   clienteTelefono?: string;
+  clienteDocumento?: string;
+  clienteEmail?: string;
+  clienteDireccion?: string;
+  tipoComprobante?: 'factura' | 'boleta' | 'ticket' | string;
   ticketImpreso?: boolean;
   transaccionId?: string;
   numeroParte?: number;
@@ -359,7 +368,10 @@ export interface Order {
   clienteId?: string | null;
   clienteNombre?: string;
   clienteTelefono?: string | null;
+  clienteDocumento?: string | null;
+  clienteEmail?: string | null;
   clienteDireccion?: string | null;
+  tipoComprobante?: 'factura' | 'boleta' | 'ticket' | string | null;
   tipo: OrderType;
   empresaDelivery?: DeliveryCompany | string | null;
   items: OrderItem[];

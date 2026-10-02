@@ -365,7 +365,6 @@ export const DeliveryReconciliation: React.FC<DeliveryReconciliationProps> = ({
   // Eliminar o desactivar empresa
   const handleDeleteCompany = async (companyId: string, companyName: string) => {
     if (!activeRest) return;
-    if (!window.confirm(`¿Estás seguro de eliminar la empresa "${companyName}" de la lista activa de delivery?`)) return;
 
     try {
       const updated = configuredCompanies.filter(c => c.id !== companyId);

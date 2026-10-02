@@ -53,7 +53,7 @@ export function downloadReceiptPdf(data: ReceiptData, rollWidth: '58mm' | '80mm'
   doc.setFontSize(9);
   const bannerText = data.isKitchenTicket 
     ? '*** COMANDA COCINA ***' 
-    : (data.tituloComprobante || (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO'));
+    : (data.tituloComprobante || (data.tipoComprobante ? `*** ${data.tipoComprobante.toUpperCase()} ***` : (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO')));
   doc.text(bannerText, centerX, y, { align: 'center' });
   y += 4;
 
@@ -79,6 +79,12 @@ export function downloadReceiptPdf(data: ReceiptData, rollWidth: '58mm' | '80mm'
   doc.text(timeStr, widthMm - margin, y, { align: 'right' });
   y += 4;
 
+  if (data.tipoComprobante) {
+    doc.setFont('courier', 'bold');
+    doc.text(`TIPO: ${data.tipoComprobante.toUpperCase()}`, margin, y);
+    doc.setFont('courier', 'normal');
+    y += 3.5;
+  }
   if (data.mozoNombre) {
     doc.text(`Mozo: ${data.mozoNombre}`, margin, y);
     y += 3.5;
@@ -88,11 +94,25 @@ export function downloadReceiptPdf(data: ReceiptData, rollWidth: '58mm' | '80mm'
     y += 3.5;
   }
   if (data.comensalNombre) {
-    doc.text(`Comensal: ${data.comensalNombre}`, margin, y);
+    doc.setFont('courier', 'bold');
+    doc.text(`Cliente: ${data.comensalNombre}`, margin, y);
+    doc.setFont('courier', 'normal');
+    y += 3.5;
+  }
+  if (data.clienteDocumento) {
+    doc.text(`Doc/RUC/DNI: ${data.clienteDocumento}`, margin, y);
     y += 3.5;
   }
   if (data.clienteTelefono) {
     doc.text(`Tel: ${data.clienteTelefono}`, margin, y);
+    y += 3.5;
+  }
+  if (data.clienteEmail) {
+    doc.text(`Email: ${data.clienteEmail}`, margin, y);
+    y += 3.5;
+  }
+  if (data.clienteDireccion) {
+    doc.text(`Dir: ${data.clienteDireccion}`, margin, y);
     y += 3.5;
   }
 

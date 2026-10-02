@@ -32,6 +32,10 @@ export interface ReceiptData {
   saldoPendiente?: number;
   esPagoParcial?: boolean;
   tituloComprobante?: string;
+  tipoComprobante?: string;
+  clienteDocumento?: string;
+  clienteEmail?: string;
+  clienteDireccion?: string;
   metodoPago?: string;
   montoRecibido?: number;
   vuelto?: number;
@@ -120,9 +124,14 @@ export function generateEscPosBytes(data: ReceiptData, rollWidth: '58mm' | '80mm
   } else if (data.tipoEntrega === 'mostrador') {
     pushText(`Para Llevar / Mostrador`);
   }
+  if (data.tipoComprobante) pushText(`Tipo: ${data.tipoComprobante.toUpperCase()}`);
   if (data.mozoNombre) pushText(`Mozo/Mesero: ${data.mozoNombre}`);
   if (data.cajeroNombre) pushText(`Caja: ${data.cajeroNombre}`);
-  if (data.comensalNombre) pushText(`Comensal: ${data.comensalNombre}`);
+  if (data.comensalNombre) pushText(`Cliente/Razón Social: ${data.comensalNombre}`);
+  if (data.clienteDocumento) pushText(`Doc/RUC/DNI: ${data.clienteDocumento}`);
+  if (data.clienteTelefono) pushText(`Tel: ${data.clienteTelefono}`);
+  if (data.clienteEmail) pushText(`Email: ${data.clienteEmail}`);
+  if (data.clienteDireccion) pushText(`Dir: ${data.clienteDireccion}`);
   pushText(`Fecha: ${new Date(data.fecha).toLocaleString()}`);
   pushText(line('-'));
 

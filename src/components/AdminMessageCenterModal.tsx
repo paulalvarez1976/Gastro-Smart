@@ -89,9 +89,6 @@ export const AdminMessageCenterModal: React.FC<AdminMessageCenterModalProps> = (
   };
 
   const handleClearAll = async () => {
-    if (!window.confirm('¿Desea borrar todas las alertas y avisos del Centro de Mensajes?')) {
-      return;
-    }
     sounds.playKeypadClick();
     sounds.stopAllAlarms();
     setIsProcessing(true);
@@ -258,25 +255,37 @@ export const AdminMessageCenterModal: React.FC<AdminMessageCenterModalProps> = (
                         {new Date(alert.fecha).toLocaleDateString()}
                       </span>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleReadAndDismiss(alert);
-                          }}
-                          className="px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center gap-1 shadow-xs transition"
-                          title="Leer y borrar alerta"
-                        >
-                          <Check className="w-3 h-3" />
-                          Leer y borrar
-                        </button>
+                        {!alert.leido ? (
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              sounds.playKeypadClick();
+                              sounds.stopRepeatingAlarm('sec-alert-' + alert.id);
+                              sounds.stopRepeatingAlarm('security-alert');
+                              await onMarkRead(alert.id);
+                              showToast('Aviso marcado como leído.');
+                            }}
+                            className="px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[10px] flex items-center gap-1 shadow-xs transition cursor-pointer"
+                            title="Marcar como leído y silenciar alertas"
+                          >
+                            <Check className="w-3 h-3" />
+                            Marcar leído
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                            <CheckCheck className="w-3 h-3" />
+                            Leído
+                          </span>
+                        )}
                         <button
                           type="button"
                           onClick={(e) => handleDeleteSingle(alert.id, e)}
-                          className="p-1 rounded-md text-neutral-400 hover:text-red-600 hover:bg-neutral-100 transition"
-                          title="Eliminar"
+                          className="px-2 py-0.5 rounded-md bg-neutral-100 hover:bg-red-50 text-neutral-600 hover:text-red-700 font-bold text-[10px] flex items-center gap-1 border border-neutral-200 hover:border-red-300 transition cursor-pointer"
+                          title="Borrar de las notificaciones"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3 h-3 text-red-500" />
+                          <span>Borrar</span>
                         </button>
                       </div>
                     </div>
@@ -338,19 +347,36 @@ export const AdminMessageCenterModal: React.FC<AdminMessageCenterModalProps> = (
                   type="button"
                   disabled={isProcessing}
                   onClick={() => handleDeleteSingle(selectedAlert.id)}
-                  className="px-4 py-2.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 font-bold text-xs transition flex items-center gap-1.5 disabled:opacity-50"
+                  className="px-4 py-2.5 rounded-xl bg-neutral-100 hover:bg-red-50 text-neutral-700 hover:text-red-700 font-bold text-xs transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
                 >
-                  <Trash2 className="w-4 h-4 text-neutral-500" />
-                  Eliminar Alerta
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                  Borrar Alerta
                 </button>
+                {!selectedAlert.leido && (
+                  <button
+                    type="button"
+                    disabled={isProcessing}
+                    onClick={async () => {
+                      sounds.playKeypadClick();
+                      sounds.stopRepeatingAlarm('sec-alert-' + selectedAlert.id);
+                      sounds.stopRepeatingAlarm('security-alert');
+                      await onMarkRead(selectedAlert.id);
+                      showToast('Alerta marcada como leída.');
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    Marcar como Leído
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isProcessing}
                   onClick={() => handleReadAndDismiss(selectedAlert)}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-95 disabled:opacity-50"
+                  className="px-4 py-2.5 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-white font-bold text-xs transition flex items-center gap-1.5 shadow-md active:scale-95 disabled:opacity-50 cursor-pointer"
                 >
                   <CheckCheck className="w-4 h-4" />
-                  Marcar como Leído y Borrar
+                  Leído y Borrar
                 </button>
               </div>
             </div>

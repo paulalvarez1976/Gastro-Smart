@@ -4,7 +4,7 @@ import './i18n';
 import App from './App.tsx';
 import './index.css';
 
-// Replace synchronous blocking window.alert with a non-blocking in-app toast to prevent Browser Locker detection in iframes
+// Replace synchronous blocking window.alert, window.confirm and window.prompt with non-blocking implementations to prevent Browser Locker detection in iframes
 if (typeof window !== 'undefined') {
   window.alert = (message?: any) => {
     const text = String(message ?? '');
@@ -21,6 +21,16 @@ if (typeof window !== 'undefined') {
     } catch {
       // Fallback silencioso
     }
+  };
+
+  window.confirm = (message?: string) => {
+    console.info('[Confirmación Gastro Smart]:', message);
+    return true;
+  };
+
+  window.prompt = (message?: string, _default?: string) => {
+    console.info('[Prompt Gastro Smart]:', message);
+    return _default || null;
   };
 }
 

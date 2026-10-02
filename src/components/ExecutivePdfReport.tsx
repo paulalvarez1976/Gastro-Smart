@@ -483,6 +483,57 @@ export const ExecutivePdfReport: React.FC<ExecutivePdfReportProps> = ({
             </div>
           )}
 
+          {/* Desglose Consolidado por Sucursal / Sede (Multi-sucursal) */}
+          {summary.comparativaSucursales && summary.comparativaSucursales.length > 1 && (
+            <div className="border border-black p-4 space-y-3">
+              <div className="flex items-center justify-between border-b border-black pb-1">
+                <h4 className="text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>Desglose Consolidado por Sucursal ({summary.comparativaSucursales.length} Locales)</span>
+                </h4>
+                <span className="text-[10px] font-mono font-bold">
+                  Total Empresa: ${summary.ventasTotales.actual.toFixed(2)}
+                </span>
+              </div>
+              <table className="w-full text-xs border-collapse">
+                <thead>
+                  <tr className="bg-neutral-100 border-b border-black text-neutral-700">
+                    <th className="p-2 text-left font-bold uppercase">Sucursal / Local</th>
+                    <th className="p-2 text-right font-bold uppercase">Ventas ($)</th>
+                    <th className="p-2 text-right font-bold uppercase">Gastos ($)</th>
+                    <th className="p-2 text-right font-bold uppercase">Utilidad ($)</th>
+                    <th className="p-2 text-right font-bold uppercase">Margen %</th>
+                    <th className="p-2 text-right font-bold uppercase">Ticket Prom.</th>
+                    <th className="p-2 text-right font-bold uppercase">Pedidos</th>
+                    <th className="p-2 text-right font-bold uppercase">Part. %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.comparativaSucursales.map((branch, idx) => {
+                    const sharePct = summary.ventasTotales.actual > 0 
+                      ? Math.round((branch.ventas / summary.ventasTotales.actual) * 1000) / 10
+                      : 0;
+                    return (
+                      <tr key={branch.id || idx} className="border-b border-neutral-200">
+                        <td className="p-2 font-bold flex items-center gap-1.5">
+                          <span className="font-mono text-neutral-500">{idx + 1}.</span>
+                          <span>{branch.nombre}</span>
+                        </td>
+                        <td className="p-2 text-right font-bold font-mono text-emerald-700">${branch.ventas.toFixed(2)}</td>
+                        <td className="p-2 text-right font-mono text-rose-700">${branch.gastos.toFixed(2)}</td>
+                        <td className="p-2 text-right font-bold font-mono text-indigo-700">${branch.ganancia.toFixed(2)}</td>
+                        <td className="p-2 text-right font-mono">{branch.margen}%</td>
+                        <td className="p-2 text-right font-mono">${branch.ticketPromedio.toFixed(2)}</td>
+                        <td className="p-2 text-right font-mono">{branch.pedidos}</td>
+                        <td className="p-2 text-right font-bold font-mono text-neutral-800">{sharePct}%</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {/* Signatures / Footer */}
           <div className="pt-12 grid grid-cols-2 gap-12 text-center text-xs">
             <div className="border-t border-black pt-2">

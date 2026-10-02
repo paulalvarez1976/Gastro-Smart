@@ -2359,6 +2359,10 @@ export async function registerPartialPayment(
     cajeroNombre?: string;
     clienteNombre?: string;
     clienteTelefono?: string;
+    clienteDocumento?: string;
+    clienteEmail?: string;
+    clienteDireccion?: string;
+    tipoComprobante?: 'factura' | 'boleta' | 'ticket' | string;
     numeroParte?: number;
     totalPartes?: number;
   }
@@ -2404,6 +2408,10 @@ export async function registerPartialPayment(
     }
     if (paymentData.clienteNombre) newPayment.clienteNombre = paymentData.clienteNombre;
     if (paymentData.clienteTelefono) newPayment.clienteTelefono = paymentData.clienteTelefono;
+    if (paymentData.clienteDocumento) newPayment.clienteDocumento = paymentData.clienteDocumento;
+    if (paymentData.clienteEmail) newPayment.clienteEmail = paymentData.clienteEmail;
+    if (paymentData.clienteDireccion) newPayment.clienteDireccion = paymentData.clienteDireccion;
+    if (paymentData.tipoComprobante) newPayment.tipoComprobante = paymentData.tipoComprobante;
     if (paymentData.numeroParte !== undefined && paymentData.numeroParte !== null) {
       newPayment.numeroParte = paymentData.numeroParte;
     }
@@ -2440,7 +2448,17 @@ export async function registerPartialPayment(
     const existingComensales = order.comensales && order.comensales.length > 0 ? order.comensales : [];
     const updatedComensales = existingComensales.map(c => {
       if (paymentData.tipo === 'comensal' && (c.id === paymentData.comensalId || c.nombre === paymentData.comensalNombre)) {
-        return { ...c, pagado: true, montoPagado: (c.montoPagado || 0) + paymentData.total };
+        return { 
+          ...c, 
+          pagado: true, 
+          montoPagado: (c.montoPagado || 0) + paymentData.total,
+          documento: paymentData.clienteDocumento || c.documento,
+          telefono: paymentData.clienteTelefono || c.telefono,
+          email: paymentData.clienteEmail || c.email,
+          direccion: paymentData.clienteDireccion || c.direccion,
+          tipoComprobante: paymentData.tipoComprobante || c.tipoComprobante,
+          nombre: paymentData.clienteNombre || c.nombre
+        };
       }
       if (isFullyPaid) {
         return { ...c, pagado: true };
@@ -2632,6 +2650,10 @@ export interface CambiarEstadoPedidoOptions {
   propina?: number;
   clienteNombre?: string;
   clienteTelefono?: string;
+  clienteDocumento?: string;
+  clienteEmail?: string;
+  clienteDireccion?: string;
+  tipoComprobante?: string;
   montoCobradoAcumulado?: number;
   saldoPendiente?: number;
   estadoEntrega?: 'pendiente' | 'entregado';
@@ -2711,6 +2733,10 @@ export async function cambiarEstadoPedido(
   if (options?.propina !== undefined) updatePayload.propina = options.propina;
   if (options?.clienteNombre !== undefined) updatePayload.clienteNombre = options.clienteNombre;
   if (options?.clienteTelefono !== undefined) updatePayload.clienteTelefono = options.clienteTelefono;
+  if (options?.clienteDocumento !== undefined) updatePayload.clienteDocumento = options.clienteDocumento;
+  if (options?.clienteEmail !== undefined) updatePayload.clienteEmail = options.clienteEmail;
+  if (options?.clienteDireccion !== undefined) updatePayload.clienteDireccion = options.clienteDireccion;
+  if (options?.tipoComprobante !== undefined) updatePayload.tipoComprobante = options.tipoComprobante;
   if (options?.estadoEntrega !== undefined) updatePayload.estadoEntrega = options.estadoEntrega;
   if (options?.estadoPago !== undefined) updatePayload.estadoPago = options.estadoPago;
   if (options?.ruta !== undefined) updatePayload.ruta = options.ruta;
@@ -5607,6 +5633,193 @@ export async function updateReservationStatus(
 export async function deleteReservation(reservationId: string): Promise<void> {
   await deleteDoc(doc(db, 'reservations', reservationId));
 }
+
+// ======================= DATA PORTABILITY & PERMANENT TENANT PURGE (RGPD) =======================
+
+/**
+ * Recupera todos los datos operativos y registros de un negocio para la exportación completa a ZIP
+ */
+export async function fetchAllBusinessDataForBackup(targetBusinessId: string): Promise<{
+  business: Business | null;
+  restaurants: Restaurant[];
+  orders: Order[];
+  menuItems: MenuItem[];
+  inventory: InventoryItem[];
+  shifts: Shift[];
+  expenses: Expense[];
+  clients: Client[];
+  tables: Table[];
+  employees: Employee[];
+  cashCloses: CashRegisterClose[];
+  dailyStats: DailyStat[];
+  securityAlerts: SecurityAlert[];
+  menuAuditLogs: MenuAuditLog[];
+}> {
+  if (!targetBusinessId) {
+    throw new Error('Identificador de negocio requerido para la extracción de respaldo.');
+  }
+
+  // 1. Datos del negocio
+  let business: Business | null = null;
+  try {
+    const bizSnap = await getDoc(doc(db, 'businesses', targetBusinessId));
+    if (bizSnap.exists()) {
+      business = { id: bizSnap.id, ...(bizSnap.data() as Omit<Business, 'id'>) };
+    }
+  } catch (err) {
+    console.warn('Could not fetch business doc for backup:', err);
+  }
+
+  // Helper para consultas por businessId con fallback a appId
+  const fetchCol = async <T>(colName: string): Promise<T[]> => {
+    try {
+      const q = query(
+        collection(db, colName),
+        where('appId', '==', 'gastro_smart'),
+        where('businessId', '==', targetBusinessId)
+      );
+      const snap = await getDocs(q);
+      return snap.docs.map(d => ({ id: d.id, ...d.data() } as T));
+    } catch (err) {
+      console.warn(`Could not fetch ${colName} for backup:`, err);
+      return [];
+    }
+  };
+
+  const [
+    restaurants,
+    orders,
+    menuItems,
+    inventory,
+    shifts,
+    expenses,
+    clients,
+    tables,
+    employees,
+    cashCloses,
+    dailyStats,
+    securityAlerts,
+    menuAuditLogs
+  ] = await Promise.all([
+    fetchCol<Restaurant>('restaurants'),
+    fetchCol<Order>('orders'),
+    fetchCol<MenuItem>('menuItems'),
+    fetchCol<InventoryItem>('inventory'),
+    fetchCol<Shift>('shifts'),
+    fetchCol<Expense>('expenses'),
+    fetchCol<Client>('clients'),
+    fetchCol<Table>('tables'),
+    fetchCol<Employee>('employees'),
+    fetchCol<CashRegisterClose>('cashRegisterCloses'),
+    fetchCol<DailyStat>('dailyStats'),
+    fetchCol<SecurityAlert>('securityAlerts'),
+    fetchCol<MenuAuditLog>('menuAuditLogs')
+  ]);
+
+  return {
+    business,
+    restaurants,
+    orders,
+    menuItems,
+    inventory,
+    shifts,
+    expenses,
+    clients,
+    tables,
+    employees,
+    cashCloses,
+    dailyStats,
+    securityAlerts,
+    menuAuditLogs
+  };
+}
+
+/**
+ * Elimina definitivamente y de forma irreversible todas las colecciones y documentos
+ * asociados a un negocio/restaurante de la base de datos de Gastro Smart (Derecho al Olvido / RGPD).
+ */
+export async function deleteEntireBusinessAndAllData(
+  targetBusinessId: string
+): Promise<{ success: boolean; deletedCounts: Record<string, number> }> {
+  if (!targetBusinessId) {
+    throw new Error('Identificador de negocio inválido para la eliminación de datos.');
+  }
+
+  const collectionsToPurge = [
+    'orders',
+    'menuItems',
+    'inventory',
+    'shifts',
+    'expenses',
+    'clients',
+    'tables',
+    'employees',
+    'cashRegisterCloses',
+    'dailyStats',
+    'securityAlerts',
+    'menuAuditLogs',
+    'reservations',
+    'restaurants'
+  ];
+
+  const deletedCounts: Record<string, number> = {};
+
+  for (const colName of collectionsToPurge) {
+    try {
+      const q = query(
+        collection(db, colName),
+        where('appId', '==', 'gastro_smart'),
+        where('businessId', '==', targetBusinessId)
+      );
+      const snap = await getDocs(q);
+      deletedCounts[colName] = snap.size;
+
+      if (!snap.empty) {
+        // Eliminar en chunks de 400 docs para respetar el límite de 500 operaciones por batch de Firestore
+        const docs = snap.docs;
+        const chunkSize = 400;
+        for (let i = 0; i < docs.length; i += chunkSize) {
+          const chunk = docs.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          chunk.forEach(d => batch.delete(d.ref));
+          await batch.commit();
+        }
+      }
+    } catch (err) {
+      console.warn(`Error purging collection ${colName}:`, err);
+      deletedCounts[colName] = 0;
+    }
+  }
+
+  // Eliminar el documento principal del negocio en 'businesses'
+  try {
+    const bizRef = doc(db, 'businesses', targetBusinessId);
+    await deleteDoc(bizRef);
+    deletedCounts['businesses'] = 1;
+  } catch (err) {
+    console.warn('Error deleting business doc:', err);
+    deletedCounts['businesses'] = 0;
+  }
+
+  // Limpiar cualquier residuo de caché o almacenamiento local
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes(targetBusinessId) || key.startsWith('cash_shift_') || key.startsWith('offline_queue_'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+    }
+  } catch (err) {
+    console.warn('Could not clean local storage on tenant purge:', err);
+  }
+
+  return { success: true, deletedCounts };
+}
+
 
 
 

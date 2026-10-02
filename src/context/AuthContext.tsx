@@ -845,6 +845,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const markAlertRead = async (alertId: string) => {
+    setSecurityAlerts(prev => prev.map(a => a.id === alertId ? { ...a, leido: true } : a));
     await markSecurityAlertAsRead(alertId);
   };
 

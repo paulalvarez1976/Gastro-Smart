@@ -139,17 +139,11 @@ export const TestModeBanner: React.FC<TestModeBannerProps> = ({ onDataReset }) =
   // Alternar Modo de Pruebas
   const handleToggleTestMode = async () => {
     const nextState = !isTestMode;
-    const confirmMsg = nextState 
-      ? '¿Deseas activar el Modo de Pruebas? Se mostrarán las opciones de simulación y reseteo.'
-      : '¿Deseas pasar la aplicación a Modo Producción? Se ocultarán las banderas de prueba.';
-    
-    if (window.confirm(confirmMsg)) {
-      try {
-        await updateBusiness(activeBizId, { modoPruebas: nextState });
-        sounds.playNotification();
-      } catch (err: any) {
-        console.error('Error actualizando modo de pruebas:', err);
-      }
+    try {
+      await updateBusiness(activeBizId, { modoPruebas: nextState });
+      sounds.playNotification();
+    } catch (err: any) {
+      console.error('Error actualizando modo de pruebas:', err);
     }
   };
 

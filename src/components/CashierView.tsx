@@ -11,12 +11,14 @@ import {
   markOrderDelivered,
   registerPartialPayment,
   registerOrderFuga,
-  subscribeToCashCloses
+  subscribeToCashCloses,
+  createOrUpdateClient
 } from '../services/dataService';
 import { sounds } from '../utils/sound';
 import { haptics } from '../utils/haptics';
 import { ThermalReceiptModal } from './ThermalReceiptModal';
 import { WaiterPOS } from './WaiterPOS';
+import { QuickStartGuideModal } from './QuickStartGuideModal';
 import { 
   DollarSign, 
   CreditCard, 
@@ -43,7 +45,14 @@ import {
   Tag,
   Flame,
   UserX,
-  Lock
+  Lock,
+  FileText,
+  Building,
+  User,
+  Mail,
+  MapPin,
+  Search,
+  Phone
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -61,6 +70,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
   // Active sub-tab: 'pos' | 'pedidos' | 'mostrador' | 'cierre' | 'historial'
   const defaultTab = initialTab || (currentEmployee?.puesto === 'mostrador' ? 'mostrador' : 'pos');
   const [activeTab, setActiveTab] = useState<'pos' | 'pedidos' | 'mostrador' | 'cierre' | 'historial'>(defaultTab);
+  const [showGuideModal, setShowGuideModal] = useState<boolean>(false);
 
   // Modal de Cobro & División de Cuenta
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -78,6 +88,17 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
   const [discount, setDiscount] = useState<string>('0');
   const [tip, setTip] = useState<string>('0');
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
+  // Datos de Facturación / Cliente (para el comprobante actual o comensal individual)
+  const [billingDocType, setBillingDocType] = useState<'ticket' | 'boleta' | 'factura'>('ticket');
+  const [billingName, setBillingName] = useState<string>('');
+  const [billingDoc, setBillingDoc] = useState<string>(''); // DNI / RUC / NIT / RFC / Cédula
+  const [billingPhone, setBillingPhone] = useState<string>('');
+  const [billingEmail, setBillingEmail] = useState<string>('');
+  const [billingAddress, setBillingAddress] = useState<string>('');
+  const [saveToClientDirectory, setSaveToClientDirectory] = useState<boolean>(true);
+  const [showClientSearch, setShowClientSearch] = useState<boolean>(false);
+  const [clientSearchQuery, setClientSearchQuery] = useState<string>('');
 
   // Feedback de liberación automática de mesa
   const [tableReleaseFeedback, setTableReleaseFeedback] = useState<{
@@ -294,6 +315,48 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
   const cashGivenNum = parseFloat(cashGiven) || 0;
   const changeDue = Math.max(0, cashGivenNum - finalChargeAmount);
 
+  // Quick Client Search for billing
+  const filteredClientsForBilling = useMemo(() => {
+    if (!clientSearchQuery.trim()) return clients.slice(0, 5);
+    const q = clientSearchQuery.toLowerCase().trim();
+    return clients.filter(c => 
+      c.nombre.toLowerCase().includes(q) ||
+      (c.telefono && c.telefono.includes(q)) ||
+      (c.documento && c.documento.toLowerCase().includes(q))
+    ).slice(0, 8);
+  }, [clients, clientSearchQuery]);
+
+  const handleSelectQuickClient = (c: Client) => {
+    sounds.playKeypadClick();
+    setBillingName(c.nombre);
+    setBillingDoc(c.documento || '');
+    setBillingPhone(c.telefono || '');
+    setBillingEmail(c.email || '');
+    setBillingAddress(c.direccion || '');
+    if (c.documento && c.documento.length >= 11) {
+      setBillingDocType('factura');
+    } else if (c.documento && c.documento.length >= 8) {
+      setBillingDocType('boleta');
+    }
+    setShowClientSearch(false);
+    setClientSearchQuery('');
+  };
+
+  const handleSelectDiner = (dinerId: string) => {
+    sounds.playKeypadClick();
+    setSelectedDinerId(dinerId);
+    const targetDiner = orderDinersBreakdown.find(d => d.id === dinerId);
+    if (targetDiner) {
+      setCashGiven(targetDiner.pending.toString());
+      setBillingName(targetDiner.nombre || `Comensal ${targetDiner.numero}`);
+      setBillingDoc((targetDiner as any).documento || '');
+      setBillingPhone((targetDiner as any).telefono || '');
+      setBillingEmail((targetDiner as any).email || '');
+      setBillingAddress((targetDiner as any).direccion || '');
+      setBillingDocType(((targetDiner as any).tipoComprobante as any) || 'ticket');
+    }
+  };
+
   // Abrir modal de cobro
   const handleOpenPayment = (order: Order) => {
     sounds.playKeypadClick();
@@ -307,10 +370,38 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
     setSharedStep('cliente1');
     setSharedClient1Amount((Math.round((balance / 2) * 100) / 100).toString());
     setSharedSplitFeedback(null);
+
+    // Initialize billing state from order or default
+    setBillingDocType(((order as any).tipoComprobante as any) || 'ticket');
+    setBillingName(order.clienteNombre || '');
+    setBillingDoc(order.clienteDocumento || '');
+    setBillingPhone(order.clienteTelefono || '');
+    setBillingEmail(order.clienteEmail || '');
+    setBillingAddress(order.clienteDireccion || '');
+    setShowClientSearch(false);
+    setClientSearchQuery('');
+
     if (order.comensales && order.comensales.length > 0) {
       setSelectedDinerId(order.comensales[0].id);
     } else {
       setSelectedDinerId('c1');
+    }
+  };
+
+  const persistClientIfNeeded = async () => {
+    if (!currentRestaurant || !billingName.trim() || !saveToClientDirectory) return;
+    if (!billingDoc.trim() && !billingPhone.trim()) return;
+    try {
+      await createOrUpdateClient({
+        businessId: currentRestaurant.businessId || UNIQUE_BUSINESS_ID,
+        nombre: billingName.trim(),
+        documento: billingDoc.trim() || undefined,
+        telefono: billingPhone.trim() || undefined,
+        email: billingEmail.trim() || undefined,
+        direccion: billingAddress.trim() || undefined,
+      });
+    } catch (e) {
+      console.warn('Auto-save client error:', e);
     }
   };
 
@@ -331,6 +422,9 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         spread: 70,
         origin: { y: 0.7 }
       });
+
+      // Auto-save client if requested
+      await persistClientIfNeeded();
 
       // Si el pedido está en estado "listo", transicionar a "entregado" antes de cobrar
       if (selectedOrder.estado === 'listo') {
@@ -359,6 +453,12 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           montoPagado: paymentMethod === 'efectivo' ? cashGivenNum : finalChargeAmount,
           vuelto: paymentMethod === 'efectivo' ? changeDue : 0,
           cajeroNombre: currentEmployee.nombre,
+          clienteNombre: billingName.trim() || selectedOrder.clienteNombre,
+          clienteDocumento: billingDoc.trim() || selectedOrder.clienteDocumento,
+          clienteTelefono: billingPhone.trim() || selectedOrder.clienteTelefono,
+          clienteEmail: billingEmail.trim() || selectedOrder.clienteEmail,
+          clienteDireccion: billingAddress.trim() || selectedOrder.clienteDireccion,
+          tipoComprobante: billingDocType,
           montoCobradoAcumulado: selectedOrder.total,
           saldoPendiente: 0,
           timeline: selectedOrder.timeline || []
@@ -386,6 +486,12 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         total: finalChargeAmount,
         metodoPago: paymentMethod,
         cajeroNombre: currentEmployee.nombre,
+        clienteNombre: billingName.trim() || selectedOrder.clienteNombre,
+        clienteDocumento: billingDoc.trim() || selectedOrder.clienteDocumento,
+        clienteTelefono: billingPhone.trim() || selectedOrder.clienteTelefono,
+        clienteEmail: billingEmail.trim() || selectedOrder.clienteEmail,
+        clienteDireccion: billingAddress.trim() || selectedOrder.clienteDireccion,
+        tipoComprobante: billingDocType,
         cobradoEn: new Date().toISOString()
       };
       setThermalPrintOrder(paidOrderSnapshot);
@@ -411,9 +517,12 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       sounds.playCashRegister();
       haptics.success();
 
+      // Auto-save client if requested
+      await persistClientIfNeeded();
+
       const isFirst = sharedStep === 'cliente1';
       const chargeAmount = finalChargeAmount;
-      const clientLabel = isFirst ? 'Cliente 1 (Cuenta Compartida)' : 'Cliente 2 (Saldo Restante)';
+      const clientLabel = isFirst ? (billingName.trim() || 'Cliente 1 (Cuenta Compartida)') : (billingName.trim() || 'Cliente 2 (Saldo Restante)');
 
       const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
         tipo: 'cuenta_compartida',
@@ -428,6 +537,12 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         propina: tipNum,
         total: chargeAmount,
         saldoPendiente: isFirst ? sharedClient2RemainingNum : 0,
+        clienteNombre: billingName.trim() || clientLabel,
+        clienteDocumento: billingDoc.trim() || undefined,
+        clienteTelefono: billingPhone.trim() || undefined,
+        clienteEmail: billingEmail.trim() || undefined,
+        clienteDireccion: billingAddress.trim() || undefined,
+        tipoComprobante: billingDocType,
         fecha: new Date().toISOString()
       };
 
@@ -455,6 +570,12 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           estado: 'cobrado',
           metodoPago: paymentMethod,
           cajeroNombre: currentEmployee.nombre,
+          clienteNombre: billingName.trim() || clientLabel,
+          clienteDocumento: billingDoc.trim() || undefined,
+          clienteTelefono: billingPhone.trim() || undefined,
+          clienteEmail: billingEmail.trim() || undefined,
+          clienteDireccion: billingAddress.trim() || undefined,
+          tipoComprobante: billingDocType,
           cobradoEn: new Date().toISOString()
         };
         setThermalPrintOrder(paidOrderSnapshot);
@@ -484,18 +605,29 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           subtotal: chargeAmount,
           total: chargeAmount,
           saldoPendiente: result.saldoRestante,
-          clienteNombre: 'Cliente 1 (Cuenta Compartida)',
+          clienteNombre: billingName.trim() || 'Cliente 1 (Cuenta Compartida)',
+          clienteDocumento: billingDoc.trim() || undefined,
+          clienteTelefono: billingPhone.trim() || undefined,
+          clienteEmail: billingEmail.trim() || undefined,
+          clienteDireccion: billingAddress.trim() || undefined,
+          tipoComprobante: billingDocType,
           metodoPago: paymentMethod,
           cajeroNombre: currentEmployee.nombre,
           cobradoEn: new Date().toISOString()
         };
         setThermalPrintOrder(partialSnapshot);
 
-        // Switch to Step 2: Cliente 2
+        // Switch to Step 2: Cliente 2 with fresh billing state
         setSharedStep('cliente2');
         setCashGiven(result.saldoRestante.toString());
         setDiscount('0');
         setTip('0');
+        setBillingName('Cliente 2 (Saldo Restante)');
+        setBillingDoc('');
+        setBillingPhone('');
+        setBillingEmail('');
+        setBillingAddress('');
+        setBillingDocType('ticket');
         setSharedSplitFeedback(`✅ Pago de Cliente 1 registrado ($${chargeAmount.toFixed(2)}). Restan $${result.saldoRestante.toFixed(2)} para cobrar a Cliente 2.`);
       }
     } catch (err: any) {
@@ -518,12 +650,18 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       sounds.playCashRegister();
       haptics.success();
 
+      // Auto-guardar cliente en directorio si fue solicitado
+      await persistClientIfNeeded();
+
+      const dinerName = billingName.trim() || activeSelectedDiner.nombre || `Comensal ${activeSelectedDiner.numero}`;
+
       const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
         tipo: 'comensal',
         comensalId: activeSelectedDiner.id,
-        comensalNombre: activeSelectedDiner.nombre,
+        comensalNombre: dinerName,
         comensalNumero: activeSelectedDiner.numero,
         monto: finalChargeAmount,
+        subtotal: activeSelectedDiner.subtotal,
         metodoPago: paymentMethod,
         montoRecibido: paymentMethod === 'efectivo' ? cashGivenNum : finalChargeAmount,
         vuelto: paymentMethod === 'efectivo' ? changeDue : 0,
@@ -532,10 +670,37 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         descuento: discountNum,
         propina: tipNum,
         total: finalChargeAmount,
+        clienteNombre: dinerName,
+        clienteDocumento: billingDoc.trim() || undefined,
+        clienteTelefono: billingPhone.trim() || undefined,
+        clienteEmail: billingEmail.trim() || undefined,
+        clienteDireccion: billingAddress.trim() || undefined,
+        tipoComprobante: billingDocType,
         fecha: new Date().toISOString()
       };
 
       const result = await registerPartialPayment(selectedOrder.id, partialPaymentPayload);
+
+      // Comprobante o factura individual para este comensal
+      const dinerReceiptSnapshot: Order = {
+        ...selectedOrder,
+        subtotal: activeSelectedDiner.subtotal,
+        descuento: discountNum,
+        propina: tipNum,
+        total: finalChargeAmount,
+        saldoPendiente: result.saldoRestante,
+        items: activeSelectedDiner.items.length > 0 ? activeSelectedDiner.items : selectedOrder.items,
+        clienteNombre: dinerName,
+        clienteDocumento: billingDoc.trim() || undefined,
+        clienteTelefono: billingPhone.trim() || undefined,
+        clienteEmail: billingEmail.trim() || undefined,
+        clienteDireccion: billingAddress.trim() || undefined,
+        tipoComprobante: billingDocType,
+        metodoPago: paymentMethod,
+        cajeroNombre: currentEmployee.nombre,
+        cobradoEn: new Date().toISOString()
+      };
+      setThermalPrintOrder(dinerReceiptSnapshot);
 
       if (result.orderCompleted) {
         confetti({
@@ -554,14 +719,6 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           setTimeout(() => setTableReleaseFeedback(null), 6000);
         }
 
-        const paidOrderSnapshot: Order = {
-          ...selectedOrder,
-          estado: 'cobrado',
-          metodoPago: paymentMethod,
-          cajeroNombre: currentEmployee.nombre,
-          cobradoEn: new Date().toISOString()
-        };
-        setThermalPrintOrder(paidOrderSnapshot);
         setSelectedOrder(null);
       } else {
         // Update local selectedOrder representation so modal stays open with updated balances
@@ -579,8 +736,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         // Pick next unpaid diner if available
         const nextUnpaid = orderDinersBreakdown.find(d => d.id !== activeSelectedDiner.id && d.pending > 0);
         if (nextUnpaid) {
-          setSelectedDinerId(nextUnpaid.id);
-          setCashGiven(nextUnpaid.pending.toString());
+          handleSelectDiner(nextUnpaid.id);
         }
       }
     } catch (err: any) {
@@ -603,11 +759,17 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
       sounds.playCashRegister();
       haptics.success();
 
+      // Auto-guardar cliente en directorio si fue solicitado
+      await persistClientIfNeeded();
+
       const shareAmount = finalChargeAmount;
       const currentPartNumber = (selectedOrder.cobros?.filter(c => c.tipo === 'partes_iguales').length || 0) + 1;
+      const shareClientLabel = billingName.trim() || `Persona ${currentPartNumber} (Parte ${currentPartNumber}/${sharesCount})`;
+
       const partialPaymentPayload: Omit<PartialPayment, 'id' | 'creadoEn'> = {
         tipo: 'partes_iguales',
         monto: shareAmount,
+        subtotal: shareAmount,
         metodoPago: paymentMethod,
         montoRecibido: paymentMethod === 'efectivo' ? cashGivenNum : shareAmount,
         vuelto: paymentMethod === 'efectivo' ? changeDue : 0,
@@ -617,10 +779,36 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
         total: shareAmount,
         fecha: new Date().toISOString(),
         numeroParte: currentPartNumber,
-        totalPartes: sharesCount
+        totalPartes: sharesCount,
+        clienteNombre: shareClientLabel,
+        clienteDocumento: billingDoc.trim() || undefined,
+        clienteTelefono: billingPhone.trim() || undefined,
+        clienteEmail: billingEmail.trim() || undefined,
+        clienteDireccion: billingAddress.trim() || undefined,
+        tipoComprobante: billingDocType,
       };
 
       const result = await registerPartialPayment(selectedOrder.id, partialPaymentPayload);
+
+      // Comprobante térmico individual para esta cuota / parte
+      const shareSnapshot: Order = {
+        ...selectedOrder,
+        subtotal: shareAmount,
+        descuento: discountNum,
+        propina: tipNum,
+        total: shareAmount,
+        saldoPendiente: result.saldoRestante,
+        clienteNombre: shareClientLabel,
+        clienteDocumento: billingDoc.trim() || undefined,
+        clienteTelefono: billingPhone.trim() || undefined,
+        clienteEmail: billingEmail.trim() || undefined,
+        clienteDireccion: billingAddress.trim() || undefined,
+        tipoComprobante: billingDocType,
+        metodoPago: paymentMethod,
+        cajeroNombre: currentEmployee.nombre,
+        cobradoEn: new Date().toISOString()
+      };
+      setThermalPrintOrder(shareSnapshot);
 
       if (result.orderCompleted) {
         confetti({
@@ -639,14 +827,6 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           setTimeout(() => setTableReleaseFeedback(null), 6000);
         }
 
-        const paidOrderSnapshot: Order = {
-          ...selectedOrder,
-          estado: 'cobrado',
-          metodoPago: paymentMethod,
-          cajeroNombre: currentEmployee.nombre,
-          cobradoEn: new Date().toISOString()
-        };
-        setThermalPrintOrder(paidOrderSnapshot);
         setSelectedOrder(null);
       } else {
         setSelectedOrder(prev => {
@@ -660,6 +840,14 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           };
         });
         setSharesCount(prev => Math.max(1, prev - 1));
+
+        // Preparar formulario limpio para la siguiente persona
+        setBillingName(`Persona ${currentPartNumber + 1}`);
+        setBillingDoc('');
+        setBillingPhone('');
+        setBillingEmail('');
+        setBillingAddress('');
+        setBillingDocType('ticket');
       }
     } catch (err: any) {
       alert('Error al registrar pago en partes iguales: ' + err.message);
@@ -677,10 +865,6 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
     if (!selectedOrder || !currentEmployee) return;
     if (!fugaReason.trim()) {
       alert('Por favor especifica un motivo para registrar el cierre por fuga o forzado.');
-      return;
-    }
-
-    if (!confirm('¿Estás seguro de registrar este pedido como FUGA / CIERRE FORZADO? La mesa será liberada y se guardará constancia en auditoría.')) {
       return;
     }
 
@@ -869,6 +1053,20 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                 {todayPaidOrders.length}
               </span>
             </button>
+
+            <button
+              type="button"
+              id="cashier-quick-guide-btn"
+              onClick={() => {
+                sounds.playKeypadClick();
+                setShowGuideModal(true);
+              }}
+              className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-xs font-black transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+              title="Guía de Inicio Rápido interactiva para Cajero"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-200" />
+              <span>Guía Caja</span>
+            </button>
           </div>
 
           {/* Indicadores Financieros Rápidos del Turno */}
@@ -1043,6 +1241,38 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                             )}
                           </div>
                         </div>
+
+                        {/* Indicador Visual de Tiempo Transcurrido para Caja */}
+                        {(() => {
+                          const elapsedMins = Math.max(0, Math.floor((Date.now() - new Date(order.creadoEn).getTime()) / 60000));
+                          const isHighDelay = elapsedMins >= 15 && !isDelivered;
+                          const isModerateDelay = elapsedMins >= 10 && elapsedMins < 15 && !isDelivered;
+
+                          return (
+                            <div className={`p-1.5 px-2.5 rounded-xl border text-[11px] flex items-center justify-between transition ${
+                              isHighDelay
+                                ? 'bg-red-50 border-red-300 text-red-800 font-black animate-pulse'
+                                : isModerateDelay
+                                  ? 'bg-amber-50 border-amber-300 text-amber-900 font-bold'
+                                  : 'bg-neutral-50 border-neutral-200/90 text-neutral-600'
+                            }`}>
+                              <div className="flex items-center gap-1.5">
+                                <Clock className={`w-3 h-3 ${isHighDelay ? 'text-red-600 animate-spin' : isModerateDelay ? 'text-amber-600' : 'text-neutral-400'}`} />
+                                <span>Tiempo comanda: <strong className="font-mono">{elapsedMins} min</strong></span>
+                              </div>
+                              {isHighDelay && (
+                                <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded-full bg-red-600 text-white">
+                                  +15m Demora
+                                </span>
+                              )}
+                              {isModerateDelay && (
+                                <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded-full bg-amber-200 text-amber-900">
+                                  10-15m
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* Partial Payment Progress Bar if any payment made */}
                         {order.saldoPendiente !== undefined && order.saldoPendiente < order.total && (
@@ -1898,8 +2128,7 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                         key={`diner-btn-${diner.id}`}
                         type="button"
                         onClick={() => {
-                          setSelectedDinerId(diner.id);
-                          setCashGiven(diner.pending.toString());
+                          handleSelectDiner(diner.id);
                         }}
                         className={`p-2.5 rounded-2xl border text-left transition flex flex-col justify-between ${
                           isSelected
@@ -2159,6 +2388,236 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
                   </div>
                 )}
 
+                {/* SECCIÓN: REGISTRO DE DATOS DE FACTURACIÓN / CLIENTE PARA EL COMPROBANTE O COMENSAL */}
+                <div className="p-3.5 bg-neutral-50/90 rounded-2xl border border-neutral-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-xl bg-orange-100 text-orange-700 flex items-center justify-center font-bold">
+                        <FileText className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black text-neutral-900 leading-tight">
+                          {splitMode === 'comensal' 
+                            ? `Datos de Facturación: ${activeSelectedDiner?.nombre || 'Comensal'}`
+                            : splitMode === 'cuenta_compartida'
+                              ? (sharedStep === 'cliente1' ? 'Datos de Facturación: Primer Cliente' : 'Datos de Facturación: Segundo Cliente')
+                              : splitMode === 'partes_iguales'
+                                ? `Datos de Facturación: Cuota ${(selectedOrder.cobros?.filter(c => c.tipo === 'partes_iguales').length || 0) + 1} de ${sharesCount}`
+                                : 'Datos de Facturación / Cliente'}
+                        </h4>
+                        <span className="text-[10px] text-neutral-500">
+                          {splitMode === 'comensal'
+                            ? 'Cada comensal puede registrar sus propios datos fiscales (Factura, Boleta o Ticket).'
+                            : 'Opcional: emite comprobante con DNI/RUC o registra cliente frecuente.'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowClientSearch(!showClientSearch)}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-xl transition flex items-center gap-1 border border-blue-200 cursor-pointer"
+                    >
+                      <Search className="w-3 h-3" />
+                      <span>{showClientSearch ? 'Ocultar' : 'Buscar Cliente'}</span>
+                    </button>
+                  </div>
+
+                  {/* Panel de Búsqueda Rápida de Clientes Frecuentes */}
+                  {showClientSearch && (
+                    <div className="p-2.5 bg-blue-50/50 rounded-xl border border-blue-200 space-y-2 animate-in fade-in">
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={clientSearchQuery}
+                          onChange={(e) => setClientSearchQuery(e.target.value)}
+                          placeholder="Buscar por nombre, DNI/RUC o teléfono..."
+                          className="w-full h-8 pl-8 pr-3 bg-white border border-neutral-300 rounded-lg text-xs outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+                        {filteredClientsForBilling.length === 0 ? (
+                          <span className="text-[11px] text-neutral-400 italic py-1">No se encontraron clientes coincidentes.</span>
+                        ) : (
+                          filteredClientsForBilling.map(c => (
+                            <button
+                              key={`quick-c-${c.id}`}
+                              type="button"
+                              onClick={() => handleSelectQuickClient(c)}
+                              className="text-[11px] px-2 py-1 rounded-lg bg-white border border-blue-200 hover:bg-blue-100 text-neutral-800 font-semibold flex items-center gap-1.5 shadow-2xs cursor-pointer transition text-left"
+                            >
+                              <User className="w-3 h-3 text-blue-600" />
+                              <span>{c.nombre}</span>
+                              {c.documento && <span className="font-mono text-neutral-500 text-[10px]">({c.documento})</span>}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Selector de Tipo de Comprobante */}
+                  <div>
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-neutral-500 mb-1">
+                      Tipo de Comprobante:
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setBillingDocType('ticket')}
+                        className={`py-1.5 px-2 rounded-xl text-xs font-bold transition border flex items-center justify-center gap-1.5 cursor-pointer ${
+                          billingDocType === 'ticket'
+                            ? 'bg-neutral-900 text-white border-neutral-900 shadow-2xs'
+                            : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
+                        }`}
+                      >
+                        <Receipt className="w-3.5 h-3.5" />
+                        <span>Ticket / Nota</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setBillingDocType('boleta')}
+                        className={`py-1.5 px-2 rounded-xl text-xs font-bold transition border flex items-center justify-center gap-1.5 cursor-pointer ${
+                          billingDocType === 'boleta'
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                            : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Boleta (DNI)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setBillingDocType('factura')}
+                        className={`py-1.5 px-2 rounded-xl text-xs font-bold transition border flex items-center justify-center gap-1.5 cursor-pointer ${
+                          billingDocType === 'factura'
+                            ? 'bg-purple-700 text-white border-purple-700 shadow-2xs'
+                            : 'bg-white text-neutral-700 border-neutral-200 hover:bg-neutral-100'
+                        }`}
+                      >
+                        <Building className="w-3.5 h-3.5" />
+                        <span>Factura (RUC)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Formulario de Datos del Cliente */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-neutral-600 mb-0.5">
+                        {billingDocType === 'factura' ? 'Razón Social / Empresa:' : 'Nombre del Cliente / Comensal:'}
+                      </label>
+                      <div className="relative">
+                        <User className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={billingName}
+                          onChange={(e) => setBillingName(e.target.value)}
+                          placeholder={billingDocType === 'factura' ? 'Ej: Inversiones Gastro SAC' : 'Ej: Juan Pérez'}
+                          className="w-full h-8.5 pl-8 pr-2.5 bg-white border border-neutral-300 rounded-xl text-xs font-medium outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-neutral-600 mb-0.5">
+                        {billingDocType === 'factura' ? 'RUC / RFC / CIF / NIT:' : 'Doc. Identidad (DNI / Cédula):'}
+                      </label>
+                      <div className="relative">
+                        <Building className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={billingDoc}
+                          onChange={(e) => setBillingDoc(e.target.value)}
+                          placeholder={billingDocType === 'factura' ? '20123456789' : '45678912'}
+                          className="w-full h-8.5 pl-8 pr-2.5 bg-white border border-neutral-300 rounded-xl text-xs font-mono font-medium outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-neutral-600 mb-0.5">
+                        Teléfono / WhatsApp:
+                      </label>
+                      <div className="relative">
+                        <Phone className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="tel"
+                          value={billingPhone}
+                          onChange={(e) => setBillingPhone(e.target.value)}
+                          placeholder="+51 987 654 321"
+                          className="w-full h-8.5 pl-8 pr-2.5 bg-white border border-neutral-300 rounded-xl text-xs font-medium outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-neutral-600 mb-0.5">
+                        Email (Envío de Factura / Ticket):
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="email"
+                          value={billingEmail}
+                          onChange={(e) => setBillingEmail(e.target.value)}
+                          placeholder="cliente@correo.com"
+                          className="w-full h-8.5 pl-8 pr-2.5 bg-white border border-neutral-300 rounded-xl text-xs font-medium outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] font-bold text-neutral-600 mb-0.5">
+                        Dirección / Domicilio Fiscal:
+                      </label>
+                      <div className="relative">
+                        <MapPin className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={billingAddress}
+                          onChange={(e) => setBillingAddress(e.target.value)}
+                          placeholder="Av. Principal 123, Urb. Centro"
+                          className="w-full h-8.5 pl-8 pr-2.5 bg-white border border-neutral-300 rounded-xl text-xs font-medium outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Opciones auxiliares y guardar en directorio */}
+                  <div className="flex items-center justify-between pt-1 border-t border-neutral-200/60 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer select-none text-neutral-700 text-[11px] font-medium">
+                      <input
+                        type="checkbox"
+                        checked={saveToClientDirectory}
+                        onChange={(e) => setSaveToClientDirectory(e.target.checked)}
+                        className="w-3.5 h-3.5 rounded border-neutral-300 text-orange-600 focus:ring-orange-500"
+                      />
+                      <span>Guardar / actualizar en directorio para fidelización</span>
+                    </label>
+
+                    {(billingName || billingDoc || billingPhone || billingEmail || billingAddress) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBillingName(splitMode === 'comensal' ? (activeSelectedDiner?.nombre || '') : '');
+                          setBillingDoc('');
+                          setBillingPhone('');
+                          setBillingEmail('');
+                          setBillingAddress('');
+                          setBillingDocType('ticket');
+                        }}
+                        className="text-[11px] text-neutral-400 hover:text-neutral-700 underline cursor-pointer"
+                      >
+                        Limpiar campos
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 {/* History of registered payments on this order */}
                 {selectedOrder.cobros && selectedOrder.cobros.length > 0 && (
                   <div className="space-y-1.5 p-2.5 bg-neutral-50 rounded-2xl border border-neutral-200 text-xs">
@@ -2247,6 +2706,11 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
             restaurantPhone={currentRestaurant?.telefono}
             clientPhone={resolvedClientPhone || undefined}
             clientName={resolvedClientName || undefined}
+            clientDocument={thermalPrintOrder.clienteDocumento || matchingClient?.documento}
+            clientEmail={thermalPrintOrder.clienteEmail || matchingClient?.email}
+            clientAddress={thermalPrintOrder.clienteDireccion || matchingClient?.direccion}
+            receiptType={thermalPrintOrder.tipoComprobante}
+            itemsOverride={thermalPrintOrder.items}
             mode="cuenta"
             onClose={() => setThermalPrintOrder(null)}
           />
@@ -2366,6 +2830,18 @@ export const CashierView: React.FC<CashierViewProps> = ({ orders, menuItems, tab
           </div>
         </div>
       )}
+
+      {/* Modal de Guía de Inicio Rápido para Caja */}
+      <QuickStartGuideModal
+        isOpen={showGuideModal}
+        onClose={() => setShowGuideModal(false)}
+        initialRole="caja"
+        onNavigateToTab={(tab) => {
+          if (['pos','pedidos','mostrador','cierre','historial'].includes(tab)) {
+            setActiveTab(tab as any);
+          }
+        }}
+      />
 
     </div>
   );

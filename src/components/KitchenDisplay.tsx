@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Order, OrderRound, OrderItem, ItemStatus } from '../types';
+import { Order, OrderRound, OrderItem, ItemStatus, InventoryItem, MenuItem } from '../types';
 import { cambiarEstadoPedido, updateOrderRoundStatus, updateOrderItemStatus } from '../services/dataService';
 import { sounds } from '../utils/sound';
 import { 
@@ -23,10 +23,12 @@ import {
   Layers,
   Check,
   Printer,
-  Sliders
+  Sliders,
+  Boxes
 } from 'lucide-react';
 import { ThermalReceiptModal } from './ThermalReceiptModal';
 import { KitchenNotificationModal, KitchenNotificationConfig, DEFAULT_KITCHEN_NOTIFICATIONS } from './KitchenNotificationModal';
+import { QuickStartGuideModal } from './QuickStartGuideModal';
 import { haptics } from '../utils/haptics';
 
 const KITCHEN_NOTIF_STORAGE_KEY = 'gastro_kitchen_notifications_config';
@@ -45,6 +47,8 @@ const getInitialKitchenConfig = (): KitchenNotificationConfig => {
 
 interface KitchenDisplayProps {
   orders: Order[];
+  inventoryItems?: InventoryItem[];
+  menuItems?: MenuItem[];
 }
 
 interface KitchenRoundCardData {
@@ -61,14 +65,24 @@ interface KitchenRoundCardData {
   enPreparacionEn?: string;
 }
 
-export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
+export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders, inventoryItems = [], menuItems = [] }) => {
   const { currentEmployee, currentRestaurant } = useAuth();
+  
+  // Cálculo de insumos e ingredientes en estado crítico para alertas automáticas a Cocina
+  const criticalSupplies = useMemo(() => {
+    return inventoryItems.filter(i => (Number(i.stockActual) || 0) <= (Number(i.stockMinimo) || 5));
+  }, [inventoryItems]);
+
+  const criticalMenuItems = useMemo(() => {
+    return menuItems.filter(m => m.controlaStock && (m.stockActual ?? 0) <= (m.stockMinimo ?? 5));
+  }, [menuItems]);
   
   // Kitchen state & Notification settings
   const [rejectModalOrder, setRejectModalOrder] = useState<Order | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
   const [notifConfig, setNotifConfig] = useState<KitchenNotificationConfig>(getInitialKitchenConfig);
   const [showNotifModal, setShowNotifModal] = useState(false);
+  const [showGuideModal, setShowGuideModal] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now());
   const [activeQueueTab, setActiveQueueTab] = useState<'all' | 'nuevos' | 'preparacion' | 'recojo'>('all');
   const [visualNotice, setVisualNotice] = useState<{ id: string; title: string; text: string } | null>(null);
@@ -204,6 +218,9 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
         }
       }
     });
+
+    // Ordenar tarjetas por tiempo de envío (más antiguas primero = mayor prioridad de atención)
+    cards.sort((a, b) => new Date(a.enviadoEn || a.order.creadoEn).getTime() - new Date(b.enviadoEn || b.order.creadoEn).getTime());
 
     return cards;
   }, [orders, currentRestaurant?.id]);
@@ -530,45 +547,70 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
             <div className="text-right">
               {queue === 'recojo' ? (
                 <>
-                  <div className="text-xs font-mono font-black flex items-center justify-end gap-1">
+                  <div className={`px-2 py-0.5 rounded-lg text-xs font-mono font-black flex items-center justify-end gap-1 border shadow-xs ${
+                    isUncollectedAlert
+                      ? 'bg-red-600 text-white border-red-300 animate-pulse'
+                      : 'bg-black/30 text-emerald-200 border-white/20'
+                  }`}>
                     <Clock className="w-3.5 h-3.5" />
                     <span>{formatElapsedTime(listoEn || enviadoEn)}</span>
                   </div>
                   {isUncollectedAlert ? (
-                    <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
+                    <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end mt-0.5">
                       <AlertTriangle className="w-3 h-3" /> SIN RECOGER (+10 MIN)
                     </div>
                   ) : (
-                    <div className="text-[10px] uppercase font-bold text-emerald-200">
+                    <div className="text-[10px] uppercase font-bold text-emerald-200 mt-0.5">
                       Listo en espera
                     </div>
                   )}
                 </>
               ) : (
                 <>
-                  <div className="text-xs font-mono font-black flex items-center justify-end gap-1">
-                    <Clock className="w-3.5 h-3.5" />
+                  <div className={`px-2 py-0.5 rounded-lg text-xs font-mono font-black flex items-center justify-end gap-1 border shadow-xs ${
+                    prepElapsedMins >= overdueThreshold
+                      ? 'bg-red-600 text-white border-red-300 animate-bounce'
+                      : prepElapsedMins >= 10
+                        ? 'bg-amber-500/40 text-amber-200 border-amber-400/50'
+                        : 'bg-black/30 text-white border-white/20'
+                  }`}>
+                    <Clock className={`w-3.5 h-3.5 ${prepElapsedMins >= overdueThreshold ? 'animate-spin' : ''}`} />
                     <span>{formatElapsedTime(aceptadoEn || enviadoEn)}</span>
                   </div>
-                  {isPrepDelayed && (
-                    <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end">
+                  {isPrepDelayed ? (
+                    <div className="text-[10px] uppercase font-black tracking-wider text-yellow-300 flex items-center gap-0.5 justify-end mt-0.5">
                       <AlertTriangle className="w-3 h-3" /> +{overdueThreshold} MIN DEMORA
                     </div>
-                  )}
-                  {isAccepted && (
-                    <div className="text-[10px] uppercase font-bold text-sky-100">
-                      Aceptado
-                    </div>
-                  )}
-                  {isCooking && (
-                    <div className="text-[10px] uppercase font-bold text-blue-100 flex items-center gap-1">
-                      <Flame className="w-3 h-3 text-yellow-300 animate-bounce" /> Preparando
+                  ) : (
+                    <div className="text-[10px] uppercase font-bold text-white/90 mt-0.5">
+                      {isCooking ? (
+                        <span className="flex items-center gap-1">
+                          <Flame className="w-3 h-3 text-yellow-300 animate-bounce" /> En Preparación
+                        </span>
+                      ) : (
+                        'Aceptado en Cola'
+                      )}
                     </div>
                   )}
                 </>
               )}
             </div>
           </div>
+        </div>
+
+        {/* Barra Visual de Urgencia y Tiempo Transcurrido */}
+        <div className="w-full bg-neutral-950 h-2 overflow-hidden border-b border-neutral-800 flex">
+          <div 
+            className={`h-full transition-all duration-500 ${
+              prepElapsedMins >= overdueThreshold
+                ? 'bg-gradient-to-r from-amber-500 via-red-500 to-rose-600 w-full animate-pulse'
+                : prepElapsedMins >= 10
+                  ? 'bg-amber-400 w-3/4'
+                  : prepElapsedMins >= 5
+                    ? 'bg-emerald-400 w-1/2'
+                    : 'bg-emerald-500 w-1/4'
+            }`}
+          />
         </div>
 
         {/* Lista de Platos de ESTA RONDA (Doble Columna para Maximizar Espacio) */}
@@ -801,8 +843,83 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
             <Sliders className="w-4 h-4 text-orange-400" />
             <span className="hidden md:inline">Alertas Cocina</span>
           </button>
+
+          {/* Botón Guía de Inicio Rápido Cocina */}
+          <button
+            id="open-kitchen-guide-btn"
+            type="button"
+            onClick={() => {
+              sounds.playKeypadClick();
+              setShowGuideModal(true);
+            }}
+            className="p-2 sm:px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-extrabold transition flex items-center gap-1.5 text-xs shadow-xs active:scale-95 cursor-pointer"
+            title="Guía de Inicio Rápido para Cocina"
+          >
+            <Sparkles className="w-4 h-4 text-amber-200" />
+            <span className="hidden sm:inline">Guía KDS</span>
+          </button>
         </div>
       </div>
+
+      {/* Banner de Alerta de Ingredientes Críticos para Cocina */}
+      {(criticalSupplies.length > 0 || criticalMenuItems.length > 0) && (
+        <div className="bg-red-950/90 border-b border-red-800 px-4 py-2 flex flex-wrap items-center justify-between gap-2 text-xs shadow-inner">
+          <div className="flex items-center gap-2.5 overflow-x-auto text-red-200">
+            <span className="px-2.5 py-1 rounded-lg bg-red-600 text-white font-black shrink-0 flex items-center gap-1.5 shadow-xs uppercase tracking-wider text-[11px] animate-pulse">
+              <AlertTriangle className="w-4 h-4 text-amber-300" />
+              Stock Crítico en Cocina ({criticalSupplies.length + criticalMenuItems.length})
+            </span>
+            <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap py-0.5">
+              {criticalSupplies.map(sup => {
+                const stock = Number(sup.stockActual) || 0;
+                const min = Number(sup.stockMinimo) || 5;
+                const isZero = stock <= 0;
+                return (
+                  <span
+                    key={sup.id}
+                    className={`px-2.5 py-0.5 rounded-md border text-xs font-bold flex items-center gap-1.5 ${
+                      isZero
+                        ? 'bg-red-600 text-white border-red-400 font-black'
+                        : 'bg-red-900/80 text-red-100 border-red-700'
+                    }`}
+                  >
+                    <span>{sup.nombre}:</span>
+                    <strong className="underline text-amber-300">
+                      {stock} {sup.unidadMedida}
+                    </strong>
+                    <span className="text-[10px] opacity-80">(Mín: {min})</span>
+                  </span>
+                );
+              })}
+              {criticalMenuItems.map(m => {
+                const stock = m.stockActual ?? 0;
+                const min = m.stockMinimo ?? 5;
+                const isZero = stock <= 0;
+                return (
+                  <span
+                    key={m.id}
+                    className={`px-2.5 py-0.5 rounded-md border text-xs font-bold flex items-center gap-1.5 ${
+                      isZero
+                        ? 'bg-red-600 text-white border-red-400 font-black'
+                        : 'bg-amber-900/80 text-amber-100 border-amber-700'
+                    }`}
+                  >
+                    <span>Plato {m.nombre}:</span>
+                    <strong className="underline text-amber-300">
+                      {stock} disps.
+                    </strong>
+                    <span className="text-[10px] opacity-80">(Mín: {min})</span>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+          <span className="text-[11px] text-red-300 font-medium shrink-0 flex items-center gap-1 bg-red-900/40 px-2 py-0.5 rounded-md border border-red-800 hidden sm:flex">
+            <Boxes className="w-3.5 h-3.5 text-amber-400" />
+            Umbral de stock mínimo alcanzado • Notificado a Cocina
+          </span>
+        </div>
+      )}
 
       {/* Visual Notice Banner */}
       {visualNotice && (
@@ -1071,6 +1188,13 @@ export const KitchenDisplay: React.FC<KitchenDisplayProps> = ({ orders }) => {
         config={notifConfig}
         onSaveConfig={handleSaveNotifConfig}
         onTestSound={handleTestSound}
+      />
+
+      {/* Modal de Guía de Inicio Rápido para Cocina */}
+      <QuickStartGuideModal
+        isOpen={showGuideModal}
+        onClose={() => setShowGuideModal(false)}
+        initialRole="cocina"
       />
 
     </div>

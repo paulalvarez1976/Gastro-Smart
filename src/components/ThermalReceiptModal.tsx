@@ -29,6 +29,10 @@ export interface ThermalReceiptModalProps {
   restaurantPhone?: string;
   clientPhone?: string;
   clientName?: string;
+  clientDocument?: string;
+  clientEmail?: string;
+  clientAddress?: string;
+  receiptType?: string;
   mode?: 'cuenta' | 'comanda';
   roundNumber?: number;
   itemsOverride?: OrderItem[];
@@ -44,6 +48,10 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
   restaurantPhone,
   clientPhone,
   clientName,
+  clientDocument,
+  clientEmail,
+  clientAddress,
+  receiptType,
   mode = 'cuenta',
   roundNumber,
   itemsOverride,
@@ -69,6 +77,10 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
         ...propData,
         restaurantLogo: propData.restaurantLogo || restaurantLogo,
         clienteTelefono: effectivePhone,
+        clienteDocumento: propData.clienteDocumento || clientDocument,
+        clienteEmail: propData.clienteEmail || clientEmail,
+        clienteDireccion: propData.clienteDireccion || clientAddress,
+        tipoComprobante: propData.tipoComprobante || receiptType,
         isKitchenTicket: Boolean(propData.isKitchenTicket),
       };
     }
@@ -119,6 +131,10 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
         vuelto: order.vuelto,
         comensalNombre: order.clienteNombre || clientName || undefined,
         clienteTelefono: effectivePhone,
+        clienteDocumento: order.clienteDocumento || clientDocument || undefined,
+        clienteEmail: order.clienteEmail || clientEmail || undefined,
+        clienteDireccion: order.clienteDireccion || clientAddress || undefined,
+        tipoComprobante: order.tipoComprobante || receiptType || undefined,
         isKitchenTicket: isKitchen,
       };
     }
@@ -331,7 +347,7 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
                 }`}>
                   {data.isKitchenTicket 
                     ? '*** COMANDA COCINA ***' 
-                    : (data.tituloComprobante || (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO'))}
+                    : (data.tituloComprobante || (data.tipoComprobante ? `*** ${data.tipoComprobante.toUpperCase()} ***` : (data.esPagoParcial ? 'COMPROBANTE DE PAGO PARCIAL' : 'COMPROBANTE DE PAGO')))}
                 </span>
               </div>
             </div>
@@ -346,10 +362,16 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
                 <span>Fecha: {new Date(data.fecha).toLocaleDateString()}</span>
                 <span>{new Date(data.fecha).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               </div>
+              {data.tipoComprobante && (
+                <div className="font-bold text-neutral-900 uppercase">Tipo: {data.tipoComprobante}</div>
+              )}
               {data.mozoNombre && <div>Mozo: {data.mozoNombre}</div>}
               {data.cajeroNombre && <div>Caja: {data.cajeroNombre}</div>}
-              {data.comensalNombre && <div className="font-bold text-neutral-800">Cliente: {data.comensalNombre}</div>}
+              {data.comensalNombre && <div className="font-bold text-neutral-800">Cliente / Razón Social: {data.comensalNombre}</div>}
+              {data.clienteDocumento && <div className="font-mono font-bold text-neutral-800">Doc / RUC / DNI: {data.clienteDocumento}</div>}
               {data.clienteTelefono && <div className="text-neutral-600">Tel: {data.clienteTelefono}</div>}
+              {data.clienteEmail && <div className="text-neutral-600 text-[9px]">Email: {data.clienteEmail}</div>}
+              {data.clienteDireccion && <div className="text-neutral-600 text-[9px]">Dir: {data.clienteDireccion}</div>}
             </div>
 
             {/* Items Table */}

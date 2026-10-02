@@ -770,8 +770,7 @@ export const WaiterOrderSetup: React.FC<WaiterOrderSetupProps> = ({
                     type="button"
                     onClick={() => {
                       sounds.playKeypadClick();
-                      const customName = prompt('Nombre de la empresa o canal de delivery:') || 'Otro';
-                      setDeliveryCompany(customName);
+                      setDeliveryCompany('Otro / Delivery Directo');
                     }}
                     className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition border ${
                       !getRestaurantDeliveryCompanies(restaurant).some(c => c.nombre.toLowerCase() === deliveryCompany.toLowerCase())

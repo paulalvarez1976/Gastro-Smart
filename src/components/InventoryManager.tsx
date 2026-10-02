@@ -1039,7 +1039,6 @@ export const InventoryManager: React.FC<InventoryManagerProps> = ({
                           <button
                             type="button"
                             onClick={async () => {
-                              if (!confirm(`¿Eliminar el insumo "${item.nombre}" del inventario?`)) return;
                               await deleteInventoryItem(item.id);
                             }}
                             className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 transition cursor-pointer"
